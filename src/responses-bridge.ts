@@ -623,13 +623,18 @@ export class StreamingResponsesBridgeTransform extends Transform {
   private outputItemCount = 0;
   private currentBlockIndex = 0;
   private reasoningBlockIndex = -1;
+  private reasoningItemId: string | null = null;
+  private reasoningOutputIndex = -1;
   private textBlockIndex = -1;
+  private textItemId: string | null = null;
+  private textOutputIndex = -1;
   private toolCallBlocks = new Map<
     number,
-    { index: string; name: string; blockIndex: number }
+    { index: string; name: string; blockIndex: number; itemId: string; outputIndex: number }
   >();
   private finished = false;
-  private currentItemId: string | null = null;
+  // Track all output items for correct type/id in output_item.done events
+  private outputItems: Array<{ type: string; id: string }> = [];
 
   constructor() {
     super({ objectMode: false });
@@ -771,20 +776,22 @@ export class StreamingResponsesBridgeTransform extends Transform {
     if (this.reasoningBlockIndex === -1) {
       this.reasoningBlockIndex = this.currentBlockIndex++;
       this.outputItemCount++;
-      this.currentItemId = genId("rs_");
+      this.reasoningItemId = genId("rs_");
+      this.reasoningOutputIndex = this.outputItemCount - 1;
+      this.outputItems.push({ type: "reasoning", id: this.reasoningItemId });
       this.pushSse({
         type: "response.output_item.added",
-        output_index: this.outputItemCount - 1,
+        output_index: this.reasoningOutputIndex,
         item: {
           type: "reasoning",
-          id: this.currentItemId,
+          id: this.reasoningItemId,
           summary: [],
         },
       });
       this.pushSse({
         type: "response.content_part.added",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningOutputIndex,
         content_index: 0,
         part: { type: "reasoning_text", text: "" },
       });
@@ -793,8 +800,8 @@ export class StreamingResponsesBridgeTransform extends Transform {
     // Emit reasoning delta using correct OpenAI event type
     this.pushSse({
       type: "response.reasoning_text.delta",
-      item_id: this.currentItemId,
-      output_index: this.outputItemCount - 1,
+      item_id: this.reasoningItemId,
+      output_index: this.reasoningOutputIndex,
       content_index: 0,
       delta: text,
     });
@@ -805,33 +812,37 @@ export class StreamingResponsesBridgeTransform extends Transform {
     if (this.reasoningBlockIndex !== -1) {
       this.pushSse({
         type: "response.content_part.done",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningOutputIndex,
         content_index: 0,
         part: { type: "reasoning_text", text: "" },
       });
       this.reasoningBlockIndex = -1;
+      this.reasoningItemId = null;
+      this.reasoningOutputIndex = -1;
     }
 
     // Open text block if not already open
     if (this.textBlockIndex === -1) {
       this.textBlockIndex = this.currentBlockIndex++;
       this.outputItemCount++;
-      this.currentItemId = genId("msg_");
+      this.textItemId = genId("msg_");
+      this.textOutputIndex = this.outputItemCount - 1;
+      this.outputItems.push({ type: "message", id: this.textItemId });
       this.pushSse({
         type: "response.output_item.added",
-        output_index: this.outputItemCount - 1,
+        output_index: this.textOutputIndex,
         item: {
           type: "message",
-          id: this.currentItemId,
+          id: this.textItemId,
           role: "assistant",
           content: [],
         },
       });
       this.pushSse({
         type: "response.content_part.added",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: this.textItemId,
+        output_index: this.textOutputIndex,
         content_index: 0,
         part: { type: "output_text", text: "" },
       });
@@ -840,8 +851,8 @@ export class StreamingResponsesBridgeTransform extends Transform {
     // Emit content delta using correct OpenAI event type
     this.pushSse({
       type: "response.output_text.delta",
-      item_id: this.currentItemId,
-      output_index: this.outputItemCount - 1,
+      item_id: this.textItemId,
+      output_index: this.textOutputIndex,
       content_index: 0,
       delta: content,
     });
@@ -862,21 +873,25 @@ export class StreamingResponsesBridgeTransform extends Transform {
       if (!block) {
         // New tool call
         const blockIndex = this.currentBlockIndex++;
+        const itemId = genId("fc_");
+        const outputIndex = this.outputItemCount;
+        this.outputItemCount++;
         block = {
           index: tc.id || genId("call_"),
           name: tc.function?.name || "",
           blockIndex,
+          itemId,
+          outputIndex,
         };
         this.toolCallBlocks.set(tcIndex, block);
-        this.outputItemCount++;
-        this.currentItemId = genId("fc_");
+        this.outputItems.push({ type: "function_call", id: itemId });
 
         this.pushSse({
           type: "response.output_item.added",
-          output_index: this.outputItemCount - 1,
+          output_index: outputIndex,
           item: {
             type: "function_call",
-            id: this.currentItemId,
+            id: itemId,
             call_id: block.index,
             name: block.name,
             arguments: "",
@@ -888,8 +903,8 @@ export class StreamingResponsesBridgeTransform extends Transform {
       if (tc.function?.arguments) {
         this.pushSse({
           type: "response.function_call_arguments.delta",
-          item_id: this.currentItemId,
-          output_index: this.outputItemCount - 1,
+          item_id: block.itemId,
+          output_index: block.outputIndex,
           delta: tc.function.arguments,
         });
       }
@@ -901,44 +916,48 @@ export class StreamingResponsesBridgeTransform extends Transform {
     if (this.textBlockIndex !== -1) {
       this.pushSse({
         type: "response.content_part.done",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: this.textItemId,
+        output_index: this.textOutputIndex,
         content_index: 0,
         part: { type: "output_text", text: "" },
       });
       this.pushSse({
         type: "response.text.done",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: this.textItemId,
+        output_index: this.textOutputIndex,
         content_index: 0,
       });
       this.textBlockIndex = -1;
+      this.textItemId = null;
+      this.textOutputIndex = -1;
     }
 
     // Close any open reasoning block
     if (this.reasoningBlockIndex !== -1) {
       this.pushSse({
         type: "response.content_part.done",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningOutputIndex,
         content_index: 0,
         part: { type: "reasoning_text", text: "" },
       });
       this.pushSse({
         type: "response.reasoning_text.done",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningOutputIndex,
         content_index: 0,
       });
       this.reasoningBlockIndex = -1;
+      this.reasoningItemId = null;
+      this.reasoningOutputIndex = -1;
     }
 
     // Close any open tool call blocks
     for (const [, block] of this.toolCallBlocks) {
       this.pushSse({
         type: "response.function_call_arguments.done",
-        item_id: this.currentItemId,
-        output_index: this.outputItemCount - 1,
+        item_id: block.itemId,
+        output_index: block.outputIndex,
       });
     }
     this.toolCallBlocks.clear();
@@ -994,7 +1013,11 @@ export class StreamingResponsesBridgeTransform extends Transform {
   }
 
   private buildOutputItem(index: number): Record<string, unknown> {
-    // Simplified — just enough for the done event
+    const item = this.outputItems[index];
+    if (item) {
+      return { type: item.type, id: item.id, status: "completed" };
+    }
+    // Fallback shouldn't happen, but handle gracefully
     return { type: "message", id: genId("msg_"), status: "completed" };
   }
 

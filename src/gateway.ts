@@ -387,6 +387,48 @@ export class Gateway {
       });
     }
     this.server = this.app.listen(this.config.port);
+    this.configureServerTimeouts(this.server);
     return this.server;
+  }
+
+  // Configure server and socket timeouts to prevent premature connection
+  // closure while still protecting against truly dead sockets.
+  //
+  // Node.js defaults that would break long-lived LLM streams:
+  //   server.requestTimeout  = 300000  (5 min) — kills in-flight streaming
+  //   server.headersTimeout  = 60000   (60 s) — kills slow-header clients
+  //   server.keepAliveTimeout = 5000   (5 s)  — closes idle keep-alive sockets
+  //   server.timeout         = 0       — disabled, which is fine
+  //
+  // We disable request/headers/keepAlive timeouts entirely (LLM streams can
+  // easily exceed 5 min) and set a 15-minute socket-level inactivity timeout
+  // so truly dead connections are eventually reaped. TCP keepalive probes
+  // detect half-open connections faster than the 15-min timeout alone.
+  private configureServerTimeouts(server: Server): void {
+    // Disable all request-level timeouts — streams are long-lived.
+    server.requestTimeout = 0;
+    server.headersTimeout = 0;
+    server.keepAliveTimeout = 0;
+
+    // Socket inactivity timeout: 15 minutes. The socket fires a 'timeout'
+    // event after 15 min of no I/O; we destroy it then. SSE pings prevent
+    // this from firing during active streams.
+    const INACTIVITY_MS = 15 * 60 * 1000; // 15 minutes
+    server.timeout = INACTIVITY_MS;
+
+    // TCP keepalive: send probes every 60 s after 2 minutes of inactivity.
+    // This detects half-open (dead peer) connections within ~3 minutes instead
+    // of waiting for the full 15-min timeout.
+    server.on("connection", (socket) => {
+      socket.setKeepAlive(true, 60_000);
+    });
+
+    this.logger.info("server_timeouts", {
+      requestTimeout: "disabled",
+      headersTimeout: "disabled",
+      keepAliveTimeout: "disabled",
+      inactivityTimeout: `${INACTIVITY_MS / 1000}s`,
+      tcpKeepalive: "60s probe interval",
+    });
   }
 }

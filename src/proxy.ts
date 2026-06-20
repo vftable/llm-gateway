@@ -253,10 +253,10 @@ export class GatewayProxy {
     if (!res) return;
     if (res.headersSent) {
       // Mid-stream error: can't send a clean JSON error without corrupting
-      // the in-flight response. Abort the socket so the client knows the
-      // stream died.
+      // the in-flight response. End gracefully so the client sees a clean
+      // stream termination rather than a TCP reset.
       try {
-        res.destroy();
+        if (!res.writableEnded) res.end();
       } catch (_) {
         /* noop */
       }
@@ -367,9 +367,6 @@ export class GatewayProxy {
     if (req.__gatewayStreamKind === "bridge") {
       headers["content-type"] = "text/event-stream";
     }
-    if (!res.headersSent) {
-      res.writeHead(proxyRes.statusCode || 200, headers);
-    }
 
     let transform: NodeJS.ReadWriteStream;
     if (req.__gatewayStreamKind === "anthropic") {
@@ -388,19 +385,57 @@ export class GatewayProxy {
         ? new SsePingKeepAlive({ interval: pingInterval })
         : null;
 
-    // Pipe errors take down the socket — there's no clean mid-stream recovery.
+    // Prevent unhandled errors from crashing the process. If the client
+    // disconnects, res emits error — swallow it so the upstream side can
+    // clean up via the 'close' event instead.
+    // IMPORTANT: register BEFORE writeHead to avoid a race where the client
+    // disconnects between writeHead and the handler registration.
+    res.on("error", (err: Error) => {
+      this.logger.warn("client_res_error", {
+        kind: req.__gatewayStreamKind,
+        err: err.message ? err.message : String(err),
+      });
+    });
+
+    if (!res.headersSent) {
+      res.writeHead(proxyRes.statusCode || 200, headers);
+    }
+
+    // Upstream read error — log and end gracefully so the client sees a
+    // clean stream termination (SSE [DONE] or end-of-stream) rather than
+    // a TCP reset.
     proxyRes.on("error", (err: Error) => {
       this.logger.warn("stream_read_error", {
         kind: req.__gatewayStreamKind,
         err: err.message ? err.message : String(err),
       });
       try {
-        res.destroy();
+        if (!res.writableEnded) res.end();
       } catch (_) {
         /* noop */
       }
     });
+
+    // Errors in the transform chain (thinking parser, ping). Log and
+    // terminate gracefully rather than crashing.
+    transform.on("error", (err: Error) => {
+      this.logger.warn("stream_transform_error", {
+        kind: req.__gatewayStreamKind,
+        err: err.message ? err.message : String(err),
+      });
+      try {
+        if (!res.writableEnded) res.end();
+      } catch (_) {
+        /* noop */
+      }
+    });
+
     if (ping) {
+      ping.on("error", (err: Error) => {
+        this.logger.warn("stream_ping_error", {
+          err: err.message ? err.message : String(err),
+        });
+      });
       proxyRes.pipe(transform).pipe(ping).pipe(res);
     } else {
       proxyRes.pipe(transform).pipe(res);
@@ -412,9 +447,30 @@ export class GatewayProxy {
   // For SSE streams, adds a ping keep-alive to prevent proxy timeouts.
   private pipeThrough(proxyRes: IncomingMessage, res: Response): void {
     const headers = filteredHeaders(proxyRes.headers);
+
+    // Prevent unhandled errors from crashing the process.
+    // IMPORTANT: register BEFORE writeHead to avoid a race.
+    res.on("error", (err: Error) => {
+      this.logger.warn("client_res_error", {
+        err: err.message ? err.message : String(err),
+      });
+    });
+
     if (!res.headersSent) {
       res.writeHead(proxyRes.statusCode || 200, headers);
     }
+
+    // Upstream read error — end gracefully.
+    proxyRes.on("error", (err: Error) => {
+      this.logger.warn("pipe_read_error", {
+        err: err.message ? err.message : String(err),
+      });
+      try {
+        if (!res.writableEnded) res.end();
+      } catch (_) {
+        /* noop */
+      }
+    });
 
     // Check if this is an SSE stream by content-type
     const ct = String(headers["content-type"] || "").toLowerCase();
@@ -423,6 +479,11 @@ export class GatewayProxy {
       const pingInterval = this.config.ssePingInterval ?? 30_000;
       if (pingInterval > 0) {
         const ping = new SsePingKeepAlive({ interval: pingInterval });
+        ping.on("error", (err: Error) => {
+          this.logger.warn("pipe_ping_error", {
+            err: err.message ? err.message : String(err),
+          });
+        });
         proxyRes.pipe(ping).pipe(res);
       } else {
         proxyRes.pipe(res);
@@ -447,6 +508,15 @@ export class GatewayProxy {
     const chunks: Buffer[] = [];
     let size = 0;
     let tooBig = false;
+    let errored = false;
+
+    // Prevent unhandled errors from crashing the process.
+    res.on("error", (err: Error) => {
+      this.logger.warn("client_res_error", {
+        path: req.originalUrl || req.url,
+        err: err.message ? err.message : String(err),
+      });
+    });
 
     proxyRes.on("data", (chunk: Buffer) => {
       if (tooBig) return;
@@ -469,7 +539,7 @@ export class GatewayProxy {
           });
         } else {
           try {
-            res.destroy();
+            if (!res.writableEnded) res.end();
           } catch (_) {
             /* noop */
           }
@@ -485,7 +555,7 @@ export class GatewayProxy {
     });
 
     proxyRes.on("end", () => {
-      if (tooBig || res.headersSent) return;
+      if (tooBig || errored || res.headersSent) return;
       const original = Buffer.concat(chunks);
       const stripped = Buffer.from(
         stripInvisible(original.toString("utf8")),
@@ -575,6 +645,7 @@ export class GatewayProxy {
         path: req && (req.originalUrl || req.url),
         err: err && err.message ? err.message : String(err),
       });
+      errored = true;
       if (!res.headersSent) {
         res.status(502).json({
           error: {
@@ -585,7 +656,7 @@ export class GatewayProxy {
         });
       } else {
         try {
-          res.destroy();
+          if (!res.writableEnded) res.end();
         } catch (_) {
           /* noop */
         }
@@ -595,7 +666,9 @@ export class GatewayProxy {
 
   private sendRaw(proxyRes: IncomingMessage, res: Response, buf: Buffer): void {
     if (res.headersSent) {
-      try { res.destroy(); } catch (_) { /* noop */ }
+      try {
+        if (!res.writableEnded) res.end();
+      } catch (_) { /* noop */ }
       return;
     }
     res.writeHead(
