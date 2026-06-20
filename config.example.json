@@ -1,0 +1,92 @@
+{
+  "port": 8787,
+
+  "_upstream_comment": "Base URL of your 9router instance (no trailing slash). Required.",
+  "upstream": "http://127.0.0.1:3000",
+
+  "_upstreamApiKey_comment": "Static key forwarded to 9router as Authorization: Bearer and x-api-key. Empty = pass client headers through.",
+  "upstreamApiKey": "",
+
+  "_gatewayApiKeys_comment": "Array of keys the gateway accepts from clients (one per user). Empty array = no auth. Send as Authorization: Bearer <key> or x-api-key.",
+  "gatewayApiKeys": ["sk-user-alice", "sk-user-bob"],
+
+  "_upstreamTlsVerify_comment": "Verify TLS for HTTPS upstreams. Set false for self-signed certs.",
+  "upstreamTlsVerify": true,
+
+  "_ssePingInterval_comment": "Interval in milliseconds for SSE ping keep-alive comments. Prevents Cloudflare/NGINX idle timeouts during long thinking periods. Set 0 to disable. Default: 30000 (30s).",
+  "ssePingInterval": 30000,
+
+  "models": {
+    "_prefix_comment": "Optional global namespace prepended to every exposed id (e.g. 'gw-' -> 'gw-anthropic/gpt-5'). Empty = none.",
+    "prefix": "",
+
+    "_exposePrefix_comment": "Prepended to every exposed id EXCEPT aliases starting with one of exposeExempt. Set to '' to disable. Default 'anthropic/' so Claude Code sees non-Claude models under an Anthropic-style id.",
+    "exposePrefix": "anthropic/",
+
+    "_exposeExempt_comment": "Aliases starting with any of these strings are NOT given exposePrefix. Add more prefixes here if you have other 'native' families.",
+    "exposeExempt": ["claude"],
+
+    "_mappings_comment": "Exposed alias -> mapping object. `upstream` is the model id on 9router. `displayName` and `contextWindow` are optional and surfaced in GET /v1/models. `maxOutputTokens` is the default max output tokens for the model. `enabled` (default true) — set false to hide from listings and reject requests without deleting the mapping. `responses` (default false) — set true when the upstream speaks /v1/responses natively; otherwise the gateway bridges client /v1/responses requests to /v1/chat/completions upstream and translates the response shape back. `capabilities` — override model capabilities (thinking, effort, etc.); if not set, defaults to full Claude-compatible capabilities. Shorthand: a bare string still works and is treated as { upstream: value }.",
+    "mappings": {
+      "claude-opus-4.1": {
+        "upstream": "anthropic/claude-opus-4.1",
+        "displayName": "Claude Opus 4.1",
+        "contextWindow": 200000,
+        "maxOutputTokens": 32000
+      },
+      "claude-sonnet-4.5": {
+        "upstream": "anthropic/claude-sonnet-4.5",
+        "displayName": "Claude Sonnet 4.5",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000
+      },
+      "claude-haiku-4.5": {
+        "upstream": "anthropic/claude-haiku-4.5",
+        "displayName": "Claude Haiku 4.5",
+        "contextWindow": 200000,
+        "maxOutputTokens": 64000
+      },
+      "gpt-5": {
+        "upstream": "openai/gpt-5",
+        "displayName": "GPT-5",
+        "contextWindow": 128000,
+        "maxOutputTokens": 128000,
+        "responses": true
+      },
+      "gpt-5-mini": {
+        "upstream": "openai/gpt-5-mini",
+        "displayName": "GPT-5 Mini",
+        "contextWindow": 128000,
+        "maxOutputTokens": 128000,
+        "enabled": false
+      },
+      "deepseek-v4-pro": {
+        "upstream": "deepseek/deepseek-v4-pro",
+        "displayName": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 384000
+      },
+      "qwen-3.7-max": {
+        "upstream": "qwen/qwen-3.7-max",
+        "displayName": "Qwen3.7-Max",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536
+      },
+      "gemini-3.5-flash": {
+        "upstream": "google/gemini-3.5-flash",
+        "displayName": "Gemini 3.5 Flash",
+        "contextWindow": 1000000,
+        "maxOutputTokens": 65536
+      }
+    },
+
+    "_restricted_comment": "Upstream model ids that are always rejected with 403, even if requested by raw name.",
+    "restricted": [],
+
+    "_allowUnknown_comment": "If true, model names not in 'mappings' are forwarded verbatim. If false, they get 404.",
+    "allowUnknown": false,
+
+    "_defaultMaxOutputTokens_comment": "Default max_tokens returned in Anthropic model list for models without explicit maxOutputTokens. Default: 16384.",
+    "defaultMaxOutputTokens": 16384
+  }
+}

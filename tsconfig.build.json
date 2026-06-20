@@ -1,0 +1,10 @@
+// Build config: excludes the tests (they're run via tsx, not shipped).
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "src/tests/**"]
+}

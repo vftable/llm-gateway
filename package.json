@@ -1,0 +1,35 @@
+{
+  "name": "llm-gateway",
+  "version": "1.0.0",
+  "description": "Express gateway in front of 9router with model mapping/restrictions for OpenAI- and Anthropic-compatible clients.",
+  "main": "dist/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test:thinking": "tsx src/tests/thinking-test.ts",
+    "test:bridge": "tsx src/tests/bridge-test.ts",
+    "test:sse": "tsx src/tests/sse-test.ts",
+    "test:streaming": "tsx src/tests/streaming-test.ts",
+    "test:streaming-anthropic": "tsx src/tests/streaming-anthropic-test.ts",
+    "test:ping": "tsx src/tests/ping-test.ts",
+    "test:repro": "tsx src/tests/repro-test.ts",
+    "test": "npm run typecheck && npm run test:thinking && npm run test:bridge && npm run test:streaming && npm run test:streaming-anthropic && npm run test:sse && npm run test:ping && npm run test:repro"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "http-proxy-middleware": "^3.0.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.0.0",
+    "openai": "^6.44.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
