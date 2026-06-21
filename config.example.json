@@ -7,8 +7,15 @@
   "_upstreamApiKey_comment": "Static key forwarded to 9router as Authorization: Bearer and x-api-key. Empty = pass client headers through.",
   "upstreamApiKey": "",
 
-  "_gatewayApiKeys_comment": "Array of keys the gateway accepts from clients (one per user). Empty array = no auth. Send as Authorization: Bearer <key> or x-api-key.",
-  "gatewayApiKeys": ["sk-user-alice", "sk-user-bob"],
+  "_gatewayApiKeys_comment": "Client keys the gateway accepts (Authorization: Bearer <key> or x-api-key). THREE formats, all backward compatible: (1) array of strings — all keys valid, no quota; (2) bare string — legacy single key; (3) object mapping key -> { tokensPerDay } — each key gets its own daily token quota (input + output, UTC midnight reset). Empty / empty array / empty object = auth disabled. Quota enforcement requires `usageFile` to be set (see below).",
+  "gatewayApiKeys": {
+    "sk-user-alice": { "tokensPerDay": 1000000 },
+    "sk-user-bob":   { "tokensPerDay": 500000 },
+    "sk-user-carol": null
+  },
+
+  "_usageFile_comment": "Path to the JSON file used to persist per-key daily token usage counters. Defaults to ./usage.json. Counters survive process restarts and reset at UTC midnight. The gateway flushes to disk on SIGINT/SIGTERM.",
+  "usageFile": "./usage.json",
 
   "_upstreamTlsVerify_comment": "Verify TLS for HTTPS upstreams. Set false for self-signed certs.",
   "upstreamTlsVerify": true,

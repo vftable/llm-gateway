@@ -8,6 +8,7 @@ import { ModelRegistry } from '../models';
 import { ThinkingConverter } from '../thinking';
 import { ResponsesBridge } from '../responses-bridge';
 import { GatewayProxy, type GatewayRequest } from '../proxy';
+import { UsageTracker } from '../usage';
 
 const bridgeConverter = new ResponsesBridge();
 
@@ -202,7 +203,7 @@ upstream.listen(0, async () => {
   const logger = new Logger();
   const models = new ModelRegistry(config.models);
   const thinking = new ThinkingConverter();
-  const proxy = new GatewayProxy(config, logger, models, thinking, bridgeConverter);
+  const proxy = new GatewayProxy(config, logger, models, thinking, bridgeConverter, new UsageTracker("./data/usage-test.json"));
 
   const app = express();
   app.use('/v1', express.json({ limit: '100mb' }));

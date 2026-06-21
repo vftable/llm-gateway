@@ -85,11 +85,27 @@ export interface ModelsConfig {
   defaultMaxOutputTokens?: number;
 }
 
+// Per-key configuration. Currently only carries an optional daily token
+// quota. Keys present in the map without a KeyConfig (undefined value) are
+// still valid for auth — they just have no limit.
+export interface KeyConfig {
+  /** Max tokens (input + output) the key may consume per UTC day. undefined = unlimited. */
+  tokensPerDay?: number;
+}
+
 export interface GatewayConfig {
   port: number;
   upstream: string;
   upstreamApiKey: string;
-  gatewayApiKeys: Set<string>;
+  /**
+   * Accepted client keys. Map preserves insertion order.
+   *   - Empty map = auth disabled (open proxy).
+   *   - Keys with undefined KeyConfig = valid key, no quota.
+   *   - Keys with { tokensPerDay } = valid key, daily token quota enforced.
+   */
+  gatewayApiKeys: Map<string, KeyConfig>;
+  /** Path to the JSON file used for per-key usage persistence. Default: ./usage.json. */
+  usageFile?: string;
   upstreamTlsVerify: boolean;
   models: ModelsConfig;
   /** Interval in milliseconds for SSE ping keep-alive. 0 = disabled. Default: 30000 (30s). */
@@ -100,7 +116,8 @@ const DEFAULTS: GatewayConfig = {
   port: 8787,
   upstream: "http://127.0.0.1:3000",
   upstreamApiKey: "",
-  gatewayApiKeys: new Set<string>(),
+  gatewayApiKeys: new Map<string, KeyConfig>(),
+  usageFile: undefined,
   upstreamTlsVerify: true,
   models: {
     prefix: "",
@@ -117,7 +134,8 @@ interface RawConfig {
   upstream?: string;
   upstreamApiKey?: string;
   gatewayApiKey?: string;
-  gatewayApiKeys?: string | string[];
+  gatewayApiKeys?: string | string[] | Record<string, KeyConfig | null>;
+  usageFile?: string;
   upstreamTlsVerify?: boolean;
   models?: {
     prefix?: string;
@@ -209,21 +227,35 @@ export function loadConfig(configPath?: string): GatewayConfig {
   // Normalize upstream: no trailing slash.
   merged.upstream = merged.upstream.replace(/\/+$/, "");
 
-  // Normalize gateway auth keys into a Set. Accepts either a single string
-  // (legacy `gatewayApiKey`) or an array (`gatewayApiKeys`, preferred) so you
-  // can hand out one key per user. Empty set => auth disabled.
-  let rawKeys: string[] | undefined =
-    typeof parsed.gatewayApiKeys === "string"
-      ? [parsed.gatewayApiKeys]
-      : Array.isArray(parsed.gatewayApiKeys)
-        ? parsed.gatewayApiKeys
-        : undefined;
-  if (!rawKeys && typeof parsed.gatewayApiKey === "string") {
-    rawKeys = [parsed.gatewayApiKey];
+  // Normalize gateway auth keys into a Map. Accepts:
+  //   - string                       (legacy single key, no limit)
+  //   - string[]                     (legacy, all keys unlimited)
+  //   - { "sk-key": { tokensPerDay } | null, ... }  (keys with optional limits)
+  // Plus the legacy `gatewayApiKey` (string) singular form.
+  // Empty map => auth disabled.
+  const keyMap = new Map<string, KeyConfig>();
+  const pushKey = (k: unknown, cfg: KeyConfig | null | undefined) => {
+    if (typeof k !== "string" || k.length === 0) return;
+    keyMap.set(k, cfg ?? {});
+  };
+  if (Array.isArray(parsed.gatewayApiKeys)) {
+    for (const k of parsed.gatewayApiKeys) pushKey(k, undefined);
+  } else if (typeof parsed.gatewayApiKeys === "string") {
+    pushKey(parsed.gatewayApiKeys, undefined);
+  } else if (
+    parsed.gatewayApiKeys &&
+    typeof parsed.gatewayApiKeys === "object"
+  ) {
+    for (const [k, cfg] of Object.entries(parsed.gatewayApiKeys)) {
+      pushKey(k, cfg);
+    }
   }
-  merged.gatewayApiKeys = new Set(
-    (rawKeys || []).filter((k) => typeof k === "string" && k.length > 0),
-  );
+  if (typeof parsed.gatewayApiKey === "string") {
+    pushKey(parsed.gatewayApiKey, undefined);
+  }
+  merged.gatewayApiKeys = keyMap;
+
+  merged.usageFile = parsed.usageFile;
 
   return merged;
 }

@@ -18,6 +18,8 @@ import { SseThinkingTransform } from "./streaming-thinking";
 import { AnthropicThinkingTransform } from "./streaming-anthropic";
 import { StreamingResponsesBridgeTransform } from "./responses-bridge";
 import { SsePingKeepAlive } from "./sse-ping";
+import type { UsageTracker } from "./usage";
+import { readResponseUsage } from "./tokens";
 
 // Max chars of the upstream request body to log on a non-2xx response.
 // Large enough to show model + structure, small enough to keep logs readable.
@@ -57,6 +59,10 @@ export interface GatewayRequest extends Request {
   __gatewayStreamBridge?: boolean;
   __gatewayConvertKind?: ConvertKind;
   __gatewayStreamKind?: StreamKind;
+  /** Authenticated client API key (set by the auth middleware, when auth is on). */
+  __gatewayApiKey?: string;
+  /** Input tokens counted by the enforcement middleware (for reconciliation). */
+  __gatewayInputTokens?: number;
 }
 
 interface GatewayResponseBody {
@@ -84,6 +90,7 @@ export class GatewayProxy {
     private readonly models: ModelRegistry,
     private readonly thinking: ThinkingConverter,
     private readonly bridge: ResponsesBridge,
+    private readonly usage: UsageTracker,
   ) {}
 
   createMiddleware() {
@@ -581,6 +588,13 @@ export class GatewayProxy {
         return;
       }
 
+      // Reconcile per-key usage with the upstream-reported actual usage.
+      // The enforcement middleware optimistically counted input tokens; if
+      // the upstream tells us the real input+output, swap the estimate out
+      // for the accurate figure. Best-effort: streaming or passthrough
+      // responses can't be reconciled here and keep their estimate.
+      this.reconcileUsage(req, parsed);
+
       const kind = req.__gatewayConvertKind;
 
       // Pick the transform for this kind. All of them return the mutated body
@@ -707,6 +721,24 @@ export class GatewayProxy {
       upstream: req.__gatewayResolvedTo || body.model || null,
       ...fields,
     });
+  }
+
+  // Swap the optimistic input-token estimate (recorded by the enforcement
+  // middleware) for the upstream-reported actual usage. Only called from
+  // convertResponse, where we already have the parsed JSON body in hand.
+  // Streaming and passthrough responses never reach here, so they keep the
+  // input-only estimate — a known undercount documented in the README.
+  private reconcileUsage(req: GatewayRequest, parsed: unknown): void {
+    const key = req.__gatewayApiKey;
+    const reserved = req.__gatewayInputTokens;
+    if (!key || reserved == null) return;
+    const actual = readResponseUsage(parsed);
+    if (actual.input == null && actual.output == null) return;
+    const total = (actual.input ?? 0) + (actual.output ?? 0);
+    if (total <= 0) return;
+    this.usage.subtract(key, reserved);
+    this.usage.add(key, total);
+    req.__gatewayInputTokens = total;
   }
 
   private sendRaw(proxyRes: IncomingMessage, res: Response, buf: Buffer): void {

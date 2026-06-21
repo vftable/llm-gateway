@@ -15,6 +15,7 @@ import { ModelRegistry } from "../models";
 import { ThinkingConverter } from "../thinking";
 import { ResponsesBridge } from "../responses-bridge";
 import { GatewayProxy } from "../proxy";
+import { UsageTracker } from "../usage";
 
 const UPSTREAM_EVENTS = [
   "data: chunk-1\n\n",
@@ -52,7 +53,7 @@ upstream.listen(0, async () => {
   const models = new ModelRegistry(config.models);
   const thinking = new ThinkingConverter();
   const bridge = new ResponsesBridge();
-  const proxy = new GatewayProxy(config, logger, models, thinking, bridge);
+  const proxy = new GatewayProxy(config, logger, models, thinking, bridge, new UsageTracker("./data/usage-test.json"));
 
   const app = express();
   app.use("/v1", express.json({ limit: "100mb" }));
@@ -160,6 +161,7 @@ upstream.listen(0, async () => {
       models2,
       thinking2,
       bridge2,
+      new UsageTracker("./data/usage-test.json"),
     );
 
     const app2 = express();

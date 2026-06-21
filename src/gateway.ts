@@ -2,6 +2,7 @@
 // objects (logger, model registry, proxy). The entry point in `index.ts`
 // constructs one of these and calls `start()`.
 
+import path from "path";
 import express, { type Express } from "express";
 import type { Server } from "http";
 import type { GatewayConfig } from "./config";
@@ -11,6 +12,8 @@ import { ThinkingConverter } from "./thinking";
 import { ResponsesBridge } from "./responses-bridge";
 import { GatewayProxy, type GatewayRequest } from "./proxy";
 import { applyPrefillFix } from "./prefill";
+import { UsageTracker, nextUtcMidnight } from "./usage";
+import { countInputTokens, readMaxOutputTokens } from "./tokens";
 
 export class Gateway {
   readonly app: Express;
@@ -18,6 +21,7 @@ export class Gateway {
   readonly models: ModelRegistry;
   readonly thinking: ThinkingConverter;
   readonly bridge: ResponsesBridge;
+  readonly usage: UsageTracker;
   readonly proxy: GatewayProxy;
   private server: Server | null = null;
 
@@ -28,18 +32,26 @@ export class Gateway {
       models?: ModelRegistry;
       thinking?: ThinkingConverter;
       bridge?: ResponsesBridge;
+      usage?: UsageTracker;
     },
   ) {
     this.logger = deps?.logger ?? new Logger();
     this.models = deps?.models ?? new ModelRegistry(config.models);
     this.thinking = deps?.thinking ?? new ThinkingConverter();
     this.bridge = deps?.bridge ?? new ResponsesBridge();
+    this.usage =
+      deps?.usage ??
+      new UsageTracker(
+        config.usageFile ||
+          path.join(process.cwd(), "usage.json"),
+      );
     this.proxy = new GatewayProxy(
       config,
       this.logger,
       this.models,
       this.thinking,
       this.bridge,
+      this.usage,
     );
 
     this.app = express();
@@ -67,6 +79,15 @@ export class Gateway {
       });
       process.exit(1);
     });
+    // Flush pending usage-counter writes before the process exits so the
+    // final tally isn't lost. Both signals so we cover npm scripts (SIGINT)
+    // and plain `kill <pid>` / systemd stops (SIGTERM).
+    const flushAndExit = (sig: string) => {
+      this.usage.flushSync();
+      process.exit(0);
+    };
+    process.on("SIGINT", () => flushAndExit("SIGINT"));
+    process.on("SIGTERM", () => flushAndExit("SIGTERM"));
   }
 
   private registerMiddleware(): void {
@@ -105,7 +126,9 @@ export class Gateway {
     this.app.use("/v1", express.json({ limit: "100mb" }));
 
     // --- Optional gateway auth ----------------------------------------------
-    // Accepts any key in config.gatewayApiKeys (one per user). Empty set = open.
+    // Accepts any key in config.gatewayApiKeys (one per user). Empty map = open.
+    // When auth is on, stashes the matched key on req so the usage-limit
+    // middleware and proxy can attribute tokens to it.
     this.app.use("/v1", (req, res, next) => {
       if (this.config.gatewayApiKeys.size === 0) return next();
       const bearer = (req.header("authorization") || "").replace(
@@ -113,7 +136,11 @@ export class Gateway {
         "",
       );
       const provided = bearer || req.header("x-api-key") || "";
-      if (this.config.gatewayApiKeys.has(provided)) return next();
+      const cfg = this.config.gatewayApiKeys.get(provided);
+      if (cfg) {
+        (req as GatewayRequest).__gatewayApiKey = provided;
+        return next();
+      }
       this.logger.warn("auth_rejected", { path: req.originalUrl });
       return res.status(401).json({
         error: { type: "authentication_error", message: "Invalid API key" },
@@ -199,6 +226,114 @@ export class Gateway {
           },
         });
       }
+      next();
+    });
+
+    // --- Context window + per-key usage limits -----------------------------
+    // Runs AFTER the model guard (so __gatewayResolved is set) and BEFORE
+    // the prefill fix (which appends a small user message — negligible
+    // token-wise). Rejects:
+    //   - requests whose counted input + max_output exceeds the resolved
+    //     model's contextWindow (HTTP 413)
+    //   - requests from a key whose daily token quota would be exceeded
+    //     (HTTP 429)
+    // Counts input tokens here (heuristic ~4 chars/token) and stashes the
+    // count for the proxy to reconcile against the upstream-reported actual
+    // usage once the response arrives.
+    this.app.use("/v1", (req, res, next) => {
+      if (req.method !== "POST") return next();
+      const body = req.body as Record<string, unknown> | undefined;
+      if (!body || typeof body !== "object") return next();
+
+      const gwReq = req as GatewayRequest;
+      const resolved = gwReq.__gatewayResolved;
+      const mapping = resolved?.upstream
+        ? this.config.models.mappings[
+            this.models.aliasFromExposed(String(body.model ?? ""))
+          ]
+        : undefined;
+      const contextWindow = mapping?.contextWindow;
+
+      // Context-window check (only when the model advertises one).
+      const inputTokens = countInputTokens(body, req.originalUrl || req.url);
+      gwReq.__gatewayInputTokens = inputTokens;
+
+      if (contextWindow && contextWindow > 0) {
+        const maxOut =
+          readMaxOutputTokens(body) ??
+          mapping?.maxOutputTokens ??
+          this.config.models.defaultMaxOutputTokens ??
+          0;
+        const projected = inputTokens + maxOut;
+        if (projected > contextWindow) {
+          this.logger.warn("context_limit", {
+            path: req.originalUrl,
+            model: body.model,
+            inputTokens,
+            maxOut,
+            contextWindow,
+            projected,
+          });
+          return res.status(413).json({
+            error: {
+              type: "context_too_large",
+              message: `Request projected at ${projected} tokens exceeds the ${contextWindow}-token context window for '${String(body.model)}'.`,
+              source: "gateway",
+              input_tokens: inputTokens,
+              max_output_tokens: maxOut,
+              context_window: contextWindow,
+              projected,
+            },
+          });
+        }
+      }
+
+      // Per-key daily quota check. The optimistic estimate is input tokens
+      // plus the requested/model-default max output — the proxy reconciles
+      // this against actual usage once the response arrives.
+      const key = gwReq.__gatewayApiKey;
+      if (key) {
+        const cfg = this.config.gatewayApiKeys.get(key);
+        const limit = cfg?.tokensPerDay;
+        if (limit && limit > 0) {
+          const maxOut =
+            readMaxOutputTokens(body) ??
+            mapping?.maxOutputTokens ??
+            this.config.models.defaultMaxOutputTokens ??
+            0;
+          const projected = inputTokens + maxOut;
+          const used = this.usage.get(key).tokens;
+          if (used + projected > limit) {
+            const resetsAt = nextUtcMidnight();
+            this.logger.warn("usage_limit", {
+              path: req.originalUrl,
+              model: body.model,
+              key,
+              used,
+              projected,
+              limit,
+            });
+            return res.status(429).json({
+              error: {
+                type: "usage_limit_reached",
+                message: `Daily token quota for this key would be exceeded (used ${used}/${limit}, request needs ~${projected}). Resets at ${resetsAt.toISOString()}.`,
+                source: "gateway",
+                used,
+                limit,
+                projected,
+                resets_at: resetsAt.toISOString(),
+              },
+            });
+          }
+          // Optimistically debit the projected total. The proxy reconciles
+          // this against the upstream-reported actual usage after the
+          // response arrives (subtract estimate, add actual). If the
+          // request fails upstream we still keep the debit — the input
+          // tokens were consumed regardless of whether the model replied.
+          this.usage.add(key, projected);
+        }
+      }
+
       next();
     });
 

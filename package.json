@@ -16,7 +16,8 @@
     "test:streaming-anthropic": "tsx src/tests/streaming-anthropic-test.ts",
     "test:ping": "tsx src/tests/ping-test.ts",
     "test:repro": "tsx src/tests/repro-test.ts",
-    "test": "npm run typecheck && npm run test:thinking && npm run test:bridge && npm run test:streaming && npm run test:streaming-anthropic && npm run test:sse && npm run test:ping && npm run test:repro"
+    "test:enforcement": "tsx src/tests/enforcement-test.ts",
+    "test": "npm run typecheck && npm run test:thinking && npm run test:bridge && npm run test:streaming && npm run test:streaming-anthropic && npm run test:sse && npm run test:ping && npm run test:repro && npm run test:enforcement"
   },
   "engines": {
     "node": ">=18"
