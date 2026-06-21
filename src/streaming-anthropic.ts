@@ -66,6 +66,12 @@ export class AnthropicThinkingTransform extends Transform {
   // thinking, etc.) — upstreamIndex -> ourIndex.
   private indexMap = new Map<number, number>();
 
+  // True once message_delta or message_stop has been forwarded. After this,
+  // no content_block_* events may be emitted — the client has torn down its
+  // message state and would reject them ("content_block_delta without a
+  // current message").
+  private messageEnded = false;
+
   _transform(
     chunk: Buffer,
     _encoding: string,
@@ -94,29 +100,36 @@ export class AnthropicThinkingTransform extends Transform {
       this.handleRawEvent(raw);
     }
 
-    // Flush any partial-tag carry the parser is holding, so the client still
-    // sees trailing text that arrived without a closing `</thinking>`.
-    const tail = this.parser.flush();
-    if (tail.reasoning || tail.content) {
-      for (const out of this.emitSplit(
-        tail.reasoning,
-        tail.content,
-        tail.blockStarts,
-      )) {
-        this.push(out);
+    // Only flush parser carry and close blocks if the message hasn't already
+    // ended. Once message_delta/message_stop has been forwarded, emitting
+    // further content_block_* events would arrive after the client tore down
+    // its message state and cause "content_block_delta without a current
+    // message" errors.
+    if (!this.messageEnded) {
+      // Flush any partial-tag carry the parser is holding, so the client still
+      // sees trailing text that arrived without a closing `</thinking>`.
+      const tail = this.parser.flush();
+      if (tail.reasoning || tail.content) {
+        for (const out of this.emitSplit(
+          tail.reasoning,
+          tail.content,
+          tail.blockStarts,
+        )) {
+          this.push(out);
+        }
       }
-    }
 
-    // If a block is still open (upstream hung up mid-block), close it so the
-    // client sees a well-formed block boundary.
-    if (this.openBlockType !== "none") {
-      this.push(
-        formatEvent("content_block_stop", {
-          type: "content_block_stop",
-          index: this.openBlockIndex,
-        }),
-      );
-      this.openBlockType = "none";
+      // If a block is still open (upstream hung up mid-block), close it so the
+      // client sees a well-formed block boundary.
+      if (this.openBlockType !== "none") {
+        this.push(
+          formatEvent("content_block_stop", {
+            type: "content_block_stop",
+            index: this.openBlockIndex,
+          }),
+        );
+        this.openBlockType = "none";
+      }
     }
 
     callback();
@@ -150,23 +163,20 @@ export class AnthropicThinkingTransform extends Transform {
     switch (eventType) {
       case "message_start":
       case "ping":
-      case "message_stop":
         // Lifecycle events: pass through unchanged.
         return [formatEvent(eventType, data)];
 
+      case "message_stop":
+        // The message is ending. Flush any parser carry and close blocks
+        // BEFORE forwarding message_stop so no content_block_* events leak
+        // past the end of the message.
+        return [...this.finalizeBlocks(), formatEvent("message_stop", data)];
+
       case "message_delta": {
-        // The message is about to end. Close any block we still have open so
-        // the client gets a clean block boundary before stop_reason arrives.
-        const outputs: string[] = [];
-        if (this.openBlockType !== "none") {
-          outputs.push(
-            formatEvent("content_block_stop", {
-              type: "content_block_stop",
-              index: this.openBlockIndex,
-            }),
-          );
-          this.openBlockType = "none";
-        }
+        // The message is about to end. Flush parser carry and close any block
+        // we still have open so the client gets a clean block boundary (and
+        // all deferred text) before stop_reason arrives.
+        const outputs = this.finalizeBlocks();
         outputs.push(formatEvent("message_delta", data));
         return outputs;
       }
@@ -409,6 +419,23 @@ export class AnthropicThinkingTransform extends Transform {
     ];
     this.openBlockType = "none";
     return out;
+  }
+
+  // Flush parser carry (partial tags held from the last text_delta) and close
+  // any open content block. Called from message_delta/message_stop handlers so
+  // all deferred text reaches the client BEFORE the message ends — and so
+  // _flush() knows there is nothing left to emit.
+  private finalizeBlocks(): string[] {
+    const outputs: string[] = [];
+    const tail = this.parser.flush();
+    if (tail.reasoning || tail.content) {
+      outputs.push(
+        ...this.emitSplit(tail.reasoning, tail.content, tail.blockStarts),
+      );
+    }
+    outputs.push(...this.closeOpenBlock());
+    this.messageEnded = true;
+    return outputs;
   }
 }
 

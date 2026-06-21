@@ -5,6 +5,7 @@
 //   <thinking>...</thinking>  (also <antml:thinking>, < antml thinking >)
 //   <think>...
 //   <reasoning>...</reasoning>
+//   <thinking_mode>...</thinking_mode>
 //
 // Non-streaming only. Streaming is handled by streaming-thinking.ts.
 
@@ -13,13 +14,13 @@
 // or <think>.  Case-insensitive, DOTALL.  Non-greedy so multiple
 // consecutive blocks are captured separately.
 const THINKING_RE =
-  /<\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning)\s*>([\s\S]*?)<\s*\/\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning)\s*>/gi;
+  /<\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning|thinking_mode)\s*>([\s\S]*?)<\s*\/\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning|thinking_mode)\s*>/gi;
 
 // Matches an unclosed opening thinking/reasoning tag.  Used after
 // THINKING_RE has stripped all closed blocks to clean up raw tags that
 // models leave behind when they get "stuck".
 const UNCLOSED_OPEN_TAG_RE =
-  /<\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning)\s*>/gi;
+  /<\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning|thinking_mode)\s*>/gi;
 
 // A reasoning_details entry produced by the gateway. OpenAI-style shape.
 export interface ReasoningDetailEntry {

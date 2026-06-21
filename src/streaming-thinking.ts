@@ -20,9 +20,9 @@ import { stripInvisible } from "./utils";
 // Regex patterns for matching opening and closing tags.
 // The `antml` namespace prefix is only supported on <thinking> (Anthropic),
 // not on <reasoning> or <think>.
-const OPEN_TAG_RE = /<\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning)\s*>/i;
+const OPEN_TAG_RE = /<\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning|thinking_mode)\s*>/i;
 const CLOSE_TAG_RE =
-  /<\s*\/\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning)\s*>/i;
+  /<\s*\/\s*(?:(?:antml(?:[:\s]+))?think(?:ing)?|reasoning|thinking_mode)\s*>/i;
 
 // Matches triple-backtick fenced code block markers (```).
 const FENCE_RE = /`{3}/;
@@ -70,7 +70,8 @@ export class StreamingThinkingParser {
     return (
       partialTagMatch(buffer, "<thinking>") ||
       partialTagMatch(buffer, "<think>") ||
-      partialTagMatch(buffer, "<reasoning>")
+      partialTagMatch(buffer, "<reasoning>") ||
+      partialTagMatch(buffer, "<thinking_mode>")
     );
   }
 
@@ -78,9 +79,10 @@ export class StreamingThinkingParser {
   private partialCloseTag(buffer: string): number {
     return (
       partialTagMatch(buffer, "</thinking>") ||
-      partialTagMatch(buffer, "") ||
+      partialTagMatch(buffer, "</think>") ||
       partialTagMatch(buffer, "</reasoning>") ||
-      partialTagMatch(buffer, "</reason>")
+      partialTagMatch(buffer, "</reason>") ||
+      partialTagMatch(buffer, "</thinking_mode>")
     );
   }
 

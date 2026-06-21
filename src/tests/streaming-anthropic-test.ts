@@ -546,6 +546,78 @@ async function main(): Promise<void> {
     );
   }
 
+  // --- Unit test 9: no content_block_* after message_delta/message_stop ----
+  // Regression: when the parser holds a partial-tag carry from the last
+  // text_delta, _flush() used to emit content_block_delta AFTER message_stop,
+  // causing "Received content_block_delta without a current message" on the
+  // client. The fix flushes carry at message_delta/message_stop time and
+  // suppresses any further block events from _flush.
+  {
+    const parsed = await feedTransform([
+      ev("message_start", {
+        type: "message_start",
+        message: {
+          id: "msg_r",
+          role: "assistant",
+          content: [],
+          usage: { input_tokens: 0, output_tokens: 0 },
+        },
+      }),
+      ev("content_block_start", {
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "text", text: "" },
+      }),
+      // Ends with a partial opening tag — parser holds "<thin" as carry.
+      ev("content_block_delta", {
+        type: "content_block_delta",
+        index: 0,
+        delta: { type: "text_delta", text: "answer <thin" },
+      }),
+      // NO content_block_stop — upstream bug / premature end.
+      ev("message_delta", {
+        type: "message_delta",
+        delta: { stop_reason: "end_turn", stop_sequence: null },
+        usage: { output_tokens: 3 },
+      }),
+      ev("message_stop", { type: "message_stop" }),
+    ]);
+
+    const messageEndIdx = parsed.findIndex(
+      (p) => p.event === "message_delta",
+    );
+    const afterEnd = parsed.slice(messageEndIdx + 1);
+    const lateBlockEvents = afterEnd.filter(
+      (p) =>
+        p.event === "content_block_start" ||
+        p.event === "content_block_delta" ||
+        p.event === "content_block_stop",
+    );
+
+    check(
+      "unit-flush: carry text flushed before message_delta",
+      // "answer <thin" — the "answer " part is emitted as content_delta, and
+      // "<thin" (partial tag carry) should also be flushed as text before
+      // message_delta, not after message_stop.
+      parsed
+        .slice(0, messageEndIdx)
+        .some(
+          (p) =>
+            (p.data?.delta as { type?: string; text?: string })?.type ===
+              "text_delta" &&
+            ((p.data!.delta as { text: string }).text ?? "").includes("<thin"),
+        ),
+      JSON.stringify(
+        parsed.map((p) => p.event + ":" + (p.data?.delta as { type?: string })?.type),
+      ),
+    );
+    check(
+      "unit-flush: no content_block_* after message_delta",
+      lateBlockEvents.length === 0,
+      JSON.stringify(lateBlockEvents),
+    );
+  }
+
   console.log("\n--- end-to-end Anthropic streaming tests ---");
 
   // --- End-to-end via real GatewayProxy + mock upstream -------------------
