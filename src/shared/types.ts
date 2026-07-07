@@ -205,6 +205,8 @@ export interface RequestLog {
   path: string | null;
   stream: boolean;
   error: string | null;
+  /** True when captured request/response debug payloads exist for this row. */
+  hasDebug: boolean;
 }
 
 // --- Global settings (key/value store, typed view) --------------------------
@@ -217,6 +219,9 @@ export interface Settings {
   defaultMaxOutputTokens: number;
   ssePingInterval: number;
   requestLogRetentionDays: number;
+  /** Capture distilled request/response payloads into request logs for
+   *  debugging (messages, tools, tool calls, response text). */
+  debugLogging: boolean;
   adminPasswordHash: string | null;
   jwtSecret: string;
 }
@@ -229,6 +234,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultMaxOutputTokens: 16384,
   ssePingInterval: 30000,
   requestLogRetentionDays: 30,
+  debugLogging: false,
   adminPasswordHash: null,
   jwtSecret: "",
 };

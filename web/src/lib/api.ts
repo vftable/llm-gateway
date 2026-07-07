@@ -13,6 +13,7 @@ import type {
   ProviderInput,
   ProviderTestResult,
   RequestLog,
+  RequestLogDetail,
   Settings,
   UpstreamModelsResponse,
   UsageBreakdownRow,
@@ -152,6 +153,8 @@ export const api = {
     const q = qs.toString();
     return req<RequestLog[]>(`/api/request-logs${q ? `?${q}` : ""}`);
   },
+  requestLogDetail: (id: number) =>
+    req<RequestLogDetail>(`/api/request-logs/${id}/detail`),
 
   // settings
   getSettings: () => req<Settings>("/api/settings"),

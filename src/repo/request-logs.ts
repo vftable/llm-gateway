@@ -26,6 +26,8 @@ interface LogRow {
   path: string | null;
   stream: number;
   error: string | null;
+  debug_request: string | null;
+  debug_response: string | null;
 }
 
 function mapLog(r: LogRow): RequestLog {
@@ -53,6 +55,9 @@ function mapLog(r: LogRow): RequestLog {
     path: r.path,
     stream: !!r.stream,
     error: r.error,
+    // Flag only — the heavy request/response blobs are fetched on demand via
+    // getRequestLogDetail so the list stays light.
+    hasDebug: !!(r.debug_request || r.debug_response),
   };
 }
 
@@ -73,15 +78,21 @@ export interface InsertLogInput {
   path: string | null;
   stream: boolean;
   error: string | null;
+  /** Distilled client request JSON for the debug view (null when disabled). */
+  debugRequest: string | null;
+  /** Distilled model response JSON for the debug view (null when disabled). */
+  debugResponse: string | null;
 }
 
 export function insertRequestLog(db: DB, input: InsertLogInput): void {
   db.prepare(
     `INSERT INTO request_logs
       (ts, api_key_id, api_key_name, user_id, model, provider_id, provider_name,
-       upstream_model, status, input_tokens, output_tokens, cached_tokens, latency_ms, client, path, stream, error)
+       upstream_model, status, input_tokens, output_tokens, cached_tokens, latency_ms,
+       client, path, stream, error, debug_request, debug_response)
      VALUES (@ts, @api_key_id, @api_key_name, @user_id, @model, @provider_id, @provider_name,
-       @upstream_model, @status, @input_tokens, @output_tokens, @cached_tokens, @latency_ms, @client, @path, @stream, @error)`,
+       @upstream_model, @status, @input_tokens, @output_tokens, @cached_tokens, @latency_ms,
+       @client, @path, @stream, @error, @debug_request, @debug_response)`,
   ).run({
     ts: new Date().toISOString(),
     api_key_id: input.apiKeyId,
@@ -100,7 +111,25 @@ export function insertRequestLog(db: DB, input: InsertLogInput): void {
     path: input.path,
     stream: input.stream ? 1 : 0,
     error: input.error,
+    debug_request: input.debugRequest,
+    debug_response: input.debugResponse,
   });
+}
+
+// Fetch the captured request/response debug blobs for one log row. Kept out of
+// the list query so the feed stays light; loaded on demand when a row expands.
+export function getRequestLogDetail(
+  db: DB,
+  id: number,
+): { request: string | null; response: string | null } | null {
+  const row = db
+    .prepare(
+      "SELECT debug_request, debug_response FROM request_logs WHERE id = ?",
+    )
+    .get(id) as
+    { debug_request: string | null; debug_response: string | null } | undefined;
+  if (!row) return null;
+  return { request: row.debug_request, response: row.debug_response };
 }
 
 export interface ListOpts {
@@ -136,10 +165,18 @@ export function listRequestLogs(db: DB, opts: ListOpts = {}): RequestLog[] {
   params.limit = opts.limit ?? 100;
   params.offset = opts.offset ?? 0;
   // Join live providers + api_keys so names/masked prefixes reflect the current
-  // state, not the snapshot captured when the request was logged.
+  // state, not the snapshot captured when the request was logged. The heavy
+  // debug blobs are reduced to boolean presence flags here (loaded in full only
+  // when a row is expanded) so the feed stays light.
   const rows = db
     .prepare(
-      `SELECT rl.*, p.name AS live_provider_name, k.key_prefix AS key_prefix
+      `SELECT rl.id, rl.ts, rl.api_key_id, rl.api_key_name, rl.user_id, rl.model,
+              rl.provider_id, rl.provider_name, rl.upstream_model, rl.status,
+              rl.input_tokens, rl.output_tokens, rl.cached_tokens, rl.latency_ms,
+              rl.client, rl.path, rl.stream, rl.error,
+              (rl.debug_request IS NOT NULL) AS debug_request,
+              (rl.debug_response IS NOT NULL) AS debug_response,
+              p.name AS live_provider_name, k.key_prefix AS key_prefix
        FROM request_logs rl
        LEFT JOIN providers p ON p.id = rl.provider_id
        LEFT JOIN api_keys k ON k.id = rl.api_key_id

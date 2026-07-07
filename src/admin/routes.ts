@@ -64,6 +64,7 @@ import {
   dashboardStats,
   listRequestLogs,
   clearRequestLogs,
+  getRequestLogDetail,
 } from "../repo/request-logs";
 import { vacuumFreePages } from "../db";
 import { getSettings, saveSettings } from "../repo/settings";
@@ -344,6 +345,18 @@ export function adminRouter(
     );
   });
 
+  // Captured request/response debug payloads for one log row, loaded on demand
+  // when a row is expanded (kept out of the list to keep the feed light).
+  r.get("/request-logs/:id/detail", requireAdmin, (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id))
+      return res.status(400).json({ error: { message: "bad id" } });
+    const detail = getRequestLogDetail(db, id);
+    if (!detail)
+      return res.status(404).json({ error: { message: "not found" } });
+    res.json(detail);
+  });
+
   // --- maintenance ---
   // Recompute the usage + usage_breakdown counters from request_logs (the
   // ground-truth per-request record). Fixes any drift from older builds or a
@@ -391,6 +404,7 @@ export function adminRouter(
       defaultMaxOutputTokens: s.defaultMaxOutputTokens,
       ssePingInterval: s.ssePingInterval,
       requestLogRetentionDays: s.requestLogRetentionDays,
+      debugLogging: s.debugLogging,
     };
   };
 
@@ -415,6 +429,8 @@ export function adminRouter(
       patch.ssePingInterval = body.ssePingInterval;
     if (typeof body.requestLogRetentionDays === "number")
       patch.requestLogRetentionDays = body.requestLogRetentionDays;
+    if (typeof body.debugLogging === "boolean")
+      patch.debugLogging = body.debugLogging;
     saveSettings(db, patch);
     pipeline.reload();
     res.json(publicSettings());

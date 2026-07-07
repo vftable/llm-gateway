@@ -231,6 +231,23 @@ export default function Settings() {
                   }
                 />
               </Field>
+              <label className="flex items-start gap-3">
+                <Switch
+                  checked={s.debugLogging}
+                  onCheckedChange={(v) => set("debugLogging", v)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <span className="block text-sm text-foreground">
+                    Debug request logging
+                  </span>
+                  <span className="block text-[0.65rem] text-muted-foreground">
+                    Capture the distilled request (messages, tools) and response
+                    (text, tool calls) into each log row for debugging. Adds
+                    storage per request; leave off in normal operation.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
         )}

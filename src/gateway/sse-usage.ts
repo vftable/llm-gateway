@@ -20,6 +20,7 @@
 
 import { Transform, type TransformCallback } from "stream";
 import { readCachedTokens } from "../tokens";
+import type { ResponseSummary } from "./debug-capture";
 
 export interface StreamUsage {
   input?: number;
@@ -27,12 +28,44 @@ export interface StreamUsage {
   cached?: number;
 }
 
+// Per-string cap while accumulating streamed text/args, so a runaway stream
+// can't grow the in-memory buffers without bound.
+const CAPTURE_TEXT_CAP = 4_000;
+const CAPTURE_ARG_CAP = 4_000;
+
 export class SseUsageObserver extends Transform {
   private tail = "";
   private seenInput: number | null = null;
   private seenOutput: number | null = null;
   private seenCached: number | null = null;
   private fallbackChars = 0;
+
+  // --- optional debug capture (off unless enabled) ---
+  private readonly capture: boolean;
+  private text = "";
+  private stopReason: unknown = undefined;
+  // Tool calls keyed by streaming index; arguments accumulate across deltas.
+  private tools = new Map<number, { name?: unknown; arguments: string }>();
+
+  constructor(opts?: { capture?: boolean }) {
+    super();
+    this.capture = opts?.capture ?? false;
+  }
+
+  // Distilled response summary observed so far (text + tool calls + stop
+  // reason). Returns null when capture is off or nothing was seen.
+  responseSummary(): ResponseSummary | null {
+    if (!this.capture) return null;
+    const toolCalls = [...this.tools.values()].map((t) => ({
+      name: t.name,
+      arguments: t.arguments,
+    }));
+    const s: ResponseSummary = {};
+    if (this.text) s.text = this.text;
+    if (toolCalls.length) s.toolCalls = toolCalls;
+    if (this.stopReason !== undefined) s.stopReason = this.stopReason;
+    return s.text || s.toolCalls || s.stopReason !== undefined ? s : null;
+  }
 
   // Best-effort usage totals observed so far. Prefers upstream-reported counts;
   // falls back to a chars/4 estimate of the streamed text when output wasn't
@@ -89,6 +122,62 @@ export class SseUsageObserver extends Transform {
     // Fallback: accumulate streamed assistant text so we can estimate output
     // tokens when the upstream never sends a usage block.
     this.readDelta(obj);
+    if (this.capture) this.captureEvent(obj);
+  }
+
+  // Accumulate assistant text + tool-call fragments from one SSE event across
+  // the wire formats. Best-effort: any unrecognised shape is ignored.
+  private captureEvent(obj: Record<string, unknown>): void {
+    const addText = (s: unknown) => {
+      if (typeof s === "string" && s && this.text.length < CAPTURE_TEXT_CAP)
+        this.text += s;
+    };
+    const addArg = (idx: number, name: unknown, frag: unknown) => {
+      let t = this.tools.get(idx);
+      if (!t) {
+        t = { name, arguments: "" };
+        this.tools.set(idx, t);
+      }
+      if (name !== undefined && t.name === undefined) t.name = name;
+      if (typeof frag === "string" && t.arguments.length < CAPTURE_ARG_CAP)
+        t.arguments += frag;
+    };
+
+    // Anthropic Messages SSE.
+    const type = obj.type;
+    if (type === "content_block_start") {
+      const block = (obj.content_block ?? {}) as Record<string, unknown>;
+      if (block.type === "tool_use")
+        addArg(Number(obj.index ?? this.tools.size), block.name, "");
+    } else if (type === "content_block_delta") {
+      const d = (obj.delta ?? {}) as Record<string, unknown>;
+      if (typeof d.text === "string") addText(d.text);
+      if (typeof d.thinking === "string") addText(d.thinking);
+      if (typeof d.partial_json === "string")
+        addArg(Number(obj.index ?? 0), undefined, d.partial_json);
+    } else if (type === "message_delta") {
+      const d = (obj.delta ?? {}) as Record<string, unknown>;
+      if (d.stop_reason !== undefined) this.stopReason = d.stop_reason;
+    }
+
+    // OpenAI Chat SSE: choices[].delta.{content, tool_calls[]}.
+    if (Array.isArray(obj.choices)) {
+      for (const ch of obj.choices as Array<Record<string, unknown>>) {
+        const d = (ch.delta ?? {}) as Record<string, unknown>;
+        addText(d.content);
+        if (Array.isArray(d.tool_calls))
+          for (const tc of d.tool_calls as Array<Record<string, unknown>>) {
+            const fn = (tc.function ?? {}) as Record<string, unknown>;
+            addArg(Number(tc.index ?? 0), fn.name, fn.arguments);
+          }
+        if (ch.finish_reason != null) this.stopReason = ch.finish_reason;
+      }
+    }
+
+    // OpenAI Responses SSE: output_text deltas + function_call args.
+    if (type === "response.output_text.delta") addText(obj.delta);
+    if (type === "response.function_call_arguments.delta")
+      addArg(Number(obj.output_index ?? 0), undefined, obj.delta);
   }
 
   private readUsage(u: unknown): void {

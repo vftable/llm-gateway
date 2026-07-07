@@ -159,6 +159,12 @@ export interface RequestLog {
   path: string | null;
   stream: boolean;
   error: string | null;
+  hasDebug: boolean;
+}
+
+export interface RequestLogDetail {
+  request: string | null;
+  response: string | null;
 }
 
 export interface DashboardStats {
@@ -214,6 +220,7 @@ export interface Settings {
   defaultMaxOutputTokens: number;
   ssePingInterval: number;
   requestLogRetentionDays: number;
+  debugLogging: boolean;
 }
 
 export interface ProviderInput {

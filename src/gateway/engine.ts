@@ -37,6 +37,12 @@ import { readResponseUsage } from "../tokens";
 import { listProviders } from "../repo/providers";
 import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
 import { insertRequestLog } from "../repo/request-logs";
+import { getSetting } from "../repo/settings";
+import {
+  captureRequest,
+  captureResponse,
+  packResponseSummary,
+} from "./debug-capture";
 import {
   chatRequestToMessages,
   chatResponseToMessages,
@@ -97,6 +103,11 @@ export interface ForwardContext {
   reservedTokens: number;
   isStream: boolean;
   client: string | null;
+  /** When true, capture distilled request/response payloads for the debug view.
+   *  Read once per request from settings.debugLogging. */
+  debug: boolean;
+  /** Distilled client request JSON, computed once when debug is on. */
+  debugRequest?: string | null;
 }
 
 interface AttemptResult {
@@ -108,6 +119,8 @@ interface AttemptResult {
   inputTokens?: number;
   outputTokens?: number | null;
   cachedTokens?: number | null;
+  /** Distilled response JSON (debug capture) from the buffered path. */
+  debugResponse?: string | null;
   reason?: string;
   error?: string | null;
 }
@@ -230,6 +243,15 @@ export class ForwardingEngine {
     ctx: ForwardContext,
   ): Promise<void> {
     const startedAt = Date.now();
+    // Distill the client request once, up front, from the already-parsed body
+    // (no extra buffering). Captured for every attempt's log row.
+    if (ctx.debug) {
+      try {
+        ctx.debugRequest = captureRequest(ctx.requestBody);
+      } catch {
+        ctx.debugRequest = null;
+      }
+    }
     const chain = this.buildChain(ctx.resolvedModel);
     if (chain.length === 0) {
       this.logger.error("no_providers", { model: ctx.alias });
@@ -299,6 +321,7 @@ export class ForwardingEngine {
               result.cachedTokens ?? null,
               result.error ?? null,
               startedAt,
+              result.debugResponse ?? null,
             );
           }
           return;
@@ -558,6 +581,7 @@ export class ForwardingEngine {
         inputTokens: usage.input ?? ctx.inputTokens,
         outputTokens: usage.output ?? null,
         cachedTokens: usage.cached ?? null,
+        debugResponse: usage.debugResponse ?? null,
       };
     }
     this.pipeThrough(upRes, res, status, headers);
@@ -632,8 +656,9 @@ export class ForwardingEngine {
 
     // First stage: a pass-through observer that sniffs token usage out of the
     // PROVIDER-native SSE bytes (before any format bridge mangles field names)
-    // without altering the stream.
-    const usageObserver = new SseUsageObserver();
+    // without altering the stream. When debug is on it also accumulates the
+    // response text + tool calls — still per-event, never buffering the stream.
+    const usageObserver = new SseUsageObserver({ capture: ctx.debug });
 
     const ping =
       this.ssePingInterval > 0
@@ -654,6 +679,17 @@ export class ForwardingEngine {
       settled = true;
       const usage = usageObserver.usage(ctx.inputTokens);
       this.settleUsage(ctx, provider, usage);
+      let debugResponse: string | null = null;
+      if (ctx.debug) {
+        const summary = usageObserver.responseSummary();
+        if (summary) {
+          try {
+            debugResponse = packResponseSummary(summary);
+          } catch {
+            debugResponse = null;
+          }
+        }
+      }
       this.recordLog(
         ctx,
         provider,
@@ -664,6 +700,7 @@ export class ForwardingEngine {
         usage.cached ?? null,
         error,
         startedAt,
+        debugResponse,
       );
     };
 
@@ -706,7 +743,12 @@ export class ForwardingEngine {
     route: Route,
     status: number,
     headers: IncomingMessage["headers"],
-  ): Promise<{ input?: number; output?: number; cached?: number }> {
+  ): Promise<{
+    input?: number;
+    output?: number;
+    cached?: number;
+    debugResponse?: string | null;
+  }> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const c of upRes) {
@@ -743,6 +785,10 @@ export class ForwardingEngine {
     // (reserve reversal + actual attribution) happens centrally in forward().
     const actual = readResponseUsage(parsed);
 
+    // Debug capture: distill the response (text + tool calls + stop reason)
+    // from the PROVIDER-shape body before any bridging.
+    const debugResponse = ctx.debug ? safeCaptureResponse(parsed) : undefined;
+
     // 1) thinking extraction in PROVIDER format.
     applyThinking(this.thinking, route.providerFmt, parsed);
 
@@ -756,7 +802,7 @@ export class ForwardingEngine {
           err: (err as Error).message,
         });
         this.sendRaw(res, status, headers, stripped);
-        return actual;
+        return { ...actual, debugResponse };
       }
     }
 
@@ -766,7 +812,7 @@ export class ForwardingEngine {
     if (route.convert) outHeaders["content-type"] = "application/json";
     if (!res.headersSent) res.writeHead(status, outHeaders);
     res.end(out);
-    return actual;
+    return { ...actual, debugResponse };
   }
 
   // --- pass-through (non-SSE, non-JSON, or no conversion needed) -----------
@@ -864,6 +910,7 @@ export class ForwardingEngine {
     cachedTokens: number | null,
     error: string | null,
     startedAt?: number,
+    debugResponse?: string | null,
   ): void {
     try {
       insertRequestLog(this.db, {
@@ -883,6 +930,8 @@ export class ForwardingEngine {
         path: ctx.clientPath,
         stream: ctx.isStream,
         error,
+        debugRequest: ctx.debug ? (ctx.debugRequest ?? null) : null,
+        debugResponse: ctx.debug ? (debugResponse ?? null) : null,
       });
     } catch (err) {
       this.logger.warn("log_insert_failed", { err: (err as Error).message });
@@ -947,6 +996,17 @@ type BodyConverter = (b: Record<string, unknown>) => Record<string, unknown>;
 
 function identity(b: Record<string, unknown>): Record<string, unknown> {
   return b;
+}
+
+// Debug capture must never break the response path — swallow any error.
+function safeCaptureResponse(
+  parsed: Record<string, unknown>,
+): string | undefined {
+  try {
+    return captureResponse(parsed);
+  } catch {
+    return undefined;
+  }
 }
 
 // Request: from -> to.

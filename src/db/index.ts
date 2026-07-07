@@ -125,7 +125,9 @@ CREATE TABLE IF NOT EXISTS request_logs (
   client        TEXT,
   path          TEXT,
   stream        INTEGER NOT NULL DEFAULT 0,
-  error         TEXT
+  error         TEXT,
+  debug_request  TEXT,
+  debug_response TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_ts        ON request_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_request_logs_api_key   ON request_logs(api_key_id);
@@ -236,4 +238,6 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, "models", "type", "TEXT NOT NULL DEFAULT 'openai'");
   addColumnIfMissing(db, "request_logs", "client", "TEXT");
   addColumnIfMissing(db, "request_logs", "cached_tokens", "INTEGER");
+  addColumnIfMissing(db, "request_logs", "debug_request", "TEXT");
+  addColumnIfMissing(db, "request_logs", "debug_response", "TEXT");
 }
