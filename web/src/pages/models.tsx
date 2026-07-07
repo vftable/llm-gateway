@@ -9,6 +9,7 @@ import {
   ArrowDown,
   Cpu,
   RefreshCw,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
@@ -733,17 +734,22 @@ function CapabilitiesEditor({
   ].filter(Boolean);
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className="rounded-lg border border-border bg-card p-5">
       <button
         type="button"
-        className="flex w-full cursor-pointer items-center justify-between"
+        className="flex w-full cursor-pointer items-center justify-between gap-3"
         onClick={() => setOpen((o) => !o)}
       >
-        <span className="flex items-center gap-2 text-sm font-medium text-foreground">
-          Capabilities
-          {locked && <Badge variant="secondary">Anthropic · synced</Badge>}
+        <span className="flex shrink-0 items-center gap-2 text-sm font-medium text-foreground">
+          <span>Capabilities</span>
+          {locked && (
+            <span className="inline-flex items-center gap-1 rounded-full border border-primary/20 bg-primary/10 px-2 py-0.5 text-[0.65rem] font-medium text-primary">
+              <Sparkles className="h-3 w-3" />
+              Synced with Anthropic
+            </span>
+          )}
         </span>
-        <span className="max-w-[70%] truncate text-right text-[0.65rem] text-muted-foreground">
+        <span className="min-w-0 truncate text-right text-[0.65rem] text-muted-foreground">
           {open ? "collapse" : summary.length ? summary.join(" · ") : "none"}
         </span>
       </button>
