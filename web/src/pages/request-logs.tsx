@@ -134,7 +134,13 @@ const LogRow = memo(function LogRow({
         {fmtTime(l.ts)}
       </TableCell>
       <TableCell className="text-muted-foreground">
-        {l.apiKeyName ?? l.apiKeyId?.slice(0, 8) ?? "anon"}
+        {l.apiKeyName ? (
+          l.apiKeyName
+        ) : l.keyPrefix ? (
+          <span className="font-mono text-primary">{l.keyPrefix}</span>
+        ) : (
+          "anon"
+        )}
       </TableCell>
       <TableCell>
         {l.client ? (

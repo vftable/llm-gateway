@@ -33,6 +33,10 @@ export interface GatewayRequest extends Request {
   __resolved?: Model | null;
   __alias?: string;
   __inputTokens?: number;
+  /** Tokens optimistically debited from the key's daily counter up front
+   *  (input estimate + reserved max output). The engine reverses exactly this
+   *  after the response settles, then applies the actual usage. */
+  __reservedTokens?: number;
   __upstreamPath?: string;
   __responsesBridge?: boolean;
 }
@@ -194,38 +198,49 @@ export class GatewayPipeline {
         }
       }
 
-      // Per-key daily quota.
+      // Per-key daily quota + optimistic reservation.
       const apiKey = gw.__apiKey;
-      if (apiKey && apiKey.tokensPerDay && apiKey.tokensPerDay > 0) {
+      if (apiKey) {
         const maxOut =
           readMaxOutputTokens(body) ??
           model?.maxOutputTokens ??
           settings.defaultMaxOutputTokens ??
           0;
         const projected = inputTokens + maxOut;
-        const used = getUsage(this.db, apiKey.id).tokens;
-        if (used + projected > apiKey.tokensPerDay) {
-          const resetsAt = nextUtcMidnight();
-          this.logger.warn("usage_limit", {
-            key: apiKey.id,
-            used,
-            projected,
-            limit: apiKey.tokensPerDay,
-          });
-          return res.status(429).json({
-            error: {
-              type: "usage_limit_reached",
-              message: `Daily token quota for this key would be exceeded (used ${used}/${apiKey.tokensPerDay}, request needs ~${projected}). Resets at ${resetsAt.toISOString()}.`,
-              source: "gateway",
+
+        // Enforce the daily quota only when the key has one.
+        if (apiKey.tokensPerDay && apiKey.tokensPerDay > 0) {
+          const used = getUsage(this.db, apiKey.id).tokens;
+          if (used + projected > apiKey.tokensPerDay) {
+            const resetsAt = nextUtcMidnight();
+            this.logger.warn("usage_limit", {
+              key: apiKey.id,
               used,
-              limit: apiKey.tokensPerDay,
               projected,
-              resets_at: resetsAt.toISOString(),
-            },
-          });
+              limit: apiKey.tokensPerDay,
+            });
+            return res.status(429).json({
+              error: {
+                type: "usage_limit_reached",
+                message: `Daily token quota for this key would be exceeded (used ${used}/${apiKey.tokensPerDay}, request needs ~${projected}). Resets at ${resetsAt.toISOString()}.`,
+                source: "gateway",
+                used,
+                limit: apiKey.tokensPerDay,
+                projected,
+                resets_at: resetsAt.toISOString(),
+              },
+            });
+          }
         }
-        // Optimistic debit; reconciled against actual usage after the response.
-        addUsage(this.db, apiKey.id, projected);
+
+        // Optimistic reservation. Always applied (even for unlimited keys) so
+        // the live counter reflects in-flight requests; the engine reverses
+        // exactly __reservedTokens once the real usage is known. Stash the
+        // amount so the reversal can't drift from what was debited here.
+        if (projected > 0) {
+          addUsage(this.db, apiKey.id, projected);
+          gw.__reservedTokens = projected;
+        }
       }
 
       next();
@@ -269,6 +284,7 @@ export class GatewayPipeline {
         alias: gw.__alias ?? (typeof body.model === "string" ? body.model : ""),
         apiKey: gw.__apiKey ?? null,
         inputTokens: gw.__inputTokens ?? 0,
+        reservedTokens: gw.__reservedTokens ?? 0,
         isStream: body.stream === true,
         client: detectClient(req),
       };

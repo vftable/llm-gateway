@@ -10,10 +10,12 @@ interface LogRow {
   ts: string;
   api_key_id: string | null;
   api_key_name: string | null;
+  key_prefix: string | null;
   user_id: string | null;
   model: string | null;
   provider_id: string | null;
   provider_name: string | null;
+  live_provider_name: string | null;
   upstream_model: string | null;
   status: number | null;
   input_tokens: number | null;
@@ -31,10 +33,15 @@ function mapLog(r: LogRow): RequestLog {
     ts: r.ts,
     apiKeyId: r.api_key_id,
     apiKeyName: r.api_key_name,
+    // Live-joined masked key ("sk-…") so the feed never shows the internal
+    // "key-…" id; falls back to the snapshot name then the id.
+    keyPrefix: r.key_prefix,
     userId: r.user_id,
     model: r.model,
     providerId: r.provider_id,
-    providerName: r.provider_name,
+    // Prefer the provider's CURRENT name; fall back to the row snapshot when
+    // the provider was since deleted.
+    providerName: r.live_provider_name ?? r.provider_name,
     upstreamModel: r.upstream_model,
     status: r.status,
     inputTokens: r.input_tokens,
@@ -102,29 +109,37 @@ export interface ListOpts {
 }
 
 export function listRequestLogs(db: DB, opts: ListOpts = {}): RequestLog[] {
+  // Conditions are written against the request_logs alias `rl` since the query
+  // below joins providers + api_keys for live names.
   const conditions: string[] = [];
   const params: Record<string, unknown> = {};
   if (opts.apiKeyId) {
-    conditions.push("api_key_id = @apiKeyId");
+    conditions.push("rl.api_key_id = @apiKeyId");
     params.apiKeyId = opts.apiKeyId;
   }
   if (opts.modelId) {
-    conditions.push("model = @modelId");
+    conditions.push("rl.model = @modelId");
     params.modelId = opts.modelId;
   }
   if (opts.providerId) {
-    conditions.push("provider_id = @providerId");
+    conditions.push("rl.provider_id = @providerId");
     params.providerId = opts.providerId;
   }
   if (opts.statusError) {
-    conditions.push("(status IS NULL OR status >= 400)");
+    conditions.push("(rl.status IS NULL OR rl.status >= 400)");
   }
   const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   params.limit = opts.limit ?? 100;
   params.offset = opts.offset ?? 0;
+  // Join live providers + api_keys so names/masked prefixes reflect the current
+  // state, not the snapshot captured when the request was logged.
   const rows = db
     .prepare(
-      `SELECT * FROM request_logs ${where} ORDER BY id DESC LIMIT @limit OFFSET @offset`,
+      `SELECT rl.*, p.name AS live_provider_name, k.key_prefix AS key_prefix
+       FROM request_logs rl
+       LEFT JOIN providers p ON p.id = rl.provider_id
+       LEFT JOIN api_keys k ON k.id = rl.api_key_id
+       ${where} ORDER BY rl.id DESC LIMIT @limit OFFSET @offset`,
     )
     .all(params) as LogRow[];
   return rows.map(mapLog);
@@ -142,6 +157,18 @@ export function pruneOldLogs(db: DB, retentionDays: number): number {
     .prepare("DELETE FROM request_logs WHERE ts < date('now', ?)")
     .run(`-${retentionDays} days`);
   return r.changes;
+}
+
+// Delete request logs for maintenance/cleanup. `scope`:
+//   - "errors": only failed rows (status null or >= 400)
+//   - "all":    every row
+// Returns the number of rows removed.
+export function clearRequestLogs(db: DB, scope: "errors" | "all"): number {
+  const sql =
+    scope === "errors"
+      ? "DELETE FROM request_logs WHERE status IS NULL OR status >= 400"
+      : "DELETE FROM request_logs";
+  return db.prepare(sql).run().changes;
 }
 
 // --- Aggregated dashboard stats -------------------------------------------
@@ -197,13 +224,19 @@ export function dashboardStats(db: DB): DashboardStats {
     tokens: number;
   }>;
 
+  // Join the live providers table so a renamed provider shows its CURRENT name,
+  // not the snapshot frozen into the log row. Falls back to the snapshot when
+  // the provider was since deleted.
   const byProvider = db
     .prepare(
-      `SELECT provider_id AS providerId, provider_name AS provider,
+      `SELECT rl.provider_id AS providerId,
+         COALESCE(p.name, rl.provider_name) AS provider,
          COUNT(*) AS requests,
-         COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens
-       FROM request_logs WHERE date(ts) = @today AND provider_id IS NOT NULL
-       GROUP BY provider_id ORDER BY requests DESC LIMIT 10`,
+         COALESCE(SUM(COALESCE(rl.input_tokens,0)+COALESCE(rl.output_tokens,0)),0) AS tokens
+       FROM request_logs rl
+       LEFT JOIN providers p ON p.id = rl.provider_id
+       WHERE date(rl.ts) = @today AND rl.provider_id IS NOT NULL
+       GROUP BY rl.provider_id ORDER BY requests DESC LIMIT 10`,
     )
     .all({ today }) as Array<{
     providerId: string;

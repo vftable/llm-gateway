@@ -57,8 +57,14 @@ import {
   fullBreakdownToday,
   breakdownForKey,
   modelResolution,
+  rebuildUsageFromLogs,
 } from "../repo/usage";
-import { dashboardStats, listRequestLogs } from "../repo/request-logs";
+import {
+  dashboardStats,
+  listRequestLogs,
+  clearRequestLogs,
+} from "../repo/request-logs";
+import { vacuumFreePages } from "../db";
 import { getSettings, saveSettings } from "../repo/settings";
 import type { ModelCapabilities, Settings } from "../shared/types";
 
@@ -336,6 +342,41 @@ export function adminRouter(
     );
   });
 
+  // --- maintenance ---
+  // Recompute the usage + usage_breakdown counters from request_logs (the
+  // ground-truth per-request record). Fixes any drift from older builds or a
+  // crash between reserve and settle. `?day=YYYY-MM-DD` scopes to one UTC day;
+  // omit to rebuild every day in the logs.
+  r.post("/maintenance/rebuild-usage", requireAdmin, (req, res) => {
+    try {
+      const day = (req.query as { day?: string }).day;
+      if (day !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(day))
+        throw new Error("day must be YYYY-MM-DD");
+      const result = rebuildUsageFromLogs(db, day);
+      logger.info("usage_rebuilt", { ...result, day: day ?? "all" });
+      res.json(result);
+    } catch (e) {
+      bad(res, e);
+    }
+  });
+
+  // Delete request logs for cleaner readings. `?scope=errors` removes only
+  // failed rows; `?scope=all` clears the whole log. Frees the reclaimed pages
+  // back to the OS afterward so the DB file shrinks.
+  r.post("/maintenance/clear-logs", requireAdmin, (req, res) => {
+    try {
+      const scope = (req.query as { scope?: string }).scope ?? "errors";
+      if (scope !== "errors" && scope !== "all")
+        throw new Error("scope must be 'errors' or 'all'");
+      const removed = clearRequestLogs(db, scope);
+      if (removed > 0) vacuumFreePages(db);
+      logger.info("logs_cleared", { scope, removed });
+      res.json({ removed, scope });
+    } catch (e) {
+      bad(res, e);
+    }
+  });
+
   // --- settings ---
   // Public settings shape: never expose adminPasswordHash / jwtSecret.
   const publicSettings = () => {
@@ -388,7 +429,6 @@ export function adminRouter(
     }
   });
 
-  void logger;
   return r;
 }
 

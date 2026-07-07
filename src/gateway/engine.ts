@@ -31,6 +31,7 @@ import { StreamingResponsesBridgeTransform } from "../responses-bridge";
 import { SseThinkingTransform } from "../streaming-thinking";
 import { AnthropicThinkingTransform } from "../streaming-anthropic";
 import { SsePingKeepAlive } from "../sse-ping";
+import { SseUsageObserver } from "./sse-usage";
 import { stripInvisible } from "../utils";
 import { readResponseUsage } from "../tokens";
 import { listProviders } from "../repo/providers";
@@ -90,12 +91,19 @@ export interface ForwardContext {
   alias: string;
   apiKey: ApiKey | null;
   inputTokens: number;
+  /** Tokens the pipeline optimistically debited from the key's daily counter
+   *  (input estimate + reserved max output). Settlement reverses exactly this,
+   *  then applies the actual usage — see settleUsage(). */
+  reservedTokens: number;
   isStream: boolean;
   client: string | null;
 }
 
 interface AttemptResult {
   committed: boolean;
+  /** True when a streaming attempt will settle usage + log itself once its
+   *  pipeline ends; the caller must not settle/log again. */
+  deferred?: boolean;
   status?: number;
   inputTokens?: number;
   outputTokens?: number | null;
@@ -265,18 +273,33 @@ export class ForwardingEngine {
       const attempts = Math.max(1, entry.provider.retryAttempts);
       for (let attempt = 1; attempt <= attempts; attempt++) {
         if (res.headersSent || res.writableEnded) return;
-        const result = await this.attemptOnce(req, res, ctx, entry, route);
+        const result = await this.attemptOnce(
+          req,
+          res,
+          ctx,
+          entry,
+          route,
+          startedAt,
+        );
         if (result.committed) {
-          this.recordLog(
-            ctx,
-            entry.provider,
-            entry.upstreamModel,
-            result.status ?? null,
-            result.inputTokens ?? (ctx.inputTokens || null),
-            result.outputTokens ?? null,
-            result.error ?? null,
-            startedAt,
-          );
+          // A streaming attempt settles + logs itself when its pipeline ends
+          // (the real token counts aren't known until then); don't double-log.
+          if (!result.deferred) {
+            this.settleUsage(ctx, entry.provider, {
+              input: result.inputTokens ?? undefined,
+              output: result.outputTokens ?? undefined,
+            });
+            this.recordLog(
+              ctx,
+              entry.provider,
+              entry.upstreamModel,
+              result.status ?? null,
+              result.inputTokens ?? (ctx.inputTokens || null),
+              result.outputTokens ?? null,
+              result.error ?? null,
+              startedAt,
+            );
+          }
           return;
         }
         lastReason = result.reason || lastReason;
@@ -298,6 +321,9 @@ export class ForwardingEngine {
 
     if (!res.headersSent && !res.writableEnded)
       this.finish502(res, `All providers failed (last reason: ${lastReason}).`);
+    // No upstream usage to apply — release the reservation so a failed request
+    // doesn't permanently inflate the key's daily counter.
+    this.settleUsage(ctx, first?.provider ?? null, {});
     this.recordLog(
       ctx,
       first?.provider ?? null,
@@ -336,6 +362,7 @@ export class ForwardingEngine {
       endpoint: string | null;
     },
     route: Route,
+    startedAt: number,
   ): Promise<AttemptResult> {
     const { provider, upstreamModel } = entry;
 
@@ -409,6 +436,7 @@ export class ForwardingEngine {
             provider,
             upstreamModel,
             route,
+            startedAt,
           ).then(resolve, (err) =>
             resolve({ committed: false, reason: err.message }),
           );
@@ -462,6 +490,7 @@ export class ForwardingEngine {
     provider: Provider,
     upstreamModel: string,
     route: Route,
+    startedAt: number,
   ): Promise<AttemptResult> {
     const status = upRes.statusCode || 502;
     const headers = upRes.headers || {};
@@ -492,16 +521,24 @@ export class ForwardingEngine {
     // 2xx — streaming vs buffered. Conversion decisions use the PROVIDER format
     // (the shape upstream returns), then we bridge to the client format.
     if (ctx.isStream && isEventStream(headers)) {
-      this.streamConvert(upRes, res, route, status, headers);
-      return {
-        committed: true,
+      // Streaming settles itself: the real token counts only arrive in the
+      // stream's final events, so an SSE observer captures them and the
+      // pipeline's end callback settles usage + writes the request log.
+      this.streamConvert(
+        upRes,
+        res,
+        ctx,
+        provider,
+        upstreamModel,
+        route,
         status,
-        inputTokens: ctx.inputTokens || undefined,
-        outputTokens: null,
-      };
+        headers,
+        startedAt,
+      );
+      return { committed: true, deferred: true, status };
     }
     if (isJson(headers)) {
-      const { outputTokens } = await this.bufferConvert(
+      const usage = await this.bufferConvert(
         upRes,
         res,
         ctx,
@@ -510,11 +547,14 @@ export class ForwardingEngine {
         status,
         headers,
       );
+      // Settlement + logging happen centrally in forward(); hand back the
+      // actual counts (falling back to the input estimate when the upstream
+      // reported nothing).
       return {
         committed: true,
         status,
-        inputTokens: ctx.inputTokens,
-        outputTokens,
+        inputTokens: usage.input ?? ctx.inputTokens,
+        outputTokens: usage.output ?? null,
       };
     }
     this.pipeThrough(upRes, res, status, headers);
@@ -535,9 +575,13 @@ export class ForwardingEngine {
   private streamConvert(
     upRes: IncomingMessage,
     res: Response,
+    ctx: ForwardContext,
+    provider: Provider,
+    upstreamModel: string,
     route: Route,
     status: number,
     headers: IncomingMessage["headers"],
+    startedAt: number,
   ): void {
     const out = filteredHeaders(headers);
     delete out["content-length"];
@@ -549,6 +593,8 @@ export class ForwardingEngine {
       route.convert && route.streamBridge ? route.streamBridge() : null;
 
     // Unsupported streaming conversion — end gracefully with a clear note.
+    // Settle the reservation (no usage to apply) and log the failure since the
+    // normal end-of-pipeline path below won't run.
     if (route.convert && !bridge) {
       this.logger.warn("stream_conversion_unsupported", {
         providerFmt: route.providerFmt,
@@ -566,8 +612,24 @@ export class ForwardingEngine {
         );
       }
       upRes.resume();
+      this.settleUsage(ctx, provider, {});
+      this.recordLog(
+        ctx,
+        provider,
+        upstreamModel,
+        502,
+        ctx.inputTokens || null,
+        null,
+        "stream conversion unsupported",
+        startedAt,
+      );
       return;
     }
+
+    // First stage: a pass-through observer that sniffs token usage out of the
+    // PROVIDER-native SSE bytes (before any format bridge mangles field names)
+    // without altering the stream.
+    const usageObserver = new SseUsageObserver();
 
     const ping =
       this.ssePingInterval > 0
@@ -579,19 +641,48 @@ export class ForwardingEngine {
     );
     if (!res.headersSent) res.writeHead(status, out);
 
+    // Settle usage + write the request log exactly once, when the stream ends
+    // (whether it completed or the client aborted). The observer holds the best
+    // usage numbers seen on the wire.
+    let settled = false;
+    const settle = (error: string | null) => {
+      if (settled) return;
+      settled = true;
+      const usage = usageObserver.usage(ctx.inputTokens);
+      this.settleUsage(ctx, provider, usage);
+      this.recordLog(
+        ctx,
+        provider,
+        upstreamModel,
+        status,
+        usage.input ?? (ctx.inputTokens || null),
+        usage.output ?? null,
+        error,
+        startedAt,
+      );
+    };
+
     // stream.pipeline propagates errors and destroy() across every stage, so a
     // client abort mid-stream tears down the upstream socket (and vice versa)
     // instead of leaking it. Plain .pipe() does not do this.
-    const stages = [thinking, bridge, ping].filter(
+    const stages = [usageObserver, thinking, bridge, ping].filter(
       Boolean,
     ) as NodeJS.ReadWriteStream[];
     streamPipeline([upRes, ...stages, res], (err) => {
-      if (!err) return;
+      if (!err) {
+        settle(null);
+        return;
+      }
       const e = err as NodeJS.ErrnoException;
       // Client disconnects surface as ERR_STREAM_PREMATURE_CLOSE — routine.
-      if (e.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+      const aborted = e.code === "ERR_STREAM_PREMATURE_CLOSE";
+      if (!aborted) {
         this.logger.warn("stream_pipeline_error", { err: e.message });
       }
+      // Even on abort we still settle: the reservation must be reversed and the
+      // partial usage observed so far attributed. Bytes already streamed to the
+      // client are real usage.
+      settle(aborted ? "client disconnected" : e.message);
       try {
         if (!res.writableEnded) res.end();
       } catch {
@@ -610,7 +701,7 @@ export class ForwardingEngine {
     route: Route,
     status: number,
     headers: IncomingMessage["headers"],
-  ): Promise<{ outputTokens: number | null }> {
+  ): Promise<{ input?: number; output?: number }> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const c of upRes) {
@@ -625,7 +716,7 @@ export class ForwardingEngine {
               source: "gateway",
             },
           });
-        return { outputTokens: null };
+        return {};
       }
       chunks.push(chunk);
     }
@@ -640,11 +731,12 @@ export class ForwardingEngine {
       parsed = JSON.parse(stripped.toString("utf8")) as Record<string, unknown>;
     } catch {
       this.sendRaw(res, status, headers, stripped);
-      return { outputTokens: null };
+      return {};
     }
 
-    // Reconcile per-key usage (reads usage from the PROVIDER-shape response).
-    const actual = this.reconcileUsage(ctx, parsed, provider, route);
+    // Read the upstream-reported usage from the PROVIDER-shape body. Settlement
+    // (reserve reversal + actual attribution) happens centrally in forward().
+    const actual = readResponseUsage(parsed);
 
     // 1) thinking extraction in PROVIDER format.
     applyThinking(this.thinking, route.providerFmt, parsed);
@@ -659,7 +751,7 @@ export class ForwardingEngine {
           err: (err as Error).message,
         });
         this.sendRaw(res, status, headers, stripped);
-        return { outputTokens: actual.output ?? null };
+        return actual;
       }
     }
 
@@ -669,7 +761,7 @@ export class ForwardingEngine {
     if (route.convert) outHeaders["content-type"] = "application/json";
     if (!res.headersSent) res.writeHead(status, outHeaders);
     res.end(out);
-    return { outputTokens: actual.output ?? null };
+    return actual;
   }
 
   // --- pass-through (non-SSE, non-JSON, or no conversion needed) -----------
@@ -723,23 +815,30 @@ export class ForwardingEngine {
     res.end(buf);
   }
 
-  // Reconcile the optimistic input-token estimate against the upstream-reported
-  // actual usage, then attribute the real total to (key, model, provider).
-  private reconcileUsage(
+  // Single settlement point for per-key usage, shared by the streaming,
+  // buffered, and failure paths. Reverses the exact optimistic reservation the
+  // pipeline debited up front (input estimate + reserved max output), then
+  // applies the actual total and attributes it to (key, model, provider).
+  //
+  // Every committed request calls this exactly once — that's what keeps the
+  // three dashboard views (usage counter, request_logs, usage_breakdown) in
+  // agreement: they all end up reflecting the same actual token total.
+  private settleUsage(
     ctx: ForwardContext,
-    parsed: Record<string, unknown>,
-    provider: Provider,
-    _route: Route,
-  ): { input?: number; output?: number } {
-    if (!ctx.apiKey || !ctx.inputTokens) return {};
-    const actual = readResponseUsage(parsed);
-    if (actual.input == null && actual.output == null) return {};
-    const total = (actual.input ?? 0) + (actual.output ?? 0);
-    if (total <= 0) return {};
-    subtractUsage(this.db, ctx.apiKey.id, ctx.inputTokens);
-    addUsage(this.db, ctx.apiKey.id, total);
-    addBreakdown(this.db, ctx.apiKey.id, ctx.alias, provider.id, total);
-    return actual;
+    provider: Provider | null,
+    usage: { input?: number; output?: number },
+  ): void {
+    if (!ctx.apiKey) return;
+    // 1) Release the reservation so it can't linger on the daily counter.
+    if (ctx.reservedTokens > 0)
+      subtractUsage(this.db, ctx.apiKey.id, ctx.reservedTokens);
+    // 2) Apply the actual usage (input + output). Missing pieces already fell
+    //    back to estimates upstream (streaming observer / buffered read).
+    const total = (usage.input ?? 0) + (usage.output ?? 0);
+    if (total > 0) {
+      addUsage(this.db, ctx.apiKey.id, total);
+      addBreakdown(this.db, ctx.apiKey.id, ctx.alias, provider?.id ?? null, total);
+    }
   }
 
   // --- request logging ------------------------------------------------------

@@ -89,7 +89,7 @@ export default function Dashboard() {
           <CardHeader>
             <CardTitle>Token Usage — Last 14 Days</CardTitle>
             <CardAction>
-              <Badge variant="secondary">UTC</Badge>
+              <Badge variant="secondary">{fmtNum(s.tokensToday)} today</Badge>
             </CardAction>
           </CardHeader>
           <CardContent>
@@ -97,21 +97,30 @@ export default function Dashboard() {
               <EmptyState msg="No usage recorded yet" />
             ) : (
               <div className="flex h-40 items-end gap-1">
-                {data.usageHistory.map((h) => (
-                  <div
-                    key={h.day}
-                    className="group relative flex-1"
-                    title={`${h.day}: ${fmtNum(h.tokens)} tokens`}
-                  >
+                {data.usageHistory.map((h, i) => {
+                  // The final bucket is today (still accumulating) — render it
+                  // solid so "usage so far today" reads at a glance.
+                  const isToday = i === data.usageHistory.length - 1;
+                  return (
                     <div
-                      className="w-full bg-primary/30 transition-colors group-hover:bg-primary/60"
-                      style={{
-                        height: `${(h.tokens / maxTokens) * 100}%`,
-                        minHeight: h.tokens > 0 ? "2px" : "0",
-                      }}
-                    />
-                  </div>
-                ))}
+                      key={h.day}
+                      className="group relative flex-1"
+                      title={`${h.day}: ${fmtNum(h.tokens)} tokens${isToday ? " · so far today" : ""}`}
+                    >
+                      <div
+                        className={
+                          isToday
+                            ? "w-full rounded-t-sm bg-violet-500 transition-colors group-hover:bg-violet-400"
+                            : "w-full rounded-t-sm bg-violet-500/30 transition-colors group-hover:bg-violet-500/60"
+                        }
+                        style={{
+                          height: `${(h.tokens / maxTokens) * 100}%`,
+                          minHeight: h.tokens > 0 ? "2px" : "0",
+                        }}
+                      />
+                    </div>
+                  );
+                })}
               </div>
             )}
             <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">

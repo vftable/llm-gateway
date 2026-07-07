@@ -114,24 +114,35 @@ export default function Usage() {
         <Card className="lg:col-span-1">
           <CardHeader>
             <CardTitle>14-Day History</CardTitle>
+            <CardAction>
+              <Badge variant="secondary">{fmtNum(data.today.total)} today</Badge>
+            </CardAction>
           </CardHeader>
           <CardContent>
             <div className="flex h-40 items-end gap-1">
-              {data.history.map((h) => (
-                <div
-                  key={h.day}
-                  className="group relative flex-1"
-                  title={`${h.day}: ${fmtNum(h.tokens)}`}
-                >
+              {data.history.map((h, i) => {
+                // Final bucket is today (still accumulating) — solid violet.
+                const isToday = i === data.history.length - 1;
+                return (
                   <div
-                    className="w-full rounded-t-sm bg-primary/30 transition-colors group-hover:bg-primary/60"
-                    style={{
-                      height: `${(h.tokens / maxHist) * 100}%`,
-                      minHeight: h.tokens > 0 ? "2px" : "0",
-                    }}
-                  />
-                </div>
-              ))}
+                    key={h.day}
+                    className="group relative flex-1"
+                    title={`${h.day}: ${fmtNum(h.tokens)}${isToday ? " · so far today" : ""}`}
+                  >
+                    <div
+                      className={
+                        isToday
+                          ? "w-full rounded-t-sm bg-violet-500 transition-colors group-hover:bg-violet-400"
+                          : "w-full rounded-t-sm bg-violet-500/30 transition-colors group-hover:bg-violet-500/60"
+                      }
+                      style={{
+                        height: `${(h.tokens / maxHist) * 100}%`,
+                        minHeight: h.tokens > 0 ? "2px" : "0",
+                      }}
+                    />
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>

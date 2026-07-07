@@ -206,3 +206,104 @@ export function modelResolution(
     )
     .all({ day, model }) as ModelResolutionRow[];
 }
+
+// --- Maintenance: rebuild counters from the request log --------------------
+//
+// `usage` and `usage_breakdown` are running counters mutated live as requests
+// settle. If they ever drift (e.g. rows written by an older buggy build, or a
+// crash between the reserve and the settle), request_logs remains the ground
+// truth: one row per request with the actual input/output tokens. This
+// recomputes both counters from those rows so all dashboard views re-converge.
+
+export interface RebuildResult {
+  days: number;
+  usageRows: number;
+  breakdownRows: number;
+  tokens: number;
+}
+
+// Rebuild the usage counters from request_logs. When `day` is given, only that
+// UTC day is rebuilt; otherwise every day present in the logs is rebuilt. Only
+// successful (2xx) requests with a known key contribute, matching how the live
+// settle path attributes usage. Runs in a single transaction so the counters
+// are never observed half-rebuilt.
+export function rebuildUsageFromLogs(
+  db: DB,
+  day?: string,
+): RebuildResult {
+  const result: RebuildResult = {
+    days: 0,
+    usageRows: 0,
+    breakdownRows: 0,
+    tokens: 0,
+  };
+  const dayFilter = day ? "AND date(ts) = @day" : "";
+  const tx = db.transaction(() => {
+    // Wipe the counters we're about to recompute (scoped to the day when set).
+    if (day) {
+      db.prepare("DELETE FROM usage WHERE day = @day").run({ day });
+      db.prepare("DELETE FROM usage_breakdown WHERE day = @day").run({ day });
+    } else {
+      db.prepare("DELETE FROM usage").run();
+      db.prepare("DELETE FROM usage_breakdown").run();
+    }
+
+    // Per (key, day) totals -> usage.
+    const usageRows = db
+      .prepare(
+        `SELECT api_key_id AS apiKeyId, date(ts) AS day,
+                COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens
+         FROM request_logs
+         WHERE api_key_id IS NOT NULL AND status >= 200 AND status < 300 ${dayFilter}
+         GROUP BY api_key_id, date(ts)
+         HAVING tokens > 0`,
+      )
+      .all(day ? { day } : {}) as Array<{
+      apiKeyId: string;
+      day: string;
+      tokens: number;
+    }>;
+    const insUsage = db.prepare(
+      "INSERT OR REPLACE INTO usage (api_key_id, day, tokens) VALUES (@apiKeyId, @day, @tokens)",
+    );
+    const days = new Set<string>();
+    for (const r of usageRows) {
+      insUsage.run(r);
+      result.usageRows++;
+      result.tokens += r.tokens;
+      days.add(r.day);
+    }
+
+    // Per (key, day, model, provider) totals -> usage_breakdown.
+    const bdRows = db
+      .prepare(
+        `SELECT api_key_id AS apiKeyId, date(ts) AS day, model,
+                provider_id AS providerId,
+                COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens
+         FROM request_logs
+         WHERE api_key_id IS NOT NULL AND model IS NOT NULL
+               AND status >= 200 AND status < 300 ${dayFilter}
+         GROUP BY api_key_id, date(ts), model, provider_id
+         HAVING tokens > 0`,
+      )
+      .all(day ? { day } : {}) as Array<{
+      apiKeyId: string;
+      day: string;
+      model: string;
+      providerId: string | null;
+      tokens: number;
+    }>;
+    const insBd = db.prepare(
+      `INSERT OR REPLACE INTO usage_breakdown (api_key_id, day, model, provider_id, tokens)
+       VALUES (@apiKeyId, @day, @model, @providerId, @tokens)`,
+    );
+    for (const r of bdRows) {
+      insBd.run(r);
+      result.breakdownRows++;
+    }
+
+    result.days = day ? 1 : days.size;
+  });
+  tx();
+  return result;
+}

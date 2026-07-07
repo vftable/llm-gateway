@@ -188,6 +188,8 @@ export interface RequestLog {
   ts: string;
   apiKeyId: string | null;
   apiKeyName: string | null;
+  /** Live-joined masked key ("sk-…") for display; null when key was deleted. */
+  keyPrefix: string | null;
   userId: string | null;
   model: string | null;
   providerId: string | null;

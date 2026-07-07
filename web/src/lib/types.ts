@@ -144,6 +144,7 @@ export interface RequestLog {
   ts: string;
   apiKeyId: string | null;
   apiKeyName: string | null;
+  keyPrefix: string | null;
   userId: string | null;
   model: string | null;
   providerId: string | null;

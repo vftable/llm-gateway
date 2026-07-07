@@ -8,11 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
+import { cn, fmtNum } from "@/lib/utils";
 
 const SECTIONS = [
   { id: "models", label: "Models" },
   { id: "limits", label: "Limits" },
+  { id: "maintenance", label: "Maintenance" },
   { id: "password", label: "Password" },
 ] as const;
 
@@ -26,6 +27,36 @@ export default function Settings() {
 
   const [pw, setPw] = useState("");
   const [pwSaving, setPwSaving] = useState(false);
+
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const rebuildUsage = async () => {
+    setBusy("rebuild");
+    try {
+      const r = await api.rebuildUsage();
+      toast.success(
+        `Usage rebuilt from logs — ${fmtNum(r.tokens)} tokens across ${r.days} day${r.days === 1 ? "" : "s"}`,
+      );
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const clearLogs = async (scope: "errors" | "all") => {
+    const label = scope === "all" ? "ALL request logs" : "failed request logs";
+    if (!confirm(`Delete ${label}? This cannot be undone.`)) return;
+    setBusy(scope);
+    try {
+      const r = await api.clearLogs(scope);
+      toast.success(`Removed ${fmtNum(r.removed)} log row${r.removed === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   useEffect(() => {
     api
@@ -198,6 +229,78 @@ export default function Settings() {
                   }
                 />
               </Field>
+            </div>
+          </div>
+        )}
+
+        {active === "maintenance" && (
+          <div className="rounded-lg border border-border bg-card p-5">
+            <h2 className="font-heading text-lg font-medium text-foreground mb-4">
+              Data Maintenance
+            </h2>
+            <div className="flex flex-col divide-y divide-border/60">
+              <div className="flex items-center justify-between gap-4 pb-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-foreground">
+                    Rebuild usage counters
+                  </div>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    Recompute the usage totals and per-provider breakdown from
+                    the request log (the actual per-request record). Fixes any
+                    drift so the Overview, Usage and Resolution views all agree.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={rebuildUsage}
+                  disabled={busy !== null}
+                  className="shrink-0"
+                >
+                  {busy === "rebuild" ? "Rebuilding…" : "Rebuild"}
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 py-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-foreground">
+                    Clear failed request logs
+                  </div>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    Delete only rows that errored (status 4xx/5xx or no
+                    response), trimming noise from the log feed. Token counters
+                    are unaffected.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={() => clearLogs("errors")}
+                  disabled={busy !== null}
+                  className="shrink-0"
+                >
+                  {busy === "errors" ? "Clearing…" : "Clear errors"}
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 pt-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-foreground">
+                    Clear all request logs
+                  </div>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    Wipe the entire request log. Historical usage counters stay
+                    intact, but a subsequent rebuild will have nothing to draw
+                    from. Use sparingly.
+                  </p>
+                </div>
+                <Button
+                  variant="destructive"
+                  onClick={() => clearLogs("all")}
+                  disabled={busy !== null}
+                  className="shrink-0"
+                >
+                  {busy === "all" ? "Clearing…" : "Clear all"}
+                </Button>
+              </div>
             </div>
           </div>
         )}

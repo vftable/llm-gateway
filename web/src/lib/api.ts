@@ -159,4 +159,21 @@ export const api = {
     req<Settings>("/api/settings", json("PUT", input)),
   changePassword: (password: string) =>
     req<{ ok: boolean }>("/api/settings/password", json("POST", { password })),
+
+  // maintenance
+  rebuildUsage: (day?: string) =>
+    req<{
+      days: number;
+      usageRows: number;
+      breakdownRows: number;
+      tokens: number;
+    }>(
+      `/api/maintenance/rebuild-usage${day ? `?day=${encodeURIComponent(day)}` : ""}`,
+      json("POST"),
+    ),
+  clearLogs: (scope: "errors" | "all") =>
+    req<{ removed: number; scope: string }>(
+      `/api/maintenance/clear-logs?scope=${scope}`,
+      json("POST"),
+    ),
 };
