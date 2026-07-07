@@ -1,6 +1,6 @@
 import { memo, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, fmtTokens } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -126,6 +126,98 @@ export function Spinner({ label }: { label?: string }) {
 export function EmptyState({ msg }: { msg: string }) {
   return (
     <div className="p-8 text-center text-xs text-muted-foreground">{msg}</div>
+  );
+}
+
+// Round a raw max up to a "nice" axis ceiling (1/2/5 × 10ⁿ), so gridline
+// labels land on readable round numbers (10, 20, 50, 100, 200, 500, 1k, …)
+// rather than arbitrary values. Returns at least 10 so an empty/tiny chart
+// still shows a sane axis.
+function niceCeil(max: number): number {
+  if (max <= 10) return 10;
+  const pow = Math.pow(10, Math.floor(Math.log10(max)));
+  const frac = max / pow;
+  const mult = frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10;
+  return mult * pow;
+}
+
+// A compact bar chart with a labelled, auto-scaled Y-axis. Points are
+// value-scaled against a "nice" ceiling and evenly spaced across the width, so
+// the series always fills the plot regardless of how many buckets it has.
+// `highlightLast` renders the final bar solid (e.g. the still-accumulating
+// current hour/day). `label(point)` builds each bar's hover tooltip.
+export function TokenBarChart<T extends { tokens: number }>({
+  data,
+  label,
+  axisTicks = 4,
+  highlightLast = true,
+  height = "h-40",
+}: {
+  data: T[];
+  label: (point: T, isLast: boolean) => string;
+  axisTicks?: number;
+  highlightLast?: boolean;
+  height?: string;
+}) {
+  const rawMax = Math.max(0, ...data.map((d) => d.tokens));
+  const ceil = niceCeil(rawMax);
+  // Gridline values from top (ceil) down to 0, inclusive.
+  const ticks = Array.from(
+    { length: axisTicks + 1 },
+    (_, i) => (ceil / axisTicks) * (axisTicks - i),
+  );
+
+  return (
+    <div className="flex gap-2">
+      {/* Y-axis: nice round tick labels aligned to the gridlines. */}
+      <div
+        className={cn(
+          "flex shrink-0 flex-col justify-between text-right text-[0.6rem] tabular-nums text-muted-foreground",
+          height,
+        )}
+      >
+        {ticks.map((t, i) => (
+          <span key={i} className="leading-none">
+            {fmtTokens(t)}
+          </span>
+        ))}
+      </div>
+
+      {/* Plot: gridlines behind, bars in front. */}
+      <div className={cn("relative flex-1", height)}>
+        <div className="absolute inset-0 flex flex-col justify-between">
+          {ticks.map((_, i) => (
+            <div key={i} className="border-t border-border/40" />
+          ))}
+        </div>
+        <div className="absolute inset-0 flex items-end gap-px">
+          {data.map((d, i) => {
+            const isLast = i === data.length - 1;
+            const solid = highlightLast && isLast;
+            return (
+              <div
+                key={i}
+                className="group relative flex-1"
+                title={label(d, isLast)}
+              >
+                <div
+                  className={cn(
+                    "w-full rounded-t-sm transition-colors",
+                    solid
+                      ? "bg-violet-500 group-hover:bg-violet-400"
+                      : "bg-violet-500/30 group-hover:bg-violet-500/60",
+                  )}
+                  style={{
+                    height: `${(d.tokens / ceil) * 100}%`,
+                    minHeight: d.tokens > 0 ? "2px" : "0",
+                  }}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 

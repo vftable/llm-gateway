@@ -53,6 +53,7 @@ import {
 import {
   listUsageToday,
   totalUsageHistory,
+  hourlyUsageHistory,
   totalUsageToday,
   fullBreakdownToday,
   breakdownForKey,
@@ -105,6 +106,7 @@ export function adminRouter(
     res.json({
       stats: dashboardStats(db),
       usageHistory: totalUsageHistory(db, 14),
+      hourlyUsage: hourlyUsageHistory(db, 24),
       providers: listProviders(db).length,
       models: listModels(db).length,
       keys: listApiKeys(db).filter((k) => k.enabled).length,

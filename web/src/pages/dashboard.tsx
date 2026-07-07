@@ -3,7 +3,13 @@ import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import type { OverviewResponse } from "@/lib/types";
 import { fmtNum } from "@/lib/utils";
-import { PageHeader, Stat, Spinner, EmptyState } from "@/components/shared";
+import {
+  PageHeader,
+  Stat,
+  Spinner,
+  EmptyState,
+  TokenBarChart,
+} from "@/components/shared";
 import {
   Card,
   CardAction,
@@ -20,10 +26,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { ModelIcon, useModelTypes } from "@/components/model-icon";
 
 export default function Dashboard() {
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const modelTypes = useModelTypes();
 
   const load = () =>
     api
@@ -41,7 +49,7 @@ export default function Dashboard() {
   if (!data) return <Spinner label="Fetching telemetry…" />;
 
   const s = data.stats;
-  const maxTokens = Math.max(1, ...data.usageHistory.map((h) => h.tokens));
+  const hourly = data.hourlyUsage ?? [];
 
   return (
     <div>
@@ -84,53 +92,31 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        {/* Usage over time */}
+        {/* Token usage by hour — real-time (last 24h) */}
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Token Usage — Last 14 Days</CardTitle>
+            <CardTitle>Token Usage — Last 24 Hours</CardTitle>
             <CardAction>
               <Badge variant="secondary">{fmtNum(s.tokensToday)} today</Badge>
             </CardAction>
           </CardHeader>
           <CardContent>
-            {data.usageHistory.length === 0 ? (
-              <EmptyState msg="No usage recorded yet" />
+            {hourly.every((h) => h.tokens === 0) ? (
+              <EmptyState msg="No usage in the last 24 hours" />
             ) : (
-              <div className="flex h-40 items-end gap-1">
-                {data.usageHistory.map((h, i) => {
-                  // The final bucket is today (still accumulating) — render it
-                  // solid so "usage so far today" reads at a glance.
-                  const isToday = i === data.usageHistory.length - 1;
-                  return (
-                    <div
-                      key={h.day}
-                      className="group relative flex-1"
-                      title={`${h.day}: ${fmtNum(h.tokens)} tokens${isToday ? " · so far today" : ""}`}
-                    >
-                      <div
-                        className={
-                          isToday
-                            ? "w-full rounded-t-sm bg-violet-500 transition-colors group-hover:bg-violet-400"
-                            : "w-full rounded-t-sm bg-violet-500/30 transition-colors group-hover:bg-violet-500/60"
-                        }
-                        style={{
-                          height: `${(h.tokens / maxTokens) * 100}%`,
-                          minHeight: h.tokens > 0 ? "2px" : "0",
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
+              <>
+                <TokenBarChart
+                  data={hourly}
+                  label={(h, isLast) =>
+                    `${fmtHourLabel(h.hour)} — ${fmtNum(h.tokens)} tokens${isLast ? " · current hour" : ""}`
+                  }
+                />
+                <div className="mt-2 flex justify-between pl-10 text-xs font-medium text-muted-foreground">
+                  <span>{fmtHourLabel(hourly[0]?.hour)}</span>
+                  <span>now</span>
+                </div>
+              </>
             )}
-            <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">
-              <span>{data.usageHistory[0]?.day.slice(5) ?? ""}</span>
-              <span>
-                {data.usageHistory[data.usageHistory.length - 1]?.day.slice(
-                  5,
-                ) ?? ""}
-              </span>
-            </div>
           </CardContent>
         </Card>
 
@@ -149,19 +135,26 @@ export default function Dashboard() {
                     <TableHead>Model</TableHead>
                     <TableHead className="text-right">Requests</TableHead>
                     <TableHead className="text-right">Tokens</TableHead>
+                    <TableHead className="text-right">Cached</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {s.byModel.map((m) => (
                     <TableRow key={m.model}>
                       <TableCell className="font-mono text-primary">
-                        {m.model}
+                        <span className="flex items-center gap-2">
+                          <ModelIcon alias={m.model} type={modelTypes[m.model]} />
+                          {m.model}
+                        </span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNum(m.requests)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNum(m.tokens)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {m.cached > 0 ? fmtNum(m.cached) : "—"}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -225,4 +218,12 @@ export default function Dashboard() {
       </Card>
     </div>
   );
+}
+
+// "YYYY-MM-DDTHH" (UTC) -> local "HH:00" for axis/tooltip labels.
+function fmtHourLabel(hour: string | undefined): string {
+  if (!hour) return "";
+  const d = new Date(`${hour}:00:00Z`);
+  if (Number.isNaN(d.getTime())) return hour;
+  return `${String(d.getHours()).padStart(2, "0")}:00`;
 }

@@ -177,6 +177,14 @@ const LogRow = memo(function LogRow({
         {l.stream && (
           <span className="ml-1 text-[0.6rem] text-primary">stream</span>
         )}
+        {l.cachedTokens != null && l.cachedTokens > 0 && (
+          <span
+            className="block text-[0.6rem] text-muted-foreground/70"
+            title="Prompt tokens served from cache"
+          >
+            {fmtNum(l.cachedTokens)} cached
+          </span>
+        )}
       </TableCell>
       <TableCell className="text-right tabular-nums text-muted-foreground">
         {fmtLatency(l.latencyMs)}

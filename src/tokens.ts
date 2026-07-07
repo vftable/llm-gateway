@@ -165,15 +165,21 @@ export function readMaxOutputTokens(
 // Extract upstream-reported token usage from a parsed response body.
 // Works across Anthropic, OpenAI Chat, and OpenAI Responses shapes.
 // Returns {} when no usage info is present (e.g. passthrough / streaming).
+//
+// `cached` is prompt tokens served from the provider's prompt cache — reported
+// as `cache_read_input_tokens` (Anthropic) or `prompt_tokens_details.cached_tokens`
+// (OpenAI). It is a SUBSET of `input`, surfaced separately for cost visibility;
+// it is not added on top of the input total.
 export function readResponseUsage(body: unknown): {
   input?: number;
   output?: number;
+  cached?: number;
 } {
   if (!body || typeof body !== "object") return {};
   const u = (body as { usage?: unknown }).usage;
   if (!u || typeof u !== "object") return {};
   const o = u as Record<string, unknown>;
-  const out: { input?: number; output?: number } = {};
+  const out: { input?: number; output?: number; cached?: number } = {};
   // OpenAI Chat: usage.{prompt_tokens, completion_tokens}
   if (typeof o.prompt_tokens === "number") out.input = o.prompt_tokens;
   if (typeof o.completion_tokens === "number") out.output = o.completion_tokens;
@@ -181,5 +187,22 @@ export function readResponseUsage(body: unknown): {
   // (overrides the OpenAI names if both are somehow present)
   if (typeof o.input_tokens === "number") out.input = o.input_tokens;
   if (typeof o.output_tokens === "number") out.output = o.output_tokens;
+  const cached = readCachedTokens(o);
+  if (cached != null) out.cached = cached;
   return out;
+}
+
+// Pull cached (prompt-cache-hit) input tokens from a usage object across the
+// three shapes. Returns null when the field isn't present.
+export function readCachedTokens(o: Record<string, unknown>): number | null {
+  // Anthropic: usage.cache_read_input_tokens
+  if (typeof o.cache_read_input_tokens === "number")
+    return o.cache_read_input_tokens;
+  // OpenAI Chat/Responses: usage.prompt_tokens_details.cached_tokens
+  const details = o.prompt_tokens_details ?? o.input_tokens_details;
+  if (details && typeof details === "object") {
+    const c = (details as Record<string, unknown>).cached_tokens;
+    if (typeof c === "number") return c;
+  }
+  return null;
 }

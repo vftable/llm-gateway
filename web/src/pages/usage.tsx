@@ -15,6 +15,7 @@ import {
   Stat,
   Field,
   Pagination,
+  TokenBarChart,
 } from "@/components/shared";
 import {
   Card,
@@ -79,7 +80,6 @@ export default function Usage() {
 
   if (!data) return <Spinner label="Loading usage…" />;
 
-  const maxHist = Math.max(1, ...data.history.map((h) => h.tokens));
   const sorted = [...data.today.keys].sort((a, b) => b.used - a.used);
   const totalBreakdownTokens = rows.reduce((a, r) => a + r.tokens, 0);
   const breakdownPageCount = Math.max(
@@ -119,30 +119,15 @@ export default function Usage() {
             </CardAction>
           </CardHeader>
           <CardContent>
-            <div className="flex h-40 items-end gap-1">
-              {data.history.map((h, i) => {
-                // Final bucket is today (still accumulating) — solid violet.
-                const isToday = i === data.history.length - 1;
-                return (
-                  <div
-                    key={h.day}
-                    className="group relative flex-1"
-                    title={`${h.day}: ${fmtNum(h.tokens)}${isToday ? " · so far today" : ""}`}
-                  >
-                    <div
-                      className={
-                        isToday
-                          ? "w-full rounded-t-sm bg-violet-500 transition-colors group-hover:bg-violet-400"
-                          : "w-full rounded-t-sm bg-violet-500/30 transition-colors group-hover:bg-violet-500/60"
-                      }
-                      style={{
-                        height: `${(h.tokens / maxHist) * 100}%`,
-                        minHeight: h.tokens > 0 ? "2px" : "0",
-                      }}
-                    />
-                  </div>
-                );
-              })}
+            <TokenBarChart
+              data={data.history}
+              label={(h, isLast) =>
+                `${h.day} — ${fmtNum(h.tokens)} tokens${isLast ? " · so far today" : ""}`
+              }
+            />
+            <div className="mt-2 flex justify-between pl-10 text-xs font-medium text-muted-foreground">
+              <span>{data.history[0]?.day.slice(5) ?? ""}</span>
+              <span>{data.history[data.history.length - 1]?.day.slice(5) ?? ""}</span>
             </div>
           </CardContent>
         </Card>

@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
   status        INTEGER,
   input_tokens  INTEGER,
   output_tokens INTEGER,
+  cached_tokens INTEGER,
   latency_ms    INTEGER,
   client        TEXT,
   path          TEXT,
@@ -234,4 +235,5 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, "model_providers", "endpoint", "TEXT");
   addColumnIfMissing(db, "models", "type", "TEXT NOT NULL DEFAULT 'openai'");
   addColumnIfMissing(db, "request_logs", "client", "TEXT");
+  addColumnIfMissing(db, "request_logs", "cached_tokens", "INTEGER");
 }

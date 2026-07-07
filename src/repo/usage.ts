@@ -74,7 +74,10 @@ export function listUsageToday(db: DB): UsageRow[] {
 }
 
 // Daily token totals across all keys for the last `days` days (oldest first),
-// for the dashboard's usage-over-time chart.
+// for the usage-over-time chart. Zero-filled: every day in the window is
+// present (missing days -> 0) so the chart always shows a full, evenly-spaced
+// series of exactly `days` points rather than collapsing to whatever days
+// happened to have traffic.
 export function totalUsageHistory(
   db: DB,
   days = 14,
@@ -83,10 +86,58 @@ export function totalUsageHistory(
     .prepare(
       `SELECT day, SUM(tokens) AS tokens FROM usage
        WHERE day >= date('now', ?)
-       GROUP BY day ORDER BY day`,
+       GROUP BY day`,
     )
-    .all(`-${days} days`) as Array<{ day: string; tokens: number | null }>;
-  return rows.map((r) => ({ day: r.day, tokens: r.tokens ?? 0 }));
+    .all(`-${days - 1} days`) as Array<{ day: string; tokens: number | null }>;
+  const byDay = new Map(rows.map((r) => [r.day, r.tokens ?? 0]));
+
+  const out: Array<{ day: string; tokens: number }> = [];
+  const d = new Date();
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() - (days - 1));
+  for (let i = 0; i < days; i++) {
+    const key = d.toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+    out.push({ day: key, tokens: byDay.get(key) ?? 0 });
+    d.setUTCDate(d.getUTCDate() + 1);
+  }
+  return out;
+}
+
+// Hourly token totals for the last `hours` hours (oldest first), for the
+// dashboard's real-time chart. Sourced from request_logs (the per-request
+// record carries a timestamp; the daily `usage` counter does not), summing
+// actual input+output tokens. Zero-filled so every hour bucket is present.
+export function hourlyUsageHistory(
+  db: DB,
+  hours = 24,
+): Array<{ hour: string; tokens: number }> {
+  // ts is stored as an ISO-8601 UTC string, so the first 13 chars
+  // (YYYY-MM-DDTHH) are the UTC hour bucket.
+  const since = new Date();
+  since.setUTCMinutes(0, 0, 0);
+  since.setUTCHours(since.getUTCHours() - (hours - 1));
+  const rows = db
+    .prepare(
+      `SELECT substr(ts, 1, 13) AS hour,
+              COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens
+       FROM request_logs
+       WHERE ts >= @since
+       GROUP BY substr(ts, 1, 13)`,
+    )
+    .all({ since: since.toISOString() }) as Array<{
+    hour: string;
+    tokens: number | null;
+  }>;
+  const byHour = new Map(rows.map((r) => [r.hour, r.tokens ?? 0]));
+
+  const out: Array<{ hour: string; tokens: number }> = [];
+  const d = new Date(since);
+  for (let i = 0; i < hours; i++) {
+    const key = d.toISOString().slice(0, 13); // YYYY-MM-DDTHH (UTC)
+    out.push({ hour: key, tokens: byHour.get(key) ?? 0 });
+    d.setUTCHours(d.getUTCHours() + 1);
+  }
+  return out;
 }
 
 export function totalUsageToday(db: DB): number {

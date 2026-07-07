@@ -153,6 +153,7 @@ export interface RequestLog {
   status: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  cachedTokens: number | null;
   latencyMs: number | null;
   client: string | null;
   path: string | null;
@@ -165,7 +166,12 @@ export interface DashboardStats {
   requestsErrorToday: number;
   tokensToday: number;
   errorRateToday: number;
-  byModel: Array<{ model: string; requests: number; tokens: number }>;
+  byModel: Array<{
+    model: string;
+    requests: number;
+    tokens: number;
+    cached: number;
+  }>;
   byProvider: Array<{
     providerId: string;
     provider: string;
@@ -179,6 +185,7 @@ export interface DashboardStats {
 export interface OverviewResponse {
   stats: DashboardStats;
   usageHistory: Array<{ day: string; tokens: number }>;
+  hourlyUsage: Array<{ hour: string; tokens: number }>;
   providers: number;
   models: number;
   keys: number;

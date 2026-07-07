@@ -107,6 +107,7 @@ interface AttemptResult {
   status?: number;
   inputTokens?: number;
   outputTokens?: number | null;
+  cachedTokens?: number | null;
   reason?: string;
   error?: string | null;
 }
@@ -242,6 +243,7 @@ export class ForwardingEngine {
         502,
         null,
         null,
+        null,
         "no providers",
         startedAt,
       );
@@ -296,6 +298,7 @@ export class ForwardingEngine {
               result.status ?? null,
               result.inputTokens ?? (ctx.inputTokens || null),
               result.outputTokens ?? null,
+              result.cachedTokens ?? null,
               result.error ?? null,
               startedAt,
             );
@@ -330,6 +333,7 @@ export class ForwardingEngine {
       first?.upstreamModel ?? null,
       502,
       ctx.inputTokens || null,
+      null,
       null,
       lastReason,
       startedAt,
@@ -555,6 +559,7 @@ export class ForwardingEngine {
         status,
         inputTokens: usage.input ?? ctx.inputTokens,
         outputTokens: usage.output ?? null,
+        cachedTokens: usage.cached ?? null,
       };
     }
     this.pipeThrough(upRes, res, status, headers);
@@ -620,6 +625,7 @@ export class ForwardingEngine {
         502,
         ctx.inputTokens || null,
         null,
+        null,
         "stream conversion unsupported",
         startedAt,
       );
@@ -657,6 +663,7 @@ export class ForwardingEngine {
         status,
         usage.input ?? (ctx.inputTokens || null),
         usage.output ?? null,
+        usage.cached ?? null,
         error,
         startedAt,
       );
@@ -701,7 +708,7 @@ export class ForwardingEngine {
     route: Route,
     status: number,
     headers: IncomingMessage["headers"],
-  ): Promise<{ input?: number; output?: number }> {
+  ): Promise<{ input?: number; output?: number; cached?: number }> {
     const chunks: Buffer[] = [];
     let size = 0;
     for await (const c of upRes) {
@@ -850,6 +857,7 @@ export class ForwardingEngine {
     status: number | null,
     inputTokens: number | null,
     outputTokens: number | null,
+    cachedTokens: number | null,
     error: string | null,
     startedAt?: number,
   ): void {
@@ -865,6 +873,7 @@ export class ForwardingEngine {
         status,
         inputTokens,
         outputTokens,
+        cachedTokens,
         latencyMs: startedAt ? Date.now() - startedAt : null,
         client: ctx.client,
         path: ctx.clientPath,

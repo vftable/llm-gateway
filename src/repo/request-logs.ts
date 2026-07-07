@@ -20,6 +20,7 @@ interface LogRow {
   status: number | null;
   input_tokens: number | null;
   output_tokens: number | null;
+  cached_tokens: number | null;
   latency_ms: number | null;
   client: string | null;
   path: string | null;
@@ -46,6 +47,7 @@ function mapLog(r: LogRow): RequestLog {
     status: r.status,
     inputTokens: r.input_tokens,
     outputTokens: r.output_tokens,
+    cachedTokens: r.cached_tokens,
     latencyMs: r.latency_ms,
     client: r.client,
     path: r.path,
@@ -65,6 +67,7 @@ export interface InsertLogInput {
   status: number | null;
   inputTokens: number | null;
   outputTokens: number | null;
+  cachedTokens: number | null;
   latencyMs: number | null;
   client: string | null;
   path: string | null;
@@ -76,9 +79,9 @@ export function insertRequestLog(db: DB, input: InsertLogInput): void {
   db.prepare(
     `INSERT INTO request_logs
       (ts, api_key_id, api_key_name, user_id, model, provider_id, provider_name,
-       upstream_model, status, input_tokens, output_tokens, latency_ms, client, path, stream, error)
+       upstream_model, status, input_tokens, output_tokens, cached_tokens, latency_ms, client, path, stream, error)
      VALUES (@ts, @api_key_id, @api_key_name, @user_id, @model, @provider_id, @provider_name,
-       @upstream_model, @status, @input_tokens, @output_tokens, @latency_ms, @client, @path, @stream, @error)`,
+       @upstream_model, @status, @input_tokens, @output_tokens, @cached_tokens, @latency_ms, @client, @path, @stream, @error)`,
   ).run({
     ts: new Date().toISOString(),
     api_key_id: input.apiKeyId,
@@ -91,6 +94,7 @@ export function insertRequestLog(db: DB, input: InsertLogInput): void {
     status: input.status,
     input_tokens: input.inputTokens,
     output_tokens: input.outputTokens,
+    cached_tokens: input.cachedTokens,
     latency_ms: input.latencyMs,
     client: input.client,
     path: input.path,
@@ -178,7 +182,12 @@ export interface DashboardStats {
   requestsErrorToday: number;
   tokensToday: number;
   errorRateToday: number;
-  byModel: Array<{ model: string; requests: number; tokens: number }>;
+  byModel: Array<{
+    model: string;
+    requests: number;
+    tokens: number;
+    cached: number;
+  }>;
   byProvider: Array<{
     providerId: string;
     provider: string;
@@ -214,7 +223,8 @@ export function dashboardStats(db: DB): DashboardStats {
   const byModel = db
     .prepare(
       `SELECT model, COUNT(*) AS requests,
-         COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens
+         COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens,
+         COALESCE(SUM(COALESCE(cached_tokens,0)),0) AS cached
        FROM request_logs WHERE date(ts) = @today AND model IS NOT NULL
        GROUP BY model ORDER BY requests DESC LIMIT 10`,
     )
@@ -222,6 +232,7 @@ export function dashboardStats(db: DB): DashboardStats {
     model: string;
     requests: number;
     tokens: number;
+    cached: number;
   }>;
 
   // Join the live providers table so a renamed provider shows its CURRENT name,

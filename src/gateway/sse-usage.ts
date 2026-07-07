@@ -19,16 +19,19 @@
 // seen is the final total.
 
 import { Transform, type TransformCallback } from "stream";
+import { readCachedTokens } from "../tokens";
 
 export interface StreamUsage {
   input?: number;
   output?: number;
+  cached?: number;
 }
 
 export class SseUsageObserver extends Transform {
   private tail = "";
   private seenInput: number | null = null;
   private seenOutput: number | null = null;
+  private seenCached: number | null = null;
   private fallbackChars = 0;
 
   // Best-effort usage totals observed so far. Prefers upstream-reported counts;
@@ -39,7 +42,11 @@ export class SseUsageObserver extends Transform {
     const output =
       this.seenOutput ??
       (this.fallbackChars > 0 ? Math.ceil(this.fallbackChars / 4) : undefined);
-    return { input, output };
+    return {
+      input,
+      output,
+      ...(this.seenCached != null ? { cached: this.seenCached } : {}),
+    };
   }
 
   _transform(chunk: Buffer, _enc: BufferEncoding, cb: TransformCallback): void {
@@ -93,6 +100,9 @@ export class SseUsageObserver extends Transform {
       this.seenInput = Math.max(this.seenInput ?? 0, input);
     if (output != null)
       this.seenOutput = Math.max(this.seenOutput ?? 0, output);
+    const cached = readCachedTokens(o);
+    if (cached != null)
+      this.seenCached = Math.max(this.seenCached ?? 0, cached);
   }
 
   private readDelta(obj: Record<string, unknown>): void {
