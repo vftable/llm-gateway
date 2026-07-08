@@ -146,16 +146,22 @@ const tokenChartConfig = {
 // `{ label, tokens }`; `label` is the X-axis tick + tooltip title.
 export function TokenChart({
   data,
-  height = 160,
+  minHeight = 160,
 }: {
   data: Array<{ label: string; tokens: number }>;
-  height?: number;
+  minHeight?: number;
 }) {
   return (
     <ChartContainer
       config={tokenChartConfig}
-      className="w-full"
-      style={{ height }}
+      // `aspect-auto` cancels ChartContainer's default `aspect-video` (16:9),
+      // which otherwise inflates the chart height as the card grows wider.
+      // `flex-1` + `min-h-0` let the chart grow to fill the card content's
+      // available height (CardContent is a flex column), while the inline
+      // min-height sets a floor so it never collapses below a usable size. The
+      // chart follows the card's natural height instead of forcing its own.
+      className="aspect-auto h-full min-h-0 w-full flex-1"
+      style={{ minHeight }}
     >
       <AreaChart data={data} margin={{ left: 4, right: 8, top: 4 }}>
         <defs>
