@@ -277,6 +277,7 @@ export class GatewayPipeline {
         req.body && typeof req.body === "object"
           ? (req.body as Record<string, unknown>)
           : {};
+      const settings = this.registry.getSettings();
       const ctx: ForwardContext = {
         clientPath: req.originalUrl || req.url,
         requestBody: body,
@@ -287,11 +288,12 @@ export class GatewayPipeline {
         reservedTokens: gw.__reservedTokens ?? 0,
         isStream: body.stream === true,
         client: detectClient(req),
-        debug: this.registry.getSettings().debugLogging === true,
+        debug: settings.debugLogging === true,
         webTools: {
-          enabled: this.registry.getSettings().webToolsFirecrawl === true,
-          firecrawlBaseUrl: this.registry.getSettings().firecrawlBaseUrl || "",
-          firecrawlApiKey: this.registry.getSettings().firecrawlApiKey || "",
+          enabled: settings.webToolsEnabled === true,
+          provider: settings.webToolsProvider || "firecrawl",
+          baseUrl: settings.webProviderBaseUrl || "",
+          apiKey: settings.webProviderApiKey || "",
         },
       };
       // Don't let an async rejection escape Express's sync handler.

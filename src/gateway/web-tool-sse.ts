@@ -85,12 +85,14 @@ export function emitMessagesSse(
         type: "content_block_stop",
         index,
       });
-    } else if (type === "tool_use") {
+    } else if (type === "tool_use" || type === "server_tool_use") {
+      // Client tool call (tool_use) or gateway-run hosted tool (server_tool_use)
+      // — both stream a start block then the input as an input_json_delta.
       writeEvent(res, "content_block_start", {
         type: "content_block_start",
         index,
         content_block: {
-          type: "tool_use",
+          type,
           id: block.id ?? "toolu_gateway",
           name: block.name ?? "",
           input: {},
@@ -108,6 +110,23 @@ export function emitMessagesSse(
         type: "content_block_stop",
         index,
       });
+    } else if (type === "web_search_tool_result") {
+      // Hosted-tool result: a single start block carrying the full result
+      // content (result items or an error object), then stop. There is no delta
+      // for these — the content is delivered whole in the start event.
+      writeEvent(res, "content_block_start", {
+        type: "content_block_start",
+        index,
+        content_block: {
+          type: "web_search_tool_result",
+          tool_use_id: block.tool_use_id ?? "",
+          content: block.content ?? [],
+        },
+      });
+      writeEvent(res, "content_block_stop", {
+        type: "content_block_stop",
+        index,
+      });
     }
   });
 
@@ -117,7 +136,14 @@ export function emitMessagesSse(
       stop_reason: message.stop_reason ?? "end_turn",
       stop_sequence: null,
     },
-    usage: { output_tokens: usage.output_tokens ?? 0 },
+    usage: {
+      output_tokens: usage.output_tokens ?? 0,
+      // Surface hosted-tool search count in the terminal usage delta, matching
+      // Anthropic's real streaming shape.
+      ...(usage.server_tool_use
+        ? { server_tool_use: usage.server_tool_use }
+        : {}),
+    },
   });
   writeEvent(res, "message_stop", { type: "message_stop" });
   res.end();
@@ -130,9 +156,10 @@ export function emitChatSse(
   chat: Record<string, unknown>,
 ): void {
   openSse(res);
-  const choice = (
-    Array.isArray(chat.choices) ? chat.choices[0] : {}
-  ) as Record<string, unknown>;
+  const choice = (Array.isArray(chat.choices) ? chat.choices[0] : {}) as Record<
+    string,
+    unknown
+  >;
   const message = (choice.message ?? {}) as Record<string, unknown>;
   const id = chat.id ?? "chatcmpl-gateway";
   const model = chat.model ?? "";

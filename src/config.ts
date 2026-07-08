@@ -43,9 +43,17 @@ export interface ConfigJson {
   upstreamApiKey?: string;
   upstreamTlsVerify?: boolean;
   gatewayApiKeys?: unknown;
-  // Firecrawl-backed web tools (seeds settings.webToolsFirecrawl / *Url / *Key).
+  // Pluggable web-tools backing (seeds the webTools* / webProvider* settings).
+  // `enabled` turns the feature on; `provider` picks the backend (default
+  // "firecrawl"); baseUrl/apiKey are the provider's connection settings.
+  // `firecrawl` is kept as a convenience alias for `enabled` (back-compat).
   webTools?: {
-    firecrawl?: boolean;
+    enabled?: boolean;
+    firecrawl?: boolean; // legacy alias for `enabled`
+    provider?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    // legacy key names (still honoured):
     firecrawlBaseUrl?: string;
     firecrawlApiKey?: string;
   };

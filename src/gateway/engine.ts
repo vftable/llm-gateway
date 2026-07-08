@@ -35,6 +35,7 @@ import { SseUsageObserver } from "./sse-usage";
 import { requestJson, type JsonResponse } from "./http-json";
 import { detectWebTools } from "./web-tools";
 import { runWebToolLoop } from "./web-tool-loop";
+import { getWebProvider, DEFAULT_PROVIDER } from "./web-providers";
 import { stripInvisible } from "../utils";
 import { readResponseUsage } from "../tokens";
 import { listProviders } from "../repo/providers";
@@ -111,12 +112,14 @@ export interface ForwardContext {
   debug: boolean;
   /** Distilled client request JSON, computed once when debug is on. */
   debugRequest?: string | null;
-  /** Firecrawl-backed web tools config; when enabled, requests carrying the
-   *  hosted web_search / web_fetch tools are handled by the gateway's loop. */
+  /** Web-tools config; when enabled, requests carrying the hosted web_search /
+   *  web_fetch tools are handled by the gateway's loop against the selected
+   *  web provider (see ./web-providers). */
   webTools?: {
     enabled: boolean;
-    firecrawlBaseUrl: string;
-    firecrawlApiKey: string;
+    provider: string; // registry id, e.g. "firecrawl"
+    baseUrl: string;
+    apiKey: string;
   };
 }
 
@@ -1104,28 +1107,37 @@ export class ForwardingEngine {
   ): Promise<void> {
     const present = detectWebTools(ctx.requestBody);
     const cfg = ctx.webTools!;
-    // Pick a provider just for logging attribution (the loop selects internally
-    // per turn via runMessagesTurn -> buildChain).
+    // Upstream provider for logging attribution only (the loop selects the
+    // upstream internally per turn via runMessagesTurn -> buildChain).
     const chain = this.buildChain(ctx.resolvedModel);
-    const provider = chain[0]?.provider ?? null;
+    const logProvider = chain[0]?.provider ?? null;
     const upstreamModel = chain[0]?.upstreamModel ?? null;
 
     this.logger.info("web_tool_loop_start", {
       model: ctx.alias,
+      provider: cfg.provider || DEFAULT_PROVIDER,
       search: present.search,
       fetch: present.fetch,
       stream: ctx.isStream,
     });
 
-    let result: { status: number; usage: StreamUsageLike; error: string | null };
+    // The web provider that actually runs search/fetch (Firecrawl, etc.).
+    const webProvider = getWebProvider({
+      provider: cfg.provider || DEFAULT_PROVIDER,
+      baseUrl: cfg.baseUrl || undefined,
+      apiKey: cfg.apiKey || null,
+    });
+
+    let result: {
+      status: number;
+      usage: StreamUsageLike;
+      error: string | null;
+    };
     try {
       result = await runWebToolLoop(req, res, ctx, present, {
         engine: this,
         logger: this.logger,
-        firecrawl: {
-          baseUrl: cfg.firecrawlBaseUrl || undefined,
-          apiKey: cfg.firecrawlApiKey || null,
-        },
+        provider: webProvider,
       });
     } catch (err) {
       result = {
@@ -1139,10 +1151,10 @@ export class ForwardingEngine {
       this.finish502(res, result.error);
     }
 
-    this.settleUsage(ctx, provider, result.usage);
+    this.settleUsage(ctx, logProvider, result.usage);
     this.recordLog(
       ctx,
-      provider,
+      logProvider,
       upstreamModel,
       result.error ? result.status : 200,
       result.usage.input ?? (ctx.inputTokens || null),

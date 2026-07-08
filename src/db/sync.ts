@@ -127,6 +127,10 @@ export function syncFromConfig(db: DB, cfg: ConfigJson): SyncResult {
   const tx = db.transaction(() => {
     // --- settings ---
     const wt = cfg.webTools;
+    // Accept both the new generic keys and the legacy firecrawl* aliases.
+    const wtEnabled = wt?.enabled ?? wt?.firecrawl;
+    const wtBaseUrl = wt?.baseUrl ?? wt?.firecrawlBaseUrl;
+    const wtApiKey = wt?.apiKey ?? wt?.firecrawlApiKey;
     saveSettings(db, {
       ...(m.prefix !== undefined && { modelPrefix: m.prefix }),
       ...(m.exposePrefix !== undefined && { exposePrefix: m.exposePrefix }),
@@ -135,15 +139,10 @@ export function syncFromConfig(db: DB, cfg: ConfigJson): SyncResult {
       ...(m.defaultMaxOutputTokens !== undefined && {
         defaultMaxOutputTokens: m.defaultMaxOutputTokens,
       }),
-      ...(wt?.firecrawl !== undefined && {
-        webToolsFirecrawl: wt.firecrawl,
-      }),
-      ...(wt?.firecrawlBaseUrl !== undefined && {
-        firecrawlBaseUrl: wt.firecrawlBaseUrl,
-      }),
-      ...(wt?.firecrawlApiKey !== undefined && {
-        firecrawlApiKey: wt.firecrawlApiKey,
-      }),
+      ...(wtEnabled !== undefined && { webToolsEnabled: wtEnabled }),
+      ...(wt?.provider !== undefined && { webToolsProvider: wt.provider }),
+      ...(wtBaseUrl !== undefined && { webProviderBaseUrl: wtBaseUrl }),
+      ...(wtApiKey !== undefined && { webProviderApiKey: wtApiKey }),
     });
 
     // --- provider ---

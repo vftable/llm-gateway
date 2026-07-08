@@ -27,11 +27,12 @@
     "sk-example-client-key"
   ],
 
-  "_webTools_comment": "Back Anthropic's hosted web_search/web_fetch tools with Firecrawl so they work against any upstream model. firecrawl=enable; firecrawlBaseUrl blank = public API; firecrawlApiKey blank = keyless (the public API rejects some IPs without a key — get a free one at firecrawl.dev).",
+  "_webTools_comment": "Back Anthropic's hosted web_search/web_fetch tools with a pluggable web provider so they work against any upstream model. enabled=turn on; provider=backend id (currently 'firecrawl'); baseUrl blank = provider default; apiKey blank = keyless where supported (Firecrawl's public API rejects some IPs without a key — get a free one at firecrawl.dev).",
   "webTools": {
-    "firecrawl": false,
-    "firecrawlBaseUrl": "",
-    "firecrawlApiKey": ""
+    "enabled": false,
+    "provider": "firecrawl",
+    "baseUrl": "",
+    "apiKey": ""
   },
 
   "models": {

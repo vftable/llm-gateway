@@ -17,26 +17,33 @@
 // the final message, so the client still gets an SSE response when it asked for
 // one — the gateway just can't stream tokens *while a tool call is pending*.
 
+import { randomBytes } from "crypto";
 import type { Request, Response } from "express";
 import type { Logger } from "../logger";
 import type { ForwardingEngine, ForwardContext } from "./engine";
-import type { FirecrawlConfig } from "./firecrawl";
+import type { SearchProvider } from "./web-providers";
 import {
-  detectWebTools,
   rewriteRequest,
   executeWebTool,
   isWebToolName,
+  isWebToolsOnly,
+  getLastUserQuery,
+  WEB_SEARCH,
   type WebToolsPresent,
 } from "./web-tools";
 import { messagesResponseToChat } from "../anthropic-openai-bridge";
 import { emitMessagesSse, emitChatSse } from "./web-tool-sse";
 
-const MAX_ROUNDS = 8; // hard cap on tool round-trips per request
+const MAX_ROUNDS = 6; // hard cap on tool round-trips per request
+// Max total web searches/fetches before we strip the tools and force the model
+// to answer with what it has. Prevents runaway re-searching (slow + burns
+// Firecrawl credits) when a model keeps rephrasing the same query.
+const MAX_SEARCHES = 3;
 
 export interface LoopDeps {
   engine: ForwardingEngine;
   logger: Logger;
-  firecrawl: FirecrawlConfig;
+  provider: SearchProvider;
 }
 
 // Client wire format, derived from the request path.
@@ -64,9 +71,32 @@ export async function runWebToolLoop(
   present: WebToolsPresent,
   deps: LoopDeps,
 ): Promise<{ status: number; usage: Usage; error: string | null }> {
-  const { engine, logger, firecrawl } = deps;
+  const { engine, logger, provider } = deps;
   const fmt = clientFmt(ctx.clientPath);
   const wantStream = ctx.isStream;
+
+  // Short-circuit: Claude Code sends web search as a standalone /v1/messages
+  // sub-request with ONLY web tools + a simple prompt, and just wants the
+  // web_search_tool_result blocks back to render — it does its own synthesis in
+  // the main conversation. Running this through the upstream model is
+  // unnecessary and (with an OpenAI-format upstream) unreliable. So we run the
+  // search directly and return a synthetic Anthropic response — exactly how
+  // LiteLLM's try_short_circuit_search works. This is the path that "just
+  // works" for Claude Code.
+  if (present.search && isWebToolsOnly(ctx.requestBody)) {
+    const query = getLastUserQuery(ctx.requestBody);
+    if (query) {
+      const status = await runShortCircuitSearch(
+        res,
+        ctx,
+        query,
+        fmt,
+        wantStream,
+        deps,
+      );
+      return status;
+    }
+  }
 
   // Working conversation in Messages shape. If the client spoke chat/responses,
   // ctx.requestBody has already been handed to us in Messages shape by the hook
@@ -84,10 +114,26 @@ export async function runWebToolLoop(
   };
 
   let finalMessage: Record<string, unknown> | null = null;
+  let lastMessage: Record<string, unknown> | null = null;
   let lastStatus = 200;
+  let searchCount = 0;
+  let searchRequests = 0; // billed web_search_requests for usage reporting
+  // Anthropic-native web-tool blocks accumulated across rounds, prepended to
+  // the final client-facing message so the client sees the hosted-tool trace:
+  //   server_tool_use -> web_search_tool_result -> ... -> (assistant text)
+  const webBlocks: unknown[] = [];
+
+  // Base body WITHOUT the web tools — used once the search budget is spent so
+  // the model can no longer call them and must answer.
+  const baseNoTools = { ...base };
+  delete baseNoTools.tools;
+  delete baseNoTools.tool_choice;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const turnBody = { ...base, messages };
+    const budgetSpent = searchCount >= MAX_SEARCHES;
+    const turnBody = budgetSpent
+      ? { ...baseNoTools, messages }
+      : { ...base, messages };
     const turn = await engine.runMessagesTurn(req, ctx, turnBody);
     if (!turn.ok) {
       return {
@@ -99,6 +145,7 @@ export async function runWebToolLoop(
     addUsage(turn.usage);
     const msg = turn.body;
     lastStatus = 200;
+    lastMessage = msg;
 
     const content = Array.isArray(msg.content) ? msg.content : [];
     const toolUses = content.filter(
@@ -109,7 +156,8 @@ export async function runWebToolLoop(
         isWebToolName((b as Record<string, unknown>).name),
     ) as Array<Record<string, unknown>>;
 
-    // No web tool calls -> this is the final answer.
+    // No web tool calls -> this is the final answer. Its assistant text/blocks
+    // are appended after the accumulated web-tool blocks below.
     if (toolUses.length === 0) {
       finalMessage = msg;
       break;
@@ -120,26 +168,79 @@ export async function runWebToolLoop(
       calls: toolUses.map((t) => t.name).join(","),
     });
 
-    // Append the assistant turn (with its tool_use blocks) verbatim.
+    // Append the assistant turn (with its tool_use blocks) to the UPSTREAM
+    // conversation verbatim, so the model can reason over the results next turn.
     messages.push({ role: "assistant", content: msg.content });
 
-    // Execute each web tool call and build a single user turn of tool_results.
-    const results: unknown[] = [];
+    // Interleave any assistant "decision to search" text before this round's
+    // tool blocks, matching Anthropic's real ordering:
+    //   text (decision) -> server_tool_use -> web_search_tool_result -> ...
+    for (const b of content) {
+      if (
+        b &&
+        typeof b === "object" &&
+        (b as Record<string, unknown>).type === "text" &&
+        typeof (b as Record<string, unknown>).text === "string" &&
+        (b as Record<string, unknown>).text
+      ) {
+        webBlocks.push({
+          type: "text",
+          text: (b as Record<string, unknown>).text,
+        });
+      }
+    }
+
+    // Execute each web tool call: feed text back to the model, and record the
+    // Anthropic-native server_tool_use + web_search_tool_result blocks for the
+    // client.
+    const toolResults: unknown[] = [];
     for (const tu of toolUses) {
-      const out = await executeWebTool(
-        firecrawl,
-        String(tu.name),
-        (tu.input as Record<string, unknown>) ?? {},
-      );
-      results.push({
+      searchCount++;
+      searchRequests++;
+      const input = (tu.input as Record<string, unknown>) ?? {};
+      const outcome = await executeWebTool(provider, String(tu.name), input);
+
+      // Anthropic uses the "srvtoolu_" prefix for server (hosted) tool ids; the
+      // upstream model emits "toolu_"/"call_", so we mint a matching srv id and
+      // link the result block to it. The upstream conversation keeps the
+      // model's original id (tu.id) so the text tool_result still matches.
+      const srvId = toServerToolId(String(tu.id ?? ""));
+
+      // Client-facing: the model's call as a server_tool_use block...
+      webBlocks.push({
+        type: "server_tool_use",
+        id: srvId,
+        name: tu.name,
+        input,
+      });
+      // ...followed by the result block (error or web_search_result items).
+      if (outcome.error) {
+        webBlocks.push({
+          type: "web_search_tool_result",
+          tool_use_id: srvId,
+          content: {
+            type: "web_search_tool_result_error",
+            error_code: "unavailable",
+          },
+        });
+      } else {
+        webBlocks.push({
+          type: "web_search_tool_result",
+          tool_use_id: srvId,
+          content: outcome.results ?? [],
+        });
+      }
+
+      // Upstream-facing: plain-text tool result so the model reasons over it.
+      toolResults.push({
         type: "tool_result",
         tool_use_id: tu.id,
-        content: [{ type: "text", text: out }],
+        content: [{ type: "text", text: outcome.text }],
       });
     }
-    // Any NON-web tool_use in the same turn can't be satisfied by us — if the
-    // model mixed a client tool in, stop and hand back what we have so the
-    // client can take over.
+
+    // Any NON-web tool_use in the same turn can't be satisfied by us — hand back
+    // what we have so the client can take over.
     const hasForeignTool = content.some(
       (b) =>
         b &&
@@ -151,31 +252,71 @@ export async function runWebToolLoop(
       finalMessage = msg;
       break;
     }
-    messages.push({ role: "user", content: results });
+    messages.push({ role: "user", content: toolResults });
   }
 
   if (!finalMessage) {
-    // Hit the round cap without a clean finish — return the last message if any,
-    // else an error.
-    return {
-      status: 200,
-      usage: total,
-      error: `web-tool loop exceeded ${MAX_ROUNDS} rounds`,
-    };
+    // Round cap hit without a clean finish. Fall back to the last assistant
+    // message (its text, minus any dangling tool_use blocks we can't service)
+    // so the client still gets the searches + whatever the model last said.
+    if (lastMessage) {
+      const lc = Array.isArray(lastMessage.content) ? lastMessage.content : [];
+      finalMessage = {
+        ...lastMessage,
+        content: lc.filter(
+          (b) =>
+            !(
+              b &&
+              typeof b === "object" &&
+              (b as Record<string, unknown>).type === "tool_use"
+            ),
+        ),
+        stop_reason: "end_turn",
+      };
+      logger.warn("web_tool_loop_capped", { rounds: MAX_ROUNDS, searchCount });
+    } else {
+      return {
+        status: 200,
+        usage: total,
+        error: `web-tool loop exceeded ${MAX_ROUNDS} rounds`,
+      };
+    }
   }
 
-  // Emit the final message to the client in its format.
+  // Assemble the client-facing message: the interleaved web-tool trace
+  // (decision text -> server_tool_use -> web_search_tool_result -> ...) followed
+  // by the model's final answer content. Non-web tool_use blocks from the final
+  // turn (client tools) are preserved so the client can execute them.
+  const finalContent = Array.isArray(finalMessage.content)
+    ? finalMessage.content
+    : [];
+  // Inject Anthropic's usage.server_tool_use.web_search_requests so clients that
+  // track search billing/counts see the correct number.
+  const baseUsage =
+    (finalMessage.usage as Record<string, unknown> | undefined) ?? {};
+  const clientMessage: Record<string, unknown> = {
+    ...finalMessage,
+    // Normalise the id to Anthropic's "msg_" form (the upstream may return a
+    // "chatcmpl-…" id that leaks through the OpenAI->Messages bridge).
+    id: toMessageId(finalMessage.id),
+    content: [...webBlocks, ...finalContent],
+    usage: {
+      ...baseUsage,
+      server_tool_use: { web_search_requests: searchRequests },
+    },
+  };
+
+  // Emit to the client in its wire format.
   try {
     if (fmt === "chat") {
+      // Chat Completions has no server_tool_use concept; emit just the final
+      // answer (the web trace isn't expressible in that schema).
       const chat = messagesResponseToChat(finalMessage);
       if (wantStream) emitChatSse(res, chat);
       else sendJson(res, lastStatus, chat);
     } else {
-      // messages (and responses clients tolerate Messages here in practice for
-      // the web-tool use case; responses bridging for tool loops is out of
-      // scope — treated as messages).
-      if (wantStream) emitMessagesSse(res, finalMessage);
-      else sendJson(res, lastStatus, finalMessage);
+      if (wantStream) emitMessagesSse(res, clientMessage);
+      else sendJson(res, lastStatus, clientMessage);
     }
   } catch (err) {
     return {
@@ -188,8 +329,114 @@ export async function runWebToolLoop(
   return { status: lastStatus, usage: total, error: null };
 }
 
-// Re-export the detector so the hook can gate cheaply before constructing deps.
-export { detectWebTools };
+// Short-circuit path: run the search directly (no model call) and return a
+// synthetic Anthropic response — server_tool_use + web_search_tool_result +
+// text — for a standalone web-search-only request. Mirrors LiteLLM's
+// try_short_circuit_search. This is what Claude Code hits.
+async function runShortCircuitSearch(
+  res: Response,
+  ctx: ForwardContext,
+  query: string,
+  fmt: ClientFmt,
+  wantStream: boolean,
+  deps: LoopDeps,
+): Promise<{ status: number; usage: Usage; error: string | null }> {
+  const { logger, provider } = deps;
+  logger.info("web_tool_short_circuit", {
+    query: query.slice(0, 80),
+    stream: wantStream,
+  });
+
+  const outcome = await executeWebTool(provider, WEB_SEARCH, { query });
+  const toolUseId = `srvtoolu_${randHex(24)}`;
+
+  const content: unknown[] = [
+    {
+      type: "server_tool_use",
+      id: toolUseId,
+      name: WEB_SEARCH,
+      input: { query },
+    },
+    outcome.error
+      ? {
+          type: "web_search_tool_result",
+          tool_use_id: toolUseId,
+          content: {
+            type: "web_search_tool_result_error",
+            error_code: "unavailable",
+          },
+        }
+      : {
+          type: "web_search_tool_result",
+          tool_use_id: toolUseId,
+          content: outcome.results ?? [],
+        },
+    // Keep the text block so non-native callers see the same payload shape they
+    // always have (LiteLLM does this too).
+    { type: "text", text: outcome.text },
+  ];
+
+  const message: Record<string, unknown> = {
+    id: `msg_${randHex(24)}`,
+    type: "message",
+    role: "assistant",
+    model: ctx.alias,
+    content,
+    stop_reason: "end_turn",
+    stop_sequence: null,
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      server_tool_use: { web_search_requests: 1 },
+    },
+  };
+
+  try {
+    if (fmt === "chat") {
+      const chat = messagesResponseToChat(message);
+      if (wantStream) emitChatSse(res, chat);
+      else sendJson(res, 200, chat);
+    } else {
+      if (wantStream) emitMessagesSse(res, message);
+      else sendJson(res, 200, message);
+    }
+  } catch (err) {
+    return {
+      status: 500,
+      usage: {},
+      error: `short-circuit emit failed: ${(err as Error).message}`,
+    };
+  }
+  // A Firecrawl failure is delivered to the client as a 200 with an in-body
+  // web_search_tool_result_error block (per Anthropic's spec), NOT a request
+  // error — so the response is a success. Surface the search failure only in
+  // the log note, without flipping the request to an error.
+  if (outcome.error)
+    logger.warn("web_tool_search_failed", { error: outcome.error });
+  return { status: 200, usage: {}, error: null };
+}
+
+// Short random hex id suffix (Anthropic-style opaque ids).
+function randHex(len: number): string {
+  const bytes = randomBytes(Math.ceil(len / 2));
+  return bytes.toString("hex").slice(0, len);
+}
+
+// Normalise an upstream tool id ("toolu_…", "call_…") into Anthropic's server
+// tool id form ("srvtoolu_…"), stripping any existing known prefix so the
+// suffix is preserved and the pairing with its result block stays unique.
+function toServerToolId(id: string): string {
+  const suffix = id.replace(/^(srvtoolu_|toolu_|call_)/, "");
+  return `srvtoolu_${suffix || randHex(24)}`;
+}
+
+// Normalise a message id to Anthropic's "msg_" form. Strips a leading
+// "chatcmpl-" (OpenAI) and any existing "msg_" so we don't double-prefix.
+function toMessageId(id: unknown): string {
+  const s = typeof id === "string" ? id : "";
+  const suffix = s.replace(/^chatcmpl-/, "").replace(/^msg_/, "");
+  return `msg_${suffix || randHex(24)}`;
+}
 
 function sendJson(res: Response, status: number, body: unknown): void {
   if (res.headersSent) return;

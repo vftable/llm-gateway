@@ -68,6 +68,7 @@ import {
 } from "../repo/request-logs";
 import { vacuumFreePages } from "../db";
 import { getSettings, saveSettings } from "../repo/settings";
+import { listWebProviders } from "../gateway/web-providers";
 import type { ModelCapabilities, Settings } from "../shared/types";
 
 export function adminRouter(
@@ -405,9 +406,12 @@ export function adminRouter(
       ssePingInterval: s.ssePingInterval,
       requestLogRetentionDays: s.requestLogRetentionDays,
       debugLogging: s.debugLogging,
-      webToolsFirecrawl: s.webToolsFirecrawl,
-      firecrawlBaseUrl: s.firecrawlBaseUrl,
-      firecrawlApiKey: s.firecrawlApiKey,
+      webToolsEnabled: s.webToolsEnabled,
+      webToolsProvider: s.webToolsProvider,
+      webProviderBaseUrl: s.webProviderBaseUrl,
+      webProviderApiKey: s.webProviderApiKey,
+      // Registered web-provider ids the UI can pick from.
+      webProviders: listWebProviders(),
     };
   };
 
@@ -434,12 +438,14 @@ export function adminRouter(
       patch.requestLogRetentionDays = body.requestLogRetentionDays;
     if (typeof body.debugLogging === "boolean")
       patch.debugLogging = body.debugLogging;
-    if (typeof body.webToolsFirecrawl === "boolean")
-      patch.webToolsFirecrawl = body.webToolsFirecrawl;
-    if (typeof body.firecrawlBaseUrl === "string")
-      patch.firecrawlBaseUrl = body.firecrawlBaseUrl;
-    if (typeof body.firecrawlApiKey === "string")
-      patch.firecrawlApiKey = body.firecrawlApiKey;
+    if (typeof body.webToolsEnabled === "boolean")
+      patch.webToolsEnabled = body.webToolsEnabled;
+    if (typeof body.webToolsProvider === "string")
+      patch.webToolsProvider = body.webToolsProvider;
+    if (typeof body.webProviderBaseUrl === "string")
+      patch.webProviderBaseUrl = body.webProviderBaseUrl;
+    if (typeof body.webProviderApiKey === "string")
+      patch.webProviderApiKey = body.webProviderApiKey;
     saveSettings(db, patch);
     pipeline.reload();
     res.json(publicSettings());

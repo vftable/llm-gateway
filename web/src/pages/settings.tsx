@@ -8,6 +8,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn, fmtNum } from "@/lib/utils";
 
 const SECTIONS = [
@@ -256,47 +263,65 @@ export default function Settings() {
         {active === "webtools" && (
           <div className="rounded-lg border border-border bg-card p-5">
             <h2 className="font-heading text-lg font-medium text-foreground mb-4">
-              Web Tools (Firecrawl)
+              Web Tools
             </h2>
             <div className="grid gap-4">
               <label className="flex items-start gap-3">
                 <Switch
-                  checked={s.webToolsFirecrawl}
-                  onCheckedChange={(v) => set("webToolsFirecrawl", v)}
+                  checked={s.webToolsEnabled}
+                  onCheckedChange={(v) => set("webToolsEnabled", v)}
                   className="mt-0.5"
                 />
                 <span>
                   <span className="block text-sm text-foreground">
-                    Back web_search / web_fetch with Firecrawl
+                    Back web_search / web_fetch with a web provider
                   </span>
                   <span className="block text-[0.65rem] text-muted-foreground">
                     When a client requests Anthropic&apos;s hosted{" "}
                     <code className="text-primary">web_search</code> /{" "}
                     <code className="text-primary">web_fetch</code> tools, the
-                    gateway runs the tool loop itself against Firecrawl — so
-                    search works against any upstream model, no Anthropic
-                    dependency. Requests that search are answered non-streaming
-                    while tools run, then delivered (streamed if requested).
+                    gateway runs the tool loop itself against the selected
+                    provider — so search works against any upstream model, no
+                    Anthropic dependency. Requests that search are answered
+                    non-streaming while tools run, then delivered (streamed if
+                    requested).
                   </span>
                 </span>
               </label>
+              <Field label="Provider" hint="which backend runs the searches">
+                <Select
+                  value={s.webToolsProvider}
+                  onValueChange={(v) => set("webToolsProvider", v)}
+                >
+                  <SelectTrigger className="max-w-xs">
+                    <SelectValue placeholder="Select a provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(s.webProviders ?? [s.webToolsProvider]).map((p) => (
+                      <SelectItem key={p} value={p} className="capitalize">
+                        {p}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </Field>
               <Field
-                label="Firecrawl base URL"
-                hint="blank = public API (https://api.firecrawl.dev)"
+                label="Provider base URL"
+                hint="blank = the provider's default endpoint"
               >
                 <Input
-                  value={s.firecrawlBaseUrl}
-                  onChange={(e) => set("firecrawlBaseUrl", e.target.value)}
-                  placeholder="https://api.firecrawl.dev"
+                  value={s.webProviderBaseUrl}
+                  onChange={(e) => set("webProviderBaseUrl", e.target.value)}
+                  placeholder="(default)"
                 />
               </Field>
               <Field
-                label="Firecrawl API key"
-                hint="blank = keyless (public API needs no key)"
+                label="Provider API key"
+                hint="blank = keyless where the provider supports it"
               >
                 <Input
-                  value={s.firecrawlApiKey}
-                  onChange={(e) => set("firecrawlApiKey", e.target.value)}
+                  value={s.webProviderApiKey}
+                  onChange={(e) => set("webProviderApiKey", e.target.value)}
                   placeholder="(optional)"
                 />
               </Field>

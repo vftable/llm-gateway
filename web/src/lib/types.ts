@@ -221,9 +221,12 @@ export interface Settings {
   ssePingInterval: number;
   requestLogRetentionDays: number;
   debugLogging: boolean;
-  webToolsFirecrawl: boolean;
-  firecrawlBaseUrl: string;
-  firecrawlApiKey: string;
+  webToolsEnabled: boolean;
+  webToolsProvider: string;
+  webProviderBaseUrl: string;
+  webProviderApiKey: string;
+  /** Read-only: registered web-provider ids (for the picker). */
+  webProviders?: string[];
 }
 
 export interface ProviderInput {
