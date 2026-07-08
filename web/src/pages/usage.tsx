@@ -476,14 +476,14 @@ const KeyUsageRow = memo(function KeyUsageRow({
                 No requests from this key today.
               </p>
             ) : (
-              <Table>
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-12">Model</TableHead>
-                    <TableHead>Provider</TableHead>
-                    <TableHead className="text-right">Requests</TableHead>
-                    <TableHead className="text-right">Tokens</TableHead>
-                    <TableHead className="text-right pr-4">Share</TableHead>
+                    <TableHead className="w-40">Provider</TableHead>
+                    <TableHead className="w-24 text-right">Requests</TableHead>
+                    <TableHead className="w-28 text-right">Tokens</TableHead>
+                    <TableHead className="w-20 text-right pr-4">Share</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -497,7 +497,7 @@ const KeyUsageRow = memo(function KeyUsageRow({
                               alias={d.model}
                               type={modelTypes[d.model]}
                             />
-                            {d.model}
+                            <span className="truncate">{d.model}</span>
                           </span>
                         </TableCell>
                         <TableCell>

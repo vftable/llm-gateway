@@ -240,4 +240,14 @@ function migrate(db: DB): void {
   addColumnIfMissing(db, "request_logs", "cached_tokens", "INTEGER");
   addColumnIfMissing(db, "request_logs", "debug_request", "TEXT");
   addColumnIfMissing(db, "request_logs", "debug_response", "TEXT");
+  // Per-group request counter. Each usage_breakdown row aggregates many requests
+  // for one (key, day, model, provider); without this column COUNT(*) is always
+  // 1 (one row per group). Backfilled to 1 for existing rows; rebuild-from-logs
+  // recomputes the true counts.
+  addColumnIfMissing(
+    db,
+    "usage_breakdown",
+    "requests",
+    "INTEGER NOT NULL DEFAULT 0",
+  );
 }
