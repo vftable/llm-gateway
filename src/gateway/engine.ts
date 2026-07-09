@@ -19,25 +19,48 @@
 import http from "http";
 import https from "https";
 import { URL } from "url";
-import { Transform, pipeline as streamPipeline } from "stream";
+import { randomBytes } from "crypto";
+import { pipeline as streamPipeline } from "stream";
 import type { IncomingMessage } from "http";
 import type { Request, Response } from "express";
 import type { Database as DB } from "better-sqlite3";
 import type { Logger } from "../logger";
-import type { ApiKey, Model, Provider } from "../shared/types";
-import { ThinkingConverter } from "../thinking";
-import { ResponsesBridge } from "../responses-bridge";
-import { StreamingResponsesBridgeTransform } from "../responses-bridge";
-import { SseThinkingTransform } from "../streaming-thinking";
-import { AnthropicThinkingTransform } from "../streaming-anthropic";
-import { SsePingKeepAlive } from "../sse-ping";
+import type {
+  ApiKey,
+  Model,
+  Provider,
+  ModelTransformConfig,
+} from "../types";
+import { agentFor } from "./proxy-agent";
+import { buildUpstreamUrl, hostFromUrl } from "./url";
+import { adapterForProvider } from "../providers";
+import { getProviderModel } from "../repo/provider-models";
+import { modelTransformBags } from "../formats/transforms";
+import {
+  KeyHealthStore,
+  parseRateLimit,
+  AUTH_FAIL_STATUS,
+  type KeyPick,
+} from "./key-health";
+import { ThinkingConverter } from "../formats/thinking";
+import {
+  buildTransformPlan,
+  applyBodyTransforms,
+  applyThinking,
+  thinkingStream,
+  type TransformCtx,
+  type RequestTransform,
+  type ResponseTransform,
+  type StreamTransform,
+} from "../formats/pipeline";
+import { SsePingKeepAlive } from "./sse-ping";
 import { SseUsageObserver } from "./sse-usage";
-import { requestJson, type JsonResponse } from "./http-json";
-import { detectWebTools } from "./web-tools";
-import { runWebToolLoop } from "./web-tool-loop";
-import { getWebProvider, DEFAULT_PROVIDER } from "./web-providers";
+import { requestJson, type JsonResponse } from "./http";
+import { detectWebTools } from "../web-tools/tools";
+import { runWebToolLoop } from "../web-tools/loop";
+import { getWebProvider, DEFAULT_PROVIDER } from "../web-tools/backends";
 import { stripInvisible } from "../utils";
-import { readResponseUsage } from "../tokens";
+import { readResponseUsage, readMaxOutputTokens } from "../formats/tokens";
 import { listProviders } from "../repo/providers";
 import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
 import { insertRequestLog } from "../repo/request-logs";
@@ -47,14 +70,6 @@ import {
   captureResponse,
   packResponseSummary,
 } from "./debug-capture";
-import {
-  chatRequestToMessages,
-  chatResponseToMessages,
-  messagesRequestToChat,
-  messagesResponseToChat,
-  ChatToMessagesSseTransform,
-  MessagesToChatSseTransform,
-} from "../anthropic-openai-bridge";
 
 const HOP_BY_HOP = new Set([
   "connection",
@@ -83,14 +98,34 @@ function pathFmt(p: string | undefined | null): Fmt | null {
   return null;
 }
 
-// Per-attempt route plan: where to send + how to convert.
+// One resolved hop in a model's fallback chain: the provider to try, the
+// upstream model id, its endpoint, plus the effective per-hop context window
+// (link override ?? imported-model base) and the imported model's transforms.
+interface ChainEntry {
+  provider: Provider;
+  upstreamModel: string;
+  endpoint: string | null;
+  contextWindow: number | null;
+  transforms: ModelTransformConfig[];
+}
+
+// Per-attempt route plan: where to send + the ordered transform stages (format
+// conversion + any adapter-custom transforms) for request, response and stream.
+// Built by buildRoute from the provider adapter + formats/pipeline.
 interface Route {
   forwardPath: string;
   providerFmt: Fmt;
   convert: boolean;
-  reqConvert: ((b: Record<string, unknown>) => Record<string, unknown>) | null;
-  respConvert: ((b: Record<string, unknown>) => Record<string, unknown>) | null;
-  streamBridge: (() => Transform) | null;
+  /** Ordered request-body stages (client -> provider), then custom. */
+  request: RequestTransform[];
+  /** Ordered buffered-response stages (provider -> client), then custom. */
+  response: ResponseTransform[];
+  /** Ordered SSE stages (format bridge, then custom). */
+  stream: StreamTransform[];
+  /** True when a format-level stream bridge is present (for the unsupported check). */
+  streamBridged: boolean;
+  /** Context passed to every transform. */
+  xctx: TransformCtx;
   unsupported?: string;
 }
 
@@ -110,6 +145,10 @@ export interface ForwardContext {
   /** When true, capture distilled request/response payloads for the debug view.
    *  Read once per request from settings.debugLogging. */
   debug: boolean;
+  /** Short correlation id for this request, set only when debug logging is on.
+   *  When present it enables the per-transformation trace and ties the trace,
+   *  attempts, and the final summary line together. */
+  reqId?: string;
   /** Distilled client request JSON, computed once when debug is on. */
   debugRequest?: string | null;
   /** Web-tools config; when enabled, requests carrying the hosted web_search /
@@ -136,6 +175,10 @@ interface AttemptResult {
   debugResponse?: string | null;
   reason?: string;
   error?: string | null;
+  /** Hash of the upstream key used, so forward() can record its health. */
+  keyHash?: string | null;
+  /** Cooldown (ms) parsed from a 429 response's Retry-After, for the key. */
+  rateLimitMs?: number;
 }
 
 // Upstream-reported usage shape (subset of readResponseUsage's return).
@@ -146,15 +189,16 @@ interface StreamUsageLike {
 }
 
 export class ForwardingEngine {
-  private keyCursor = new Map<string, number>();
+  private readonly keyHealth: KeyHealthStore;
 
   constructor(
     private readonly db: DB,
     private readonly logger: Logger,
     private readonly thinking: ThinkingConverter,
-    private readonly bridge: ResponsesBridge,
     private readonly ssePingInterval: number,
-  ) {}
+  ) {
+    this.keyHealth = new KeyHealthStore(db);
+  }
 
   // SSE keepalive interval (ms) for callers that emit their own stream (e.g. the
   // web-tool loop, which writes a synthetic SSE response directly). 0 disables.
@@ -164,100 +208,106 @@ export class ForwardingEngine {
 
   // --- chain + route --------------------------------------------------------
 
-  private buildChain(model: Model | null): Array<{
-    provider: Provider;
-    upstreamModel: string;
-    endpoint: string | null;
-  }> {
+  private buildChain(model: Model | null): ChainEntry[] {
     if (!model) return [];
     const enabledProviders = new Map(
       listProviders(this.db, false).map((p) => [p.id, p]),
     );
-    const chain: Array<{
-      provider: Provider;
-      upstreamModel: string;
-      endpoint: string | null;
-    }> = [];
+    const chain: ChainEntry[] = [];
     for (const link of model.providers) {
       if (!link.enabled) continue;
       const provider = enabledProviders.get(link.providerId);
-      if (provider && provider.enabled)
-        chain.push({
-          provider,
-          upstreamModel: link.upstreamModel,
-          endpoint: link.endpoint ?? null,
-        });
+      if (!provider || !provider.enabled) continue;
+      // Resolve the imported provider-model this hop references, for its base
+      // context window + per-model transforms. Link overrides win over the base.
+      const imported = getProviderModel(
+        this.db,
+        provider.id,
+        link.upstreamModel,
+      );
+      chain.push({
+        provider,
+        upstreamModel: link.upstreamModel,
+        endpoint: link.endpoint ?? null,
+        contextWindow:
+          link.contextWindow ?? imported?.contextWindow ?? null,
+        transforms: imported?.transforms ?? [],
+      });
     }
     if (chain.length === 0) {
       for (const provider of enabledProviders.values())
-        chain.push({ provider, upstreamModel: model.alias, endpoint: null });
+        chain.push({
+          provider,
+          upstreamModel: model.alias,
+          endpoint: null,
+          contextWindow: null,
+          transforms: [],
+        });
     }
     return chain;
   }
 
-  // Resolve the endpoint path for a provider link: explicit link endpoint ->
-  // first supported provider endpoint -> format default.
-  private resolveEndpoint(provider: Provider, endpoint: string | null): string {
-    if (endpoint && pathFmt(endpoint)) return endpoint;
-    if (provider.endpoints?.length && pathFmt(provider.endpoints[0]))
-      return provider.endpoints[0];
-    return provider.format === "anthropic"
-      ? "/v1/messages"
-      : "/v1/chat/completions";
-  }
-
-  // Build the conversion plan for one attempt.
+  // Build the conversion plan for one attempt. Delegates the endpoint + native
+  // format decision to the provider's adapter, then composes the ordered
+  // transform stages (built-in format conversion + adapter-custom transforms)
+  // via formats/pipeline. `onStage` logs the declared pipeline when debug is on.
   private buildRoute(
     clientPath: string,
-    provider: Provider,
-    endpoint: string | null,
+    entry: ChainEntry,
+    reqId?: string,
+    alias?: string,
   ): Route {
+    const { provider, endpoint } = entry;
     const clientFmt = pathFmt(clientPath) ?? "chat";
-    // nativeConversion: provider accepts the client's format/endpoint directly.
-    if (provider.nativeConversion) {
-      return {
-        forwardPath: clientPath.split("?")[0],
-        providerFmt: clientFmt,
-        convert: false,
-        reqConvert: null,
-        respConvert: null,
-        streamBridge: null,
-      };
-    }
-    const forwardPath = this.resolveEndpoint(provider, endpoint);
-    const providerFmt = pathFmt(forwardPath) ?? "chat";
-    const convert = clientFmt !== providerFmt;
-    if (!convert) {
-      return {
-        forwardPath,
-        providerFmt,
-        convert: false,
-        reqConvert: null,
-        respConvert: null,
-        streamBridge: null,
-      };
-    }
-    const reqConvert = reqConverter(clientFmt, providerFmt);
-    const respConvert = respConverter(providerFmt, clientFmt);
-    const streamBridge = streamBridgeFactory(providerFmt, clientFmt);
-    if (!reqConvert || !respConvert) {
-      return {
-        forwardPath,
-        providerFmt,
-        convert: true,
-        reqConvert,
-        respConvert,
-        streamBridge,
-        unsupported: `gateway cannot convert ${clientFmt} <-> ${providerFmt} for provider '${provider.id}'`,
-      };
-    }
+    const adapter = adapterForProvider(provider);
+
+    // nativeConversion: provider accepts the client's format/endpoint directly,
+    // no built-in conversion — but adapter-custom transforms still apply.
+    const endpointPlan = provider.nativeConversion
+      ? { forwardPath: clientPath.split("?")[0], providerFmt: clientFmt }
+      : adapter.planFor(clientFmt, provider, endpoint);
+
+    const xctx: TransformCtx = {
+      provider,
+      clientFmt,
+      providerFmt: endpointPlan.providerFmt,
+      alias,
+      upstreamModel: entry.upstreamModel,
+    };
+
+    // reqId is supplied only when debug logging is on, so its presence gates the
+    // per-stage trace (zero cost otherwise).
+    const onStage = reqId
+      ? (dir: string, name: string) =>
+          this.logger.transform(dir, name, {
+            provider: provider.id,
+            fmt: `${clientFmt}->${endpointPlan.providerFmt}`,
+            reqId,
+          })
+      : undefined;
+
+    // Merge adapter (provider-scoped) + model (imported-model-scoped) transforms.
+    // Model stages run after adapter stages within each phase.
+    const adapterBag = adapter.transforms(provider);
+    const modelBag = modelTransformBags(entry.transforms);
+    const extra = {
+      request: [...(adapterBag.request ?? []), ...modelBag.request],
+      response: [...(adapterBag.response ?? []), ...modelBag.response],
+      stream: adapterBag.stream ?? [],
+    };
+
+    const plan = buildTransformPlan(clientFmt, endpointPlan, extra, onStage);
+
     return {
-      forwardPath,
-      providerFmt,
-      convert: true,
-      reqConvert,
-      respConvert,
-      streamBridge,
+      forwardPath: plan.forwardPath,
+      providerFmt: plan.providerFmt,
+      convert: clientFmt !== plan.providerFmt,
+      request: plan.request,
+      response: plan.response,
+      stream: plan.stream,
+      streamBridged: plan.stream.some((s) => s.name.startsWith("stream:")),
+      xctx,
+      unsupported: plan.unsupported,
     };
   }
 
@@ -270,8 +320,10 @@ export class ForwardingEngine {
   ): Promise<void> {
     const startedAt = Date.now();
     // Distill the client request once, up front, from the already-parsed body
-    // (no extra buffering). Captured for every attempt's log row.
+    // (no extra buffering). Captured for every attempt's log row. When debug is
+    // on, stamp a short correlation id that enables the per-transformation trace.
     if (ctx.debug) {
+      ctx.reqId = shortId();
       try {
         ctx.debugRequest = captureRequest(ctx.requestBody);
       } catch {
@@ -293,7 +345,27 @@ export class ForwardingEngine {
       return;
     }
 
-    const chain = this.buildChain(ctx.resolvedModel);
+    let chain: ChainEntry[];
+    try {
+      chain = this.buildChain(ctx.resolvedModel);
+    } catch (err) {
+      // A DB read while building the chain failed (e.g. SQLITE_BUSY). Fail the
+      // request cleanly instead of letting the rejection escape to a 500.
+      this.logger.error("build_chain_failed", { err: (err as Error).message });
+      this.finish502(res, "Gateway could not resolve the provider chain.");
+      this.recordLog(
+        ctx,
+        null,
+        null,
+        502,
+        null,
+        null,
+        null,
+        `build chain failed: ${(err as Error).message}`,
+        startedAt,
+      );
+      return;
+    }
     if (chain.length === 0) {
       this.logger.error("no_providers", { model: ctx.alias });
       this.finish502(res, "No provider is configured for this model.");
@@ -312,18 +384,44 @@ export class ForwardingEngine {
     }
 
     let lastReason = "no attempts";
-    let first: {
-      provider: Provider;
-      upstreamModel: string;
-      endpoint: string | null;
-    } | null = null;
+    let first: ChainEntry | null = null;
     for (const entry of chain) {
       if (!first) first = entry;
-      const route = this.buildRoute(
-        ctx.clientPath,
-        entry.provider,
-        entry.endpoint,
-      );
+      // Safe fallback: if this hop advertises a context window this request
+      // would exceed, skip it and try the next provider rather than sending an
+      // oversized request that will fail upstream.
+      const maxOut =
+        readMaxOutputTokens(ctx.requestBody) ??
+        ctx.resolvedModel?.maxOutputTokens ??
+        0;
+      if (
+        entry.contextWindow &&
+        entry.contextWindow > 0 &&
+        ctx.inputTokens + maxOut > entry.contextWindow
+      ) {
+        lastReason = `hop context window ${entry.contextWindow} < projected ${ctx.inputTokens + maxOut}`;
+        this.logger.warn("context_skip", {
+          provider: entry.provider.id,
+          model: entry.upstreamModel,
+          hopContextWindow: entry.contextWindow,
+          projected: ctx.inputTokens + maxOut,
+        });
+        continue; // fall through to the next hop
+      }
+      let route: Route;
+      try {
+        route = this.buildRoute(ctx.clientPath, entry, ctx.reqId, ctx.alias);
+      } catch (err) {
+        // A bespoke adapter or transform threw while building the plan. Treat it
+        // like an unsupported hop and fall over to the next provider.
+        lastReason = `route build failed: ${(err as Error).message}`;
+        this.logger.warn("route_build_failed", {
+          provider: entry.provider.id,
+          model: entry.upstreamModel,
+          err: (err as Error).message,
+        });
+        continue;
+      }
       if (route.unsupported) {
         lastReason = route.unsupported;
         this.logger.warn("conversion_unsupported", {
@@ -333,9 +431,24 @@ export class ForwardingEngine {
         });
         continue; // try the next provider in the chain
       }
-      const attempts = Math.max(1, entry.provider.retryAttempts);
+      // Attempt budget: at least the provider's configured retries, but widened
+      // so a multi-key provider can fail a rate-limited/auth-failed key over to
+      // a healthy one within this request (bounded by the key count).
+      const usable = this.keyHealth.usableCount(entry.provider);
+      const attempts = Math.max(
+        1,
+        entry.provider.retryAttempts,
+        Math.min(usable || 1, entry.provider.apiKeys.length || 1),
+      );
+      const tried = new Set<string>();
       for (let attempt = 1; attempt <= attempts; attempt++) {
         if (res.headersSent || res.writableEnded) return;
+        const pick = this.keyHealth.select(
+          entry.provider,
+          entry.upstreamModel,
+          tried,
+        );
+        if (pick) tried.add(pick.keyHash);
         const result = await this.attemptOnce(
           req,
           res,
@@ -343,7 +456,37 @@ export class ForwardingEngine {
           entry,
           route,
           startedAt,
+          pick,
         );
+        // Feed the outcome back into key health (skip client-disconnect 499).
+        if (pick && result.status !== 499) {
+          if (result.committed && result.status && result.status < 400) {
+            this.keyHealth.recordSuccess(
+              entry.provider.id,
+              pick.keyHash,
+              entry.upstreamModel,
+            );
+          } else if (result.status && AUTH_FAIL_STATUS.has(result.status)) {
+            this.keyHealth.markAuthFailed(entry.provider.id, pick.keyHash);
+          } else if (result.status === 429) {
+            this.keyHealth.markRateLimited(
+              entry.provider.id,
+              pick.keyHash,
+              result.rateLimitMs ?? 60_000,
+            );
+            this.keyHealth.recordFailure(
+              entry.provider.id,
+              pick.keyHash,
+              entry.upstreamModel,
+            );
+          } else if (!result.committed) {
+            this.keyHealth.recordFailure(
+              entry.provider.id,
+              pick.keyHash,
+              entry.upstreamModel,
+            );
+          }
+        }
         if (result.committed) {
           // A streaming attempt settles + logs itself when its pipeline ends
           // (the real token counts aren't known until then); don't double-log.
@@ -429,37 +572,58 @@ export class ForwardingEngine {
     },
     route: Route,
     startedAt: number,
+    pick: KeyPick | null,
   ): Promise<AttemptResult> {
     const { provider, upstreamModel } = entry;
+    const keyHash = pick?.keyHash ?? null;
 
-    // Convert the client body into the provider's format, then stamp the
-    // upstream model id. Falls back to the original body on conversion error.
-    let body: Record<string, unknown>;
+    // Run the request through its ordered transform stages (format conversion
+    // then any adapter-custom stages), then stamp the upstream model id. Falls
+    // back to the original body on conversion error.
+    let serialized: Buffer;
     try {
-      body = route.reqConvert
-        ? route.reqConvert({ ...ctx.requestBody })
-        : { ...ctx.requestBody };
+      const body = applyBodyTransforms(
+        route.request,
+        { ...ctx.requestBody },
+        route.xctx,
+        this.stageApplyLogger(ctx, "req"),
+      );
+      body.model = upstreamModel;
+      // JSON.stringify can throw on a BigInt / circular structure a transform
+      // produced — keep it inside the guard so the attempt fails over cleanly.
+      serialized = Buffer.from(JSON.stringify(body), "utf8");
     } catch (err) {
       return Promise.resolve({
         committed: false,
         reason: `request conversion failed: ${(err as Error).message}`,
       });
     }
-    body.model = upstreamModel;
-    const serialized = Buffer.from(JSON.stringify(body), "utf8");
 
     let upstreamUrl: URL;
     try {
-      upstreamUrl = new URL(route.forwardPath, provider.baseUrl);
+      // Join base + path by concatenation (not `new URL(path, base)`, which
+      // discards any path prefix in baseUrl). Composes origin + basePath +
+      // forwardPath so Gemini-style layouts and OpenRouter's `/api` both work.
+      upstreamUrl = buildUpstreamUrl(provider, route.forwardPath);
     } catch {
       return Promise.resolve({
         committed: false,
         reason: `bad provider baseUrl: ${provider.baseUrl}`,
       });
     }
-    const key = this.pickKey(provider);
+    const key = pick?.key ?? null;
     const headers = this.buildHeaders(req, provider, key, serialized.length);
-    const transport = upstreamUrl.protocol === "https:" ? https : http;
+    const isHttps = upstreamUrl.protocol === "https:";
+    const transport = isHttps ? https : http;
+    let proxyAgent: ReturnType<typeof agentFor>;
+    try {
+      proxyAgent = agentFor(provider.proxy, isHttps);
+    } catch (err) {
+      return Promise.resolve({
+        committed: false,
+        reason: `bad provider proxy: ${(err as Error).message}`,
+      });
+    }
 
     return new Promise((resolvePromise) => {
       let timer: ReturnType<typeof setTimeout> | null = null;
@@ -476,7 +640,8 @@ export class ForwardingEngine {
       };
       const resolve = (r: AttemptResult) => {
         res.off("close", onClientClose);
-        resolvePromise(r);
+        // Stamp the key used so forward() can attribute the outcome to it.
+        resolvePromise({ ...r, keyHash: r.keyHash ?? keyHash });
       };
 
       const proxyReq = transport.request(
@@ -489,6 +654,7 @@ export class ForwardingEngine {
           path: `${upstreamUrl.pathname}${upstreamUrl.search}`,
           headers,
           rejectUnauthorized: provider.tlsVerify,
+          ...(proxyAgent ? { agent: proxyAgent } : {}),
         },
         (upRes) => {
           if (timer) {
@@ -563,7 +729,11 @@ export class ForwardingEngine {
 
     if (RETRY_STATUS.has(status)) {
       upRes.resume();
-      return { committed: false, status, reason: `status ${status}` };
+      // Parse the cooldown so forward() can rate-limit this key for the right
+      // duration before failing over.
+      const rateLimitMs =
+        status === 429 ? parseRateLimit(headers) : undefined;
+      return { committed: false, status, reason: `status ${status}`, rateLimitMs };
     }
 
     if (status < 200 || status >= 300) {
@@ -657,13 +827,22 @@ export class ForwardingEngine {
     if (route.convert) out["content-type"] = "text/event-stream";
 
     const thinking = thinkingStream(route.providerFmt);
-    const bridge =
-      route.convert && route.streamBridge ? route.streamBridge() : null;
+    // Materialize the ordered SSE stages from the plan (format bridge, then any
+    // adapter-custom stream transforms). Log the assembled pipeline once here —
+    // never per event.
+    const streamStages = route.stream.map((s) => {
+      if (ctx.reqId)
+        this.logger.transform("stream", s.name, {
+          provider: provider.id,
+          reqId: ctx.reqId,
+        });
+      return s.create(route.xctx);
+    });
 
-    // Unsupported streaming conversion — end gracefully with a clear note.
-    // Settle the reservation (no usage to apply) and log the failure since the
-    // normal end-of-pipeline path below won't run.
-    if (route.convert && !bridge) {
+    // Unsupported streaming conversion — a format bridge was required but none
+    // exists. End gracefully with a clear note; settle the reservation and log
+    // the failure since the normal end-of-pipeline path below won't run.
+    if (route.convert && !route.streamBridged) {
       this.logger.warn("stream_conversion_unsupported", {
         providerFmt: route.providerFmt,
       });
@@ -748,7 +927,7 @@ export class ForwardingEngine {
     // stream.pipeline propagates errors and destroy() across every stage, so a
     // client abort mid-stream tears down the upstream socket (and vice versa)
     // instead of leaking it. Plain .pipe() does not do this.
-    const stages = [usageObserver, thinking, bridge, ping].filter(
+    const stages = [usageObserver, thinking, ...streamStages, ping].filter(
       Boolean,
     ) as NodeJS.ReadWriteStream[];
     streamPipeline([upRes, ...stages, res], (err) => {
@@ -830,21 +1009,26 @@ export class ForwardingEngine {
     // from the PROVIDER-shape body before any bridging.
     const debugResponse = ctx.debug ? safeCaptureResponse(parsed) : undefined;
 
-    // 1) thinking extraction in PROVIDER format.
+    // 1) thinking extraction in PROVIDER format (reads provider-native fields,
+    //    so it runs before the format/custom response stages).
     applyThinking(this.thinking, route.providerFmt, parsed);
 
-    // 2) bridge PROVIDER shape -> CLIENT shape (when converting).
+    // 2) run the response through its ordered transform stages (format bridge
+    //    provider->client, then adapter-custom stages).
     let outBody: unknown = parsed;
-    if (route.convert && route.respConvert) {
-      try {
-        outBody = route.respConvert(parsed);
-      } catch (err) {
-        this.logger.warn("response_conversion_failed", {
-          err: (err as Error).message,
-        });
-        this.sendRaw(res, status, headers, stripped);
-        return { ...actual, debugResponse };
-      }
+    try {
+      outBody = applyBodyTransforms(
+        route.response,
+        parsed,
+        route.xctx,
+        this.stageApplyLogger(ctx, "resp"),
+      );
+    } catch (err) {
+      this.logger.warn("response_conversion_failed", {
+        err: (err as Error).message,
+      });
+      this.sendRaw(res, status, headers, stripped);
+      return { ...actual, debugResponse };
     }
 
     const out = Buffer.from(JSON.stringify(outBody), "utf8");
@@ -921,21 +1105,28 @@ export class ForwardingEngine {
     usage: { input?: number; output?: number },
   ): void {
     if (!ctx.apiKey) return;
-    // 1) Release the reservation so it can't linger on the daily counter.
-    if (ctx.reservedTokens > 0)
-      subtractUsage(this.db, ctx.apiKey.id, ctx.reservedTokens);
-    // 2) Apply the actual usage (input + output). Missing pieces already fell
-    //    back to estimates upstream (streaming observer / buffered read).
-    const total = (usage.input ?? 0) + (usage.output ?? 0);
-    if (total > 0) {
-      addUsage(this.db, ctx.apiKey.id, total);
-      addBreakdown(
-        this.db,
-        ctx.apiKey.id,
-        ctx.alias,
-        provider?.id ?? null,
-        total,
-      );
+    // These are raw better-sqlite3 writes; a transient DB error must not escape
+    // — several callers run in stream/end callbacks where a throw would be an
+    // uncaught exception. Accounting drift on a rare write failure is acceptable.
+    try {
+      // 1) Release the reservation so it can't linger on the daily counter.
+      if (ctx.reservedTokens > 0)
+        subtractUsage(this.db, ctx.apiKey.id, ctx.reservedTokens);
+      // 2) Apply the actual usage (input + output). Missing pieces already fell
+      //    back to estimates upstream (streaming observer / buffered read).
+      const total = (usage.input ?? 0) + (usage.output ?? 0);
+      if (total > 0) {
+        addUsage(this.db, ctx.apiKey.id, total);
+        addBreakdown(
+          this.db,
+          ctx.apiKey.id,
+          ctx.alias,
+          provider?.id ?? null,
+          total,
+        );
+      }
+    } catch (err) {
+      this.logger.warn("settle_usage_failed", { err: (err as Error).message });
     }
   }
 
@@ -963,8 +1154,9 @@ export class ForwardingEngine {
     for (const entry of chain) {
       const route = this.buildRoute(
         "/v1/messages",
-        entry.provider,
-        entry.endpoint,
+        entry,
+        ctx.reqId,
+        ctx.alias,
       );
       if (route.unsupported) {
         lastReason = route.unsupported;
@@ -1000,12 +1192,11 @@ export class ForwardingEngine {
     | { ok: true; body: Record<string, unknown>; usage: StreamUsageLike }
     | { ok: false; status: number; reason: string; retryable: boolean }
   > {
-    // Convert Messages -> provider format, force non-streaming, stamp model.
+    // Convert Messages -> provider format (via the ordered request stages),
+    // force non-streaming, stamp model.
     let body: Record<string, unknown>;
     try {
-      body = route.reqConvert
-        ? route.reqConvert({ ...messagesBody })
-        : { ...messagesBody };
+      body = applyBodyTransforms(route.request, { ...messagesBody }, route.xctx);
     } catch (err) {
       return {
         ok: false,
@@ -1020,7 +1211,7 @@ export class ForwardingEngine {
 
     let upstreamUrl: URL;
     try {
-      upstreamUrl = new URL(route.forwardPath, provider.baseUrl);
+      upstreamUrl = buildUpstreamUrl(provider, route.forwardPath);
     } catch {
       return {
         ok: false,
@@ -1029,11 +1220,13 @@ export class ForwardingEngine {
         retryable: false,
       };
     }
-    const key = this.pickKey(provider);
+    // Health-aware key pick for the (non-streaming) web-tool turn. Each turn is
+    // a fresh selection so a rate-limited/auth-failed key is skipped.
+    const pick = this.keyHealth.select(provider, upstreamModel, new Set());
     const headers = this.buildHeaders(
       req,
       provider,
-      key,
+      pick?.key ?? null,
       Buffer.byteLength(serialized),
     );
 
@@ -1045,6 +1238,7 @@ export class ForwardingEngine {
         body: serialized,
         timeoutMs: provider.requestTimeoutMs,
         tlsVerify: provider.tlsVerify,
+        agent: agentFor(provider.proxy, upstreamUrl.protocol === "https:"),
       });
     } catch (err) {
       return {
@@ -1055,20 +1249,26 @@ export class ForwardingEngine {
       };
     }
 
-    if (RETRY_STATUS.has(res.status))
+    if (RETRY_STATUS.has(res.status)) {
+      if (pick && res.status === 429)
+        this.keyHealth.markRateLimited(provider.id, pick.keyHash, 60_000);
       return {
         ok: false,
         status: res.status,
         reason: `status ${res.status}`,
         retryable: true,
       };
-    if (res.status < 200 || res.status >= 300)
+    }
+    if (res.status < 200 || res.status >= 300) {
+      if (pick && AUTH_FAIL_STATUS.has(res.status))
+        this.keyHealth.markAuthFailed(provider.id, pick.keyHash);
       return {
         ok: false,
         status: res.status,
         reason: `upstream ${res.status}: ${res.text.slice(0, 300)}`,
         retryable: false,
       };
+    }
 
     let parsed: Record<string, unknown>;
     try {
@@ -1085,13 +1285,13 @@ export class ForwardingEngine {
     // Bridge provider-shape -> Messages shape so the loop always sees Messages.
     applyThinking(this.thinking, route.providerFmt, parsed);
     let messages: Record<string, unknown> = parsed;
-    if (route.convert && route.respConvert) {
-      try {
-        messages = route.respConvert(parsed);
-      } catch {
-        messages = parsed;
-      }
+    try {
+      messages = applyBodyTransforms(route.response, parsed, route.xctx);
+    } catch {
+      messages = parsed;
     }
+    if (pick)
+      this.keyHealth.recordSuccess(provider.id, pick.keyHash, upstreamModel);
     const usage = readResponseUsage(parsed);
     return { ok: true, body: messages, usage };
   }
@@ -1212,18 +1412,22 @@ export class ForwardingEngine {
     }
   }
 
-  // --- headers + round-robin key rotation -----------------------------------
+  // --- transform trace -------------------------------------------------------
 
-  // Pick the next API key for the provider, round-robin. With N keys the call
-  // cycles 0,1,…,N-1,0,1,… so load is spread evenly across requests. Returns
-  // null when the provider has no keys configured.
-  private pickKey(provider: Provider): string | null {
-    const keys = provider.apiKeys;
-    if (!keys.length) return null;
-    const idx = this.keyCursor.get(provider.id) ?? 0;
-    this.keyCursor.set(provider.id, (idx + 1) % keys.length);
-    return keys[idx % keys.length];
+  // Build the per-stage apply callback for applyBodyTransforms. Returns
+  // undefined when debug logging is off (ctx.reqId unset) so there's zero cost.
+  private stageApplyLogger(
+    ctx: ForwardContext,
+    dir: "req" | "resp",
+  ): ((name: string, changed: boolean) => void) | undefined {
+    const reqId = ctx.reqId;
+    if (!reqId) return undefined;
+    return (name, changed) =>
+      this.logger.transform(dir, name, { reqId, changed });
   }
+
+  // --- headers --------------------------------------------------------------
+  // Key selection + round-robin rotation now live in KeyHealthStore (this.keyHealth).
 
   private buildHeaders(
     req: Request,
@@ -1262,15 +1466,8 @@ export class ForwardingEngine {
   }
 }
 
-// ===========================================================================
-// Conversion tables (clientFmt <-> providerFmt)
-// ===========================================================================
-
-type BodyConverter = (b: Record<string, unknown>) => Record<string, unknown>;
-
-function identity(b: Record<string, unknown>): Record<string, unknown> {
-  return b;
-}
+// Format conversion tables + thinking helpers now live in formats/pipeline.ts
+// (imported above). Only response-path helpers specific to the engine remain.
 
 // Debug capture must never break the response path — swallow any error.
 function safeCaptureResponse(
@@ -1283,75 +1480,9 @@ function safeCaptureResponse(
   }
 }
 
-// Request: from -> to.
-function reqConverter(from: Fmt, to: Fmt): BodyConverter | null {
-  if (from === to) return identity;
-  if (from === "messages" && to === "chat") return messagesRequestToChat;
-  if (from === "chat" && to === "messages") return chatRequestToMessages;
-  if (from === "responses" && to === "chat")
-    return (b) => responsesRequestToChat(b);
-  return null;
-}
-
-// Non-streaming response: from -> to.
-function respConverter(from: Fmt, to: Fmt): BodyConverter | null {
-  if (from === to) return identity;
-  if (from === "chat" && to === "messages") return chatResponseToMessages;
-  if (from === "messages" && to === "chat") return messagesResponseToChat;
-  if (from === "chat" && to === "responses")
-    return (b) => responsesResponseFromChat(b);
-  return null;
-}
-
-// Streaming response bridge factory: providerFmt -> clientFmt SSE transform.
-function streamBridgeFactory(from: Fmt, to: Fmt): (() => Transform) | null {
-  if (from === to) return null;
-  if (from === "chat" && to === "messages")
-    return () => new ChatToMessagesSseTransform();
-  if (from === "messages" && to === "chat")
-    return () => new MessagesToChatSseTransform();
-  if (from === "chat" && to === "responses")
-    return () => new StreamingResponsesBridgeTransform();
-  return null;
-}
-
-// Lazily-bound wrappers around ResponsesBridge (kept instance-bound on the
-// engine via module-singleton to avoid per-request allocation).
-const responsesBridgeSingleton = new ResponsesBridge();
-function responsesRequestToChat(
-  b: Record<string, unknown>,
-): Record<string, unknown> {
-  return responsesBridgeSingleton.requestToChatCompletions(b);
-}
-function responsesResponseFromChat(
-  b: Record<string, unknown>,
-): Record<string, unknown> {
-  const r = responsesBridgeSingleton.responseFromChatCompletions(b);
-  return (r ?? b) as Record<string, unknown>;
-}
-
-// --- thinking helpers ------------------------------------------------------
-
-function applyThinking(
-  conv: ThinkingConverter,
-  fmt: Fmt,
-  body: Record<string, unknown>,
-): void {
-  try {
-    if (fmt === "chat") conv.applyToChatCompletion(body as never);
-    else if (fmt === "messages") conv.applyToAnthropicMessage(body as never);
-    else if (fmt === "responses") conv.applyToResponse(body as never);
-  } catch {
-    /* leave body untouched on transform error */
-  }
-}
-
-// Pick the streaming thinking transform for a provider format. Returns null
-// when there's no streaming thinking transform (e.g. responses).
-function thinkingStream(fmt: Fmt): NodeJS.ReadWriteStream | null {
-  if (fmt === "chat") return new SseThinkingTransform();
-  if (fmt === "messages") return new AnthropicThinkingTransform();
-  return null;
+// Short correlation id for a request's transform trace (8 hex chars).
+function shortId(): string {
+  return randomBytes(4).toString("hex");
 }
 
 // --- header helpers --------------------------------------------------------
@@ -1384,14 +1515,6 @@ function filteredHeaders(
     out[k] = v as string | string[];
   }
   return out;
-}
-
-function hostFromUrl(baseUrl: string): string {
-  try {
-    return new URL(baseUrl).host;
-  } catch {
-    return "";
-  }
 }
 
 function sleep(ms: number): Promise<void> {

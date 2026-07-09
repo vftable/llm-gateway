@@ -9,8 +9,8 @@ import {
   type Model,
   type ModelCapabilities,
   type ModelProviderLink,
-} from "../shared/types";
-import { stockAnthropicModel } from "../gateway/anthropic-stock-models";
+} from "../types";
+import { stockAnthropicModel } from "../formats/anthropic/stock-models";
 import { slugify } from "./providers";
 
 interface ModelRow {
@@ -35,6 +35,8 @@ interface LinkRow {
   priority: number;
   enabled: number;
   endpoint: string | null;
+  context_window: number | null;
+  max_output_tokens: number | null;
 }
 
 interface LinkJoinedRow extends LinkRow {
@@ -84,6 +86,8 @@ function mapModel(r: ModelRow, links: LinkJoinedRow[]): Model {
         priority: l.priority,
         enabled: !!l.enabled,
         endpoint: l.endpoint ?? null,
+        contextWindow: l.context_window ?? null,
+        maxOutputTokens: l.max_output_tokens ?? null,
       })),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
@@ -92,6 +96,7 @@ function mapModel(r: ModelRow, links: LinkJoinedRow[]): Model {
 
 const LINK_JOIN =
   "SELECT mp.model_id, mp.provider_id, mp.upstream_model, mp.priority, mp.enabled, mp.endpoint, " +
+  "mp.context_window, mp.max_output_tokens, " +
   "p.name AS provider_name, p.enabled AS provider_enabled " +
   "FROM model_providers mp LEFT JOIN providers p ON p.id = mp.provider_id";
 
@@ -136,6 +141,8 @@ export interface ModelInput {
     upstreamModel: string;
     enabled?: boolean;
     endpoint?: string | null;
+    contextWindow?: number | null;
+    maxOutputTokens?: number | null;
   }>;
 }
 
@@ -151,15 +158,7 @@ export function createModel(db: DB, input: ModelInput): Model {
   const providers = input.providers ?? [];
   let priority = 0;
   for (const p of providers) {
-    upsertLink(
-      db,
-      id,
-      p.providerId,
-      p.upstreamModel,
-      priority++,
-      p.enabled,
-      p.endpoint,
-    );
+    upsertLink(db, id, priority++, p);
   }
   return getModel(db, id)!;
 }
@@ -204,15 +203,7 @@ export function updateModel(
     db.prepare("DELETE FROM model_providers WHERE model_id = ?").run(id);
     let priority = 0;
     for (const p of input.providers) {
-      upsertLink(
-        db,
-        id,
-        p.providerId,
-        p.upstreamModel,
-        priority++,
-        p.enabled,
-        p.endpoint,
-      );
+      upsertLink(db, id, priority++, p);
     }
   }
   return getModel(db, id);
@@ -266,27 +257,33 @@ function writeModel(
   }
 }
 
+type LinkInput = NonNullable<ModelInput["providers"]>[number];
+
 function upsertLink(
   db: DB,
   modelId: string,
-  providerId: string,
-  upstreamModel: string,
   priority: number,
-  enabled?: boolean,
-  endpoint?: string | null,
+  link: LinkInput,
 ): void {
   db.prepare(
-    `INSERT INTO model_providers (model_id, provider_id, upstream_model, priority, enabled, endpoint)
-     VALUES (@model_id, @provider_id, @upstream_model, @priority, @enabled, @endpoint)
-     ON CONFLICT(model_id, provider_id) DO UPDATE SET
-       upstream_model=@upstream_model, priority=@priority, enabled=@enabled, endpoint=@endpoint`,
+    `INSERT INTO model_providers
+       (model_id, provider_id, upstream_model, priority, enabled, endpoint,
+        context_window, max_output_tokens)
+     VALUES (@model_id, @provider_id, @upstream_model, @priority, @enabled,
+        @endpoint, @context_window, @max_output_tokens)
+     ON CONFLICT(model_id, provider_id, upstream_model) DO UPDATE SET
+       priority=@priority, enabled=@enabled,
+       endpoint=@endpoint, context_window=@context_window,
+       max_output_tokens=@max_output_tokens`,
   ).run({
     model_id: modelId,
-    provider_id: providerId,
-    upstream_model: upstreamModel,
+    provider_id: link.providerId,
+    upstream_model: link.upstreamModel,
     priority,
-    enabled: enabled === false ? 0 : 1,
-    endpoint: endpoint || null,
+    enabled: link.enabled === false ? 0 : 1,
+    endpoint: link.endpoint || null,
+    context_window: link.contextWindow ?? null,
+    max_output_tokens: link.maxOutputTokens ?? null,
   });
 }
 

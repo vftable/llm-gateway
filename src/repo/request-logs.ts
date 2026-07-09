@@ -3,7 +3,7 @@
 // window so the table stays bounded.
 
 import type { Database as DB } from "better-sqlite3";
-import type { RequestLog } from "../shared/types";
+import type { RequestLog } from "../types";
 
 interface LogRow {
   id: number;

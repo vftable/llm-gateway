@@ -10,7 +10,7 @@ import https from "https";
 import { URL } from "url";
 import type { Database as DB } from "better-sqlite3";
 import type { Logger } from "../logger";
-import type { GatewayPipeline } from "../gateway/pipeline";
+import type { GatewayRouter } from "../gateway/router";
 import type { AdminAuth } from "../auth/admin-auth";
 import {
   adminAuthMiddleware,
@@ -33,6 +33,15 @@ import {
   updateModel,
   type ModelInput,
 } from "../repo/models";
+import {
+  listProviderModels,
+  upsertProviderModel,
+  updateProviderModel,
+  deleteProviderModel,
+  getProviderModelById,
+  countProviderModelsByProvider,
+} from "../repo/provider-models";
+import { listTransformDefs } from "../formats/transforms";
 import {
   createUser,
   deleteUser,
@@ -68,13 +77,20 @@ import {
 } from "../repo/request-logs";
 import { vacuumFreePages } from "../db";
 import { getSettings, saveSettings } from "../repo/settings";
-import { listWebProviders } from "../gateway/web-providers";
-import type { ModelCapabilities, Settings } from "../shared/types";
+import { listWebProviders } from "../web-tools/backends";
+import { listProviderTemplates } from "../providers";
+import { agentFor } from "../gateway/proxy-agent";
+import type {
+  AuthScheme,
+  ModelCapabilities,
+  ModelTransformConfig,
+  Settings,
+} from "../types";
 
 export function adminRouter(
   db: DB,
   logger: Logger,
-  pipeline: GatewayPipeline,
+  router: GatewayRouter,
   auth: AdminAuth,
 ): Router {
   const r = Router();
@@ -116,13 +132,23 @@ export function adminRouter(
   });
 
   // --- providers ---
-  r.get("/providers", requireAdmin, (_req, res) => res.json(listProviders(db)));
+  // Attach importedModelCount (rows in provider_models) so the card badge shows
+  // the true registered-imported count, not the exposed-chain hop count.
+  r.get("/providers", requireAdmin, (_req, res) => {
+    const counts = countProviderModelsByProvider(db);
+    res.json(
+      listProviders(db).map((p) => ({
+        ...p,
+        importedModelCount: counts[p.id] ?? 0,
+      })),
+    );
+  });
 
   r.post("/providers", requireAdmin, (req, res) => {
     try {
       const input = parseProviderInput(req.body, true);
       const p = createProvider(db, input);
-      pipeline.reload();
+      router.reload();
       res.status(201).json(p);
     } catch (e) {
       bad(res, e);
@@ -140,7 +166,7 @@ export function adminRouter(
       const id = String(req.params.id);
       const p = updateProvider(db, id, parseProviderInput(req.body));
       if (!p) return res.status(404).json({ error: { message: "not found" } });
-      pipeline.reload();
+      router.reload();
       res.json(p);
     } catch (e) {
       bad(res, e);
@@ -150,7 +176,7 @@ export function adminRouter(
   r.delete("/providers/:id", requireAdmin, (req, res) => {
     if (!deleteProvider(db, String(req.params.id)))
       return res.status(404).json({ error: { message: "not found" } });
-    pipeline.reload();
+    router.reload();
     res.status(204).end();
   });
 
@@ -180,14 +206,73 @@ export function adminRouter(
     }
   });
 
+  // --- provider catalog (stock provider registry) ---
+  // Static list of provider templates the Add-Provider wizard renders.
+  r.get("/provider-catalog", requireAdmin, (_req, res) =>
+    res.json(listProviderTemplates()),
+  );
+
+  // Pre-create connectivity test + upstream model discovery. Lets the wizard
+  // test a provider BEFORE its row exists, from an ad-hoc config. Reuses the
+  // same probe helpers as the saved-provider test.
+  r.post("/provider-catalog/test", requireAdmin, async (req, res) => {
+    const b = (req.body || {}) as Record<string, unknown>;
+    const baseUrl = str(b.baseUrl);
+    if (!baseUrl)
+      return res.status(400).json({ error: { message: "baseUrl is required" } });
+    const apiKey = str(b.apiKey);
+    const probe: ProviderLike = {
+      baseUrl,
+      host: b.host == null ? null : (str(b.host) ?? null),
+      apiKeys: apiKey ? [apiKey] : [],
+      authScheme:
+        b.authScheme === "bearer" ||
+        b.authScheme === "xapikey" ||
+        b.authScheme === "both" ||
+        b.authScheme === "passthrough"
+          ? (b.authScheme as AuthScheme)
+          : "bearer",
+      tlsVerify: b.tlsVerify === undefined ? true : !!b.tlsVerify,
+      extraHeaders:
+        b.extraHeaders && typeof b.extraHeaders === "object"
+          ? (b.extraHeaders as Record<string, string>)
+          : {},
+      basePath: str(b.basePath) ?? "",
+      modelsPath: str(b.modelsPath) ?? "/v1/models",
+      proxy: b.proxy == null ? null : str(b.proxy),
+    };
+    try {
+      const result = await testProvider(probe);
+      // Best-effort model discovery; failures don't fail the test.
+      let models: string[] = [];
+      if (result.ok) {
+        try {
+          models = await fetchUpstreamModels(probe);
+        } catch {
+          models = [];
+        }
+      }
+      res.json({ ...result, models });
+    } catch (e) {
+      res.json({
+        ok: false,
+        status: null,
+        ms: 0,
+        error: (e as Error).message,
+        models: [],
+      });
+    }
+  });
+
   // --- models (with fallback chain) ---
   r.get("/models", requireAdmin, (_req, res) => res.json(listModels(db)));
 
   r.post("/models", requireAdmin, (req, res) => {
     try {
       const input = parseModelInput(req.body, true);
+      autoCreateImportedModels(db, input);
       const m = createModel(db, input);
-      pipeline.reload();
+      router.reload();
       res.status(201).json(m);
     } catch (e) {
       bad(res, e);
@@ -202,13 +287,11 @@ export function adminRouter(
 
   r.put("/models/:id", requireAdmin, (req, res) => {
     try {
-      const m = updateModel(
-        db,
-        String(req.params.id),
-        parseModelInput(req.body),
-      );
+      const input = parseModelInput(req.body);
+      autoCreateImportedModels(db, input);
+      const m = updateModel(db, String(req.params.id), input);
       if (!m) return res.status(404).json({ error: { message: "not found" } });
-      pipeline.reload();
+      router.reload();
       res.json(m);
     } catch (e) {
       bad(res, e);
@@ -218,9 +301,96 @@ export function adminRouter(
   r.delete("/models/:id", requireAdmin, (req, res) => {
     if (!deleteModel(db, String(req.params.id)))
       return res.status(404).json({ error: { message: "not found" } });
-    pipeline.reload();
+    router.reload();
     res.status(204).end();
   });
+
+  // --- imported provider models (per-provider catalog, not exposed) ---
+  r.get("/providers/:id/models", requireAdmin, (req, res) =>
+    res.json(listProviderModels(db, String(req.params.id))),
+  );
+
+  r.post("/providers/:id/models", requireAdmin, (req, res) => {
+    try {
+      const providerId = String(req.params.id);
+      if (!getProvider(db, providerId))
+        return res.status(404).json({ error: { message: "provider not found" } });
+      const b = (req.body || {}) as Record<string, unknown>;
+      const upstreamId = str(b.upstreamId);
+      if (!upstreamId)
+        return res
+          .status(400)
+          .json({ error: { message: "upstreamId is required" } });
+      const pm = upsertProviderModel(db, {
+        providerId,
+        upstreamId,
+        displayName: b.displayName == null ? null : str(b.displayName),
+        contextWindow: b.contextWindow == null ? null : num(b.contextWindow),
+        maxOutputTokens:
+          b.maxOutputTokens == null ? null : num(b.maxOutputTokens),
+        transforms: parseTransformConfig(b.transforms),
+        notes: b.notes == null ? null : str(b.notes),
+      });
+      res.status(201).json(pm);
+    } catch (e) {
+      bad(res, e);
+    }
+  });
+
+  r.put("/providers/:id/models/:mid", requireAdmin, (req, res) => {
+    try {
+      const mid = Number(req.params.mid);
+      const existing = getProviderModelById(db, mid);
+      if (!existing || existing.providerId !== String(req.params.id))
+        return res.status(404).json({ error: { message: "not found" } });
+      const b = (req.body || {}) as Record<string, unknown>;
+      const pm = updateProviderModel(db, mid, {
+        displayName:
+          b.displayName === undefined
+            ? undefined
+            : b.displayName == null
+              ? null
+              : str(b.displayName),
+        contextWindow:
+          b.contextWindow === undefined
+            ? undefined
+            : b.contextWindow == null
+              ? null
+              : num(b.contextWindow),
+        maxOutputTokens:
+          b.maxOutputTokens === undefined
+            ? undefined
+            : b.maxOutputTokens == null
+              ? null
+              : num(b.maxOutputTokens),
+        transforms:
+          b.transforms === undefined
+            ? undefined
+            : parseTransformConfig(b.transforms),
+        notes:
+          b.notes === undefined ? undefined : b.notes == null ? null : str(b.notes),
+      });
+      router.reload();
+      res.json(pm);
+    } catch (e) {
+      bad(res, e);
+    }
+  });
+
+  r.delete("/providers/:id/models/:mid", requireAdmin, (req, res) => {
+    const mid = Number(req.params.mid);
+    const existing = getProviderModelById(db, mid);
+    if (!existing || existing.providerId !== String(req.params.id))
+      return res.status(404).json({ error: { message: "not found" } });
+    deleteProviderModel(db, mid);
+    router.reload();
+    res.status(204).end();
+  });
+
+  // --- transform library (for the per-model transform editor) ---
+  r.get("/transforms", requireAdmin, (_req, res) =>
+    res.json(listTransformDefs()),
+  );
 
   // --- users ---
   r.get("/users", requireAdmin, (_req, res) => res.json(listUsers(db)));
@@ -257,7 +427,7 @@ export function adminRouter(
     try {
       const input = parseApiKeyInput(req.body);
       const key = createApiKey(db, input);
-      pipeline.reload();
+      router.reload();
       res.status(201).json(key);
     } catch (e) {
       bad(res, e);
@@ -289,7 +459,7 @@ export function adminRouter(
   r.delete("/api-keys/:id", requireAdmin, (req, res) => {
     if (!deleteApiKey(db, String(req.params.id)))
       return res.status(404).json({ error: { message: "not found" } });
-    pipeline.reload();
+    router.reload();
     res.status(204).end();
   });
 
@@ -447,7 +617,7 @@ export function adminRouter(
     if (typeof body.webProviderApiKey === "string")
       patch.webProviderApiKey = body.webProviderApiKey;
     saveSettings(db, patch);
-    pipeline.reload();
+    router.reload();
     res.json(publicSettings());
   });
 
@@ -509,6 +679,23 @@ function parseProviderInput(
       : undefined,
     nativeConversion:
       b.nativeConversion === undefined ? undefined : !!b.nativeConversion,
+    catalogId:
+      b.catalogId === undefined
+        ? undefined
+        : b.catalogId == null
+          ? null
+          : str(b.catalogId),
+    basePath: b.basePath === undefined ? undefined : (str(b.basePath) ?? ""),
+    modelsPath:
+      b.modelsPath === undefined ? undefined : (str(b.modelsPath) ?? ""),
+    proxy:
+      b.proxy === undefined ? undefined : b.proxy == null ? null : str(b.proxy),
+    country:
+      b.country === undefined
+        ? undefined
+        : b.country == null
+          ? null
+          : str(b.country),
   };
 }
 
@@ -546,9 +733,49 @@ function parseModelInput(body: unknown, requireCreate = false): ModelInput {
           upstreamModel: str(p.upstreamModel) ?? "",
           enabled: p.enabled === undefined ? undefined : !!p.enabled,
           endpoint: p.endpoint == null ? null : str(p.endpoint),
+          contextWindow:
+            p.contextWindow == null ? null : num(p.contextWindow),
+          maxOutputTokens:
+            p.maxOutputTokens == null ? null : num(p.maxOutputTokens),
         }))
       : undefined,
   };
+}
+
+// Reference + auto-create: ensure every (provider, upstreamModel) a chain
+// references exists in that provider's imported catalog. Missing ones are
+// created with just their identity (metadata can be filled in later on the
+// provider's models page). Idempotent via upsert.
+function autoCreateImportedModels(db: DB, input: ModelInput): void {
+  for (const link of input.providers ?? []) {
+    if (!link.providerId || !link.upstreamModel) continue;
+    upsertProviderModel(db, {
+      providerId: link.providerId,
+      upstreamId: link.upstreamModel,
+    });
+  }
+}
+
+// Coerce a raw transforms payload into ModelTransformConfig[]. Skips malformed
+// entries defensively; unknown ids are tolerated (resolved/ignored at apply).
+function parseTransformConfig(v: unknown): ModelTransformConfig[] {
+  if (!Array.isArray(v)) return [];
+  const out: ModelTransformConfig[] = [];
+  for (const raw of v) {
+    const t = raw as Record<string, unknown>;
+    const id = str(t.id);
+    const phase = t.phase === "response" ? "response" : "request";
+    if (!id) continue;
+    out.push({
+      id,
+      phase,
+      params:
+        t.params && typeof t.params === "object" && !Array.isArray(t.params)
+          ? (t.params as Record<string, unknown>)
+          : {},
+    });
+  }
+  return out;
 }
 
 function parseUserInput(body: unknown, requireCreate = false): UserInput {
@@ -604,10 +831,14 @@ interface ProviderLike {
   authScheme: string;
   tlsVerify: boolean;
   extraHeaders: Record<string, string>;
+  basePath?: string;
+  modelsPath?: string;
+  proxy?: string | null;
 }
 
-// GET {baseUrl}/v1/models with the provider's auth, preserving any path
-// prefix in baseUrl (e.g. https://host/api -> /api/v1/models).
+// GET {origin}{basePath}{modelsPath} with the provider's auth, preserving any
+// path prefix (e.g. Gemini's /v1beta/openai/models). Routes through the
+// provider's outbound proxy when one is configured.
 function probeModels(p: ProviderLike): Promise<{
   status: number | null;
   body: string;
@@ -615,8 +846,22 @@ function probeModels(p: ProviderLike): Promise<{
   error?: string;
 }> {
   const base = p.baseUrl.replace(/\/+$/, "");
-  const url = new URL(base + "/v1/models");
-  const transport = url.protocol === "https:" ? https : http;
+  const basePath = p.basePath || "";
+  const modelsPath = p.modelsPath || "/v1/models";
+  const url = new URL(base + basePath + modelsPath);
+  const isHttps = url.protocol === "https:";
+  const transport = isHttps ? https : http;
+  let proxyAgent: ReturnType<typeof agentFor>;
+  try {
+    proxyAgent = agentFor(p.proxy, isHttps);
+  } catch (err) {
+    return Promise.resolve({
+      status: null,
+      body: "",
+      ms: 0,
+      error: `bad proxy: ${(err as Error).message}`,
+    });
+  }
   const headers: Record<string, string> = {
     accept: "application/json",
     host: p.host || url.host,
@@ -640,6 +885,7 @@ function probeModels(p: ProviderLike): Promise<{
         path: url.pathname + url.search,
         headers,
         rejectUnauthorized: p.tlsVerify,
+        ...(proxyAgent ? { agent: proxyAgent } : {}),
       },
       (upRes) => {
         const chunks: Buffer[] = [];

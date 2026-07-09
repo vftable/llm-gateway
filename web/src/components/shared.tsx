@@ -1,5 +1,6 @@
 import { memo, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Check, ArrowLeft } from "lucide-react";
+import { Link } from "react-router-dom";
 import { Area, AreaChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { cn, fmtNum, fmtTokens } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
@@ -17,7 +18,7 @@ export function PageHeader({
   meta,
   actions,
 }: {
-  title: string;
+  title: ReactNode;
   desc?: string;
   // Rendered next to the title — e.g. a count badge that used to live in a
   // redundant card header below.
@@ -246,6 +247,111 @@ export function Field({
       {hint && (
         <p className="mt-1 text-[0.65rem] text-muted-foreground">{hint}</p>
       )}
+    </div>
+  );
+}
+
+// Underline section-tab bar (the pattern Settings uses). Controlled: the caller
+// owns the active id and renders the matching panel. Presentational.
+export function SectionTabs<T extends string>({
+  sections,
+  active,
+  onChange,
+  className,
+}: {
+  sections: ReadonlyArray<{ id: T; label: string; badge?: ReactNode }>;
+  active: T;
+  onChange: (id: T) => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex gap-1 border-b border-border/60", className)}>
+      {sections.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          onClick={() => onChange(s.id)}
+          className={cn(
+            "relative flex cursor-pointer items-center gap-1.5 px-3 py-2 text-sm font-medium transition-colors",
+            active === s.id
+              ? "text-foreground"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {s.label}
+          {s.badge}
+          {active === s.id && (
+            <span className="absolute right-0 bottom-0 left-0 h-0.5 rounded-full bg-primary" />
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// A "← Back to X" breadcrumb link for detail pages.
+export function BackLink({ to, label }: { to: string; label: string }) {
+  return (
+    <Link
+      to={to}
+      className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+    >
+      <ArrowLeft className="h-3.5 w-3.5" />
+      {label}
+    </Link>
+  );
+}
+
+// Horizontal step indicator for multi-step flows (the Add-Provider wizard).
+// Shows numbered dots joined by connector lines; completed steps get a check,
+// the current step is highlighted, future steps are muted. Presentational only.
+export function Stepper({
+  steps,
+  current,
+  className,
+}: {
+  steps: string[];
+  current: number;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex items-center", className)}>
+      {steps.map((label, i) => {
+        const done = i < current;
+        const active = i === current;
+        return (
+          <div key={label} className="flex flex-1 items-center last:flex-none">
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "flex size-6 shrink-0 items-center justify-center rounded-full border text-[0.7rem] font-medium tabular-nums transition-colors",
+                  done && "border-primary bg-primary text-primary-foreground",
+                  active && "border-primary text-primary",
+                  !done && !active && "border-border text-muted-foreground",
+                )}
+              >
+                {done ? <Check className="h-3.5 w-3.5" /> : i + 1}
+              </span>
+              <span
+                className={cn(
+                  "whitespace-nowrap text-xs font-medium transition-colors",
+                  active ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                {label}
+              </span>
+            </div>
+            {i < steps.length - 1 && (
+              <span
+                className={cn(
+                  "mx-3 h-px flex-1 transition-colors",
+                  done ? "bg-primary" : "bg-border",
+                )}
+              />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -59,6 +59,14 @@ const LEVELS: Record<string, string> = {
   WARN: c("yellow", pad("WARN", 5)),
   ERROR: c("red", pad("ERROR", 5)),
   DEBUG: c("gray", pad("DEBUG", 5)),
+  XFORM: c("magenta", pad("XFORM", 5)),
+};
+
+// Direction glyphs for transform lines (request / response / stream).
+const XFORM_DIR: Record<string, string> = {
+  req: c("cyan", "req  "),
+  resp: c("green", "resp "),
+  stream: c("blue", "strm "),
 };
 
 function fmtMeta(meta?: Meta): string {
@@ -86,6 +94,16 @@ export class Logger {
 
   debug(message: string, meta?: Meta): void {
     this.write("DEBUG", message, meta);
+  }
+
+  // One line per transformation applied to a request/response. `dir` is
+  // "req" | "resp" | "stream"; `name` is the transform's registered name
+  // (e.g. "format:chat->messages"). Emitted only when debug logging is on
+  // (the engine gates the call), so this is free when disabled.
+  transform(dir: string, name: string, meta?: Meta): void {
+    const arrow = c("dim", "▸");
+    const d = XFORM_DIR[dir] || pad(dir, 5);
+    this.write("XFORM", `${arrow} ${d} ${name}`, meta);
   }
 
   request(

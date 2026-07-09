@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS providers (
   format            TEXT NOT NULL DEFAULT 'openai',
   endpoints         TEXT NOT NULL DEFAULT '[]',
   native_conversion INTEGER NOT NULL DEFAULT 0,
+  catalog_id        TEXT,
+  base_path         TEXT NOT NULL DEFAULT '',
+  models_path       TEXT NOT NULL DEFAULT '/v1/models',
+  proxy             TEXT,
+  country           TEXT,
   sort_order        INTEGER NOT NULL DEFAULT 0,
   created_at        TEXT NOT NULL,
   updated_at        TEXT NOT NULL
@@ -56,10 +61,33 @@ CREATE TABLE IF NOT EXISTS model_providers (
   priority       INTEGER NOT NULL DEFAULT 0,
   enabled        INTEGER NOT NULL DEFAULT 1,
   endpoint       TEXT,
-  UNIQUE(model_id, provider_id)
+  context_window    INTEGER,
+  max_output_tokens INTEGER,
+  -- A provider may appear more than once in a chain (different upstream models
+  -- as successive fallback hops), so identity is (model, provider, upstream).
+  UNIQUE(model_id, provider_id, upstream_model)
 );
 CREATE INDEX IF NOT EXISTS idx_model_providers_model    ON model_providers(model_id);
 CREATE INDEX IF NOT EXISTS idx_model_providers_provider ON model_providers(provider_id);
+
+-- Per-provider catalog of imported upstream models. These are NOT exposed on
+-- /v1/models; they are the building blocks a user references (by upstream_id)
+-- when authoring an exposed model's fallback chain. A chain link may override
+-- an imported model's context_window / max_output_tokens for that one hop.
+CREATE TABLE IF NOT EXISTS provider_models (
+  id                INTEGER PRIMARY KEY AUTOINCREMENT,
+  provider_id       TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  upstream_id       TEXT NOT NULL,
+  display_name      TEXT,
+  context_window    INTEGER,
+  max_output_tokens INTEGER,
+  transforms        TEXT NOT NULL DEFAULT '[]',
+  notes             TEXT,
+  created_at        TEXT NOT NULL,
+  updated_at        TEXT NOT NULL,
+  UNIQUE(provider_id, upstream_id)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_models_provider ON provider_models(provider_id);
 
 CREATE TABLE IF NOT EXISTS users (
   id         TEXT PRIMARY KEY,
@@ -137,6 +165,27 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_provider  ON request_logs(provider_i
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT
+);
+
+-- Per upstream-key health, persisted so cooldowns / auth-fails survive restart.
+-- Keyed by a hash of the raw key (never store the key itself here).
+CREATE TABLE IF NOT EXISTS provider_key_health (
+  provider_id        TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  key_hash           TEXT NOT NULL,
+  rate_limited_until INTEGER NOT NULL DEFAULT 0,
+  auth_failed        INTEGER NOT NULL DEFAULT 0,
+  updated_at         TEXT NOT NULL,
+  PRIMARY KEY (provider_id, key_hash)
+);
+
+-- Learned (key, model) affinity: which key has served which model, and a
+-- rolling failure count used to evict a proven pairing after repeated failures.
+CREATE TABLE IF NOT EXISTS key_model_affinity (
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  key_hash    TEXT NOT NULL,
+  model       TEXT NOT NULL,
+  fails       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider_id, key_hash, model)
 );
 `;
 
@@ -234,7 +283,25 @@ function migrate(db: DB): void {
     "native_conversion",
     "INTEGER NOT NULL DEFAULT 0",
   );
+  addColumnIfMissing(db, "providers", "catalog_id", "TEXT");
+  addColumnIfMissing(db, "providers", "base_path", "TEXT NOT NULL DEFAULT ''");
+  addColumnIfMissing(
+    db,
+    "providers",
+    "models_path",
+    "TEXT NOT NULL DEFAULT '/v1/models'",
+  );
+  addColumnIfMissing(db, "providers", "proxy", "TEXT");
+  addColumnIfMissing(db, "providers", "country", "TEXT");
   addColumnIfMissing(db, "model_providers", "endpoint", "TEXT");
+  // Per-link (per-hop) overrides of the imported model's base limits, so one
+  // fallback hop can advertise a smaller context window and be skipped safely.
+  addColumnIfMissing(db, "model_providers", "context_window", "INTEGER");
+  addColumnIfMissing(db, "model_providers", "max_output_tokens", "INTEGER");
+  // Relax the old UNIQUE(model_id, provider_id) to include upstream_model so a
+  // provider can appear multiple times in a chain. SQLite can't ALTER a
+  // constraint, so rebuild the table when the old constraint is still present.
+  migrateModelProvidersUnique(db);
   addColumnIfMissing(db, "models", "type", "TEXT NOT NULL DEFAULT 'openai'");
   addColumnIfMissing(db, "request_logs", "client", "TEXT");
   addColumnIfMissing(db, "request_logs", "cached_tokens", "INTEGER");
@@ -250,4 +317,50 @@ function migrate(db: DB): void {
     "requests",
     "INTEGER NOT NULL DEFAULT 0",
   );
+}
+
+// Rebuild model_providers when it still carries the legacy
+// UNIQUE(model_id, provider_id) constraint, replacing it with
+// UNIQUE(model_id, provider_id, upstream_model). No-op once migrated (new DBs
+// are created correctly by SCHEMA_SQL).
+function migrateModelProvidersUnique(db: DB): void {
+  const row = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='model_providers'",
+    )
+    .get() as { sql?: string } | undefined;
+  const sql = row?.sql ?? "";
+  // Already migrated (or fresh) if the 3-col unique is present.
+  if (/UNIQUE\s*\(\s*model_id\s*,\s*provider_id\s*,\s*upstream_model\s*\)/i.test(sql))
+    return;
+  if (!/UNIQUE\s*\(\s*model_id\s*,\s*provider_id\s*\)/i.test(sql)) return;
+
+  db.exec("PRAGMA foreign_keys=OFF;");
+  const tx = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE model_providers_new (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        model_id       TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
+        provider_id    TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+        upstream_model TEXT NOT NULL,
+        priority       INTEGER NOT NULL DEFAULT 0,
+        enabled        INTEGER NOT NULL DEFAULT 1,
+        endpoint       TEXT,
+        context_window    INTEGER,
+        max_output_tokens INTEGER,
+        UNIQUE(model_id, provider_id, upstream_model)
+      );
+      INSERT INTO model_providers_new
+        (id, model_id, provider_id, upstream_model, priority, enabled, endpoint,
+         context_window, max_output_tokens)
+        SELECT id, model_id, provider_id, upstream_model, priority, enabled,
+         endpoint, context_window, max_output_tokens FROM model_providers;
+      DROP TABLE model_providers;
+      ALTER TABLE model_providers_new RENAME TO model_providers;
+      CREATE INDEX IF NOT EXISTS idx_model_providers_model    ON model_providers(model_id);
+      CREATE INDEX IF NOT EXISTS idx_model_providers_provider ON model_providers(provider_id);
+    `);
+  });
+  tx();
+  db.exec("PRAGMA foreign_keys=ON;");
 }

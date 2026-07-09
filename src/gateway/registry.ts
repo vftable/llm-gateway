@@ -13,7 +13,7 @@
 // without a restart.
 
 import type { Database as DB } from "better-sqlite3";
-import { stockAnthropicModel } from "./anthropic-stock-models";
+import { stockAnthropicModel } from "../formats/anthropic/stock-models";
 import { listModels } from "../repo/models";
 import { getSettings } from "../repo/settings";
 import {
@@ -21,7 +21,7 @@ import {
   type Model,
   type ModelCapabilities,
   type Settings,
-} from "../shared/types";
+} from "../types";
 
 export interface Resolved {
   model?: Model;

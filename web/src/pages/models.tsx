@@ -1,4 +1,5 @@
-import { memo, useEffect, useState, useRef, useCallback } from "react";
+import { memo, useEffect, useState, useCallback } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   Plus,
   Pencil,
@@ -57,22 +58,22 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Combobox } from "@/components/ui/combobox";
 
 interface ChainRow {
   providerId: string;
   upstreamModel: string;
   enabled: boolean;
   endpoint: string;
+  /** Per-hop context-window override ("" = inherit imported base). */
+  contextWindow: string;
 }
 
 const PAGE_SIZE = 15;
 
 export default function Models() {
+  const navigate = useNavigate();
+  const { id: routeId } = useParams();
   const [items, setItems] = useState<Model[] | null>(null);
   const [editing, setEditing] = useState<Model | null>(null);
   const [creating, setCreating] = useState(false);
@@ -85,6 +86,27 @@ export default function Models() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Deep-link: /models/new opens the create dialog; /models/:id opens the editor
+  // for that model once the list has loaded.
+  const isNew = window.location.pathname.endsWith("/models/new");
+  useEffect(() => {
+    if (isNew) {
+      setCreating(true);
+      setEditing(null);
+    } else if (routeId && items) {
+      const m = items.find((x) => x.id === routeId) ?? null;
+      setEditing(m);
+      setCreating(false);
+    }
+  }, [routeId, isNew, items]);
+
+  // Close returns to the list route (so the URL and dialog stay in sync).
+  const closeEditor = () => {
+    setCreating(false);
+    setEditing(null);
+    if (routeId || isNew) navigate("/models");
+  };
 
   const pageCount = Math.max(1, Math.ceil((items?.length ?? 0) / PAGE_SIZE));
   const visible = items?.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE) ?? [];
@@ -144,13 +166,9 @@ export default function Models() {
       {(creating || editing) && (
         <ModelDialog
           model={editing}
-          onClose={() => {
-            setCreating(false);
-            setEditing(null);
-          }}
+          onClose={closeEditor}
           onSaved={() => {
-            setCreating(false);
-            setEditing(null);
+            closeEditor();
             load();
           }}
         />
@@ -224,19 +242,32 @@ const ModelRow = memo(function ModelRow({
               No Providers
             </span>
           ) : (
-            m.providers.map((p, i) => (
-              <span key={p.providerId} className="flex items-center gap-1">
-                {i > 0 && <span className="text-muted-foreground">→</span>}
-                <Badge variant={p.enabled ? "default" : "secondary"}>
-                  {p.providerName ?? p.providerId}
-                  {p.endpoint && (
-                    <span className="ml-1 text-primary/80">
-                      {endpointShort(p.endpoint)}
-                    </span>
-                  )}
+            <>
+              {m.providers.slice(0, 2).map((p, i) => (
+                <span key={p.providerId} className="flex items-center gap-1">
+                  {i > 0 && <span className="text-muted-foreground">→</span>}
+                  <Badge variant={p.enabled ? "default" : "secondary"}>
+                    {p.providerName ?? p.providerId}
+                    {p.endpoint && (
+                      <span className="ml-1 text-primary/80">
+                        {endpointShort(p.endpoint)}
+                      </span>
+                    )}
+                  </Badge>
+                </span>
+              ))}
+              {m.providers.length > 2 && (
+                <Badge
+                  variant="secondary"
+                  title={m.providers
+                    .slice(2)
+                    .map((p) => p.providerName ?? p.providerId)
+                    .join(", ")}
+                >
+                  +{m.providers.length - 2} more
                 </Badge>
-              </span>
-            ))
+              )}
+            </>
           )}
         </div>
       </TableCell>
@@ -302,6 +333,7 @@ function ModelDialog({
       upstreamModel: p.upstreamModel,
       enabled: p.enabled,
       endpoint: p.endpoint ?? "",
+      contextWindow: p.contextWindow?.toString() ?? "",
     })) ?? [],
   );
   const [saving, setSaving] = useState(false);
@@ -349,6 +381,7 @@ function ModelDialog({
         upstreamModel: alias || "",
         enabled: true,
         endpoint: first.endpoints?.[0] ?? "",
+        contextWindow: "",
       },
     ]);
   };
@@ -381,6 +414,7 @@ function ModelDialog({
         upstreamModel: r.upstreamModel,
         enabled: r.enabled,
         endpoint: r.endpoint || null,
+        contextWindow: r.contextWindow ? Number(r.contextWindow) : null,
       })),
     };
     try {
@@ -520,6 +554,12 @@ function ModelDialog({
                         <span className="text-sm font-medium text-foreground">
                           {provider?.name ?? "Select provider"}
                         </span>
+                        {provider && (
+                          <HopConversionBadge
+                            provider={provider}
+                            modelType={modelType}
+                          />
+                        )}
                       </div>
                       <div className="flex items-center gap-1">
                         <button
@@ -618,7 +658,7 @@ function ModelDialog({
                         </div>
                       </Field>
                       <Field label="Upstream model">
-                        <ModelCombobox
+                        <Combobox
                           value={row.upstreamModel}
                           onChange={(v) =>
                             setChain((c) =>
@@ -628,6 +668,10 @@ function ModelDialog({
                             )
                           }
                           options={modelOptions[i] ?? []}
+                          placeholder="e.g. gpt-4o"
+                          searchPlaceholder="Filter models…"
+                          allowCustom
+                          mono
                         />
                       </Field>
                       <Field label="Endpoint">
@@ -652,6 +696,27 @@ function ModelDialog({
                             ))}
                           </SelectContent>
                         </Select>
+                      </Field>
+                    </div>
+                    <div className="mt-3">
+                      <Field
+                        label="Context window override"
+                        hint="Optional — if a request would exceed this, the gateway skips this hop and falls back to the next provider. Blank = use the imported model's window."
+                      >
+                        <Input
+                          type="number"
+                          value={row.contextWindow}
+                          placeholder="inherit"
+                          onChange={(e) =>
+                            setChain((c) =>
+                              c.map((r, j) =>
+                                j === i
+                                  ? { ...r, contextWindow: e.target.value }
+                                  : r,
+                              ),
+                            )
+                          }
+                        />
                       </Field>
                     </div>
                   </div>
@@ -852,114 +917,44 @@ function endpointShort(ep: string): string {
   return ep;
 }
 
-function ModelCombobox({
-  value,
-  onChange,
-  options,
+// Per-hop conversion indicator for the chain editor. Tells the user, for this
+// exposed model's wire format, whether the gateway will translate the request
+// to reach this provider or send it through untouched.
+//   - provider.nativeConversion  -> provider converts internally (no gateway xform)
+//   - provider.format === client -> same format, no conversion
+//   - otherwise                  -> gateway converts client <-> provider format
+function HopConversionBadge({
+  provider,
+  modelType,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  options: string[];
+  provider: Provider;
+  modelType: string;
 }) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const filtered = options
-    .filter((m) => m.toLowerCase().includes(query.toLowerCase()))
-    .sort((a, b) => {
-      const al = a.toLowerCase();
-      const bl = b.toLowerCase();
-      const q = query.toLowerCase();
-      if (!q) return al.localeCompare(bl);
-      const ai = al.indexOf(q);
-      const bi = bl.indexOf(q);
-      if (ai !== bi) return ai - bi;
-      return al.localeCompare(bl);
-    });
-
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="flex h-9 w-full items-center justify-between gap-2 rounded-md border border-border bg-transparent px-3 py-2 text-sm font-mono placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring cursor-pointer"
-          onClick={() => {
-            setOpen(true);
-            setTimeout(() => inputRef.current?.focus(), 0);
-          }}
-        >
-          <span
-            className={`min-w-0 truncate ${value ? "" : "text-muted-foreground"}`}
-          >
-            {value || "e.g. gpt-4o"}
-          </span>
-          {options.length > 0 && (
-            <span className="shrink-0 text-[0.65rem] text-muted-foreground">
-              {options.length}
-            </span>
-          )}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        className="w-[280px] max-h-64 overflow-y-auto p-0"
-        align="start"
-        onOpenAutoFocus={(e) => e.preventDefault()}
+  // The exposed model's wire format is the client side of this hop. An
+  // anthropic-typed alias speaks messages; everything else speaks chat.
+  const clientFmt = modelType === "anthropic" ? "anthropic" : "openai";
+  if (provider.nativeConversion) {
+    return (
+      <Badge
+        variant="default"
+        title="Provider accepts the request as-is and converts internally — the gateway forwards it unchanged."
       >
-        <div className="sticky top-0 z-10 border-b border-border bg-popover p-2">
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder="Filter models…"
-            className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-sm font-mono placeholder:text-muted-foreground focus:outline-none"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && query.trim()) {
-                onChange(query.trim());
-                setOpen(false);
-                setQuery("");
-              }
-              if (e.key === "Escape") {
-                setOpen(false);
-                setQuery("");
-              }
-            }}
-          />
-        </div>
-        <div>
-          {filtered.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground">
-              {options.length === 0
-                ? "No models fetched — click the refresh button"
-                : "No match — type and press Enter"}
-            </div>
-          ) : (
-            filtered.map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`flex w-full items-center px-3 py-1.5 text-left text-sm font-mono cursor-pointer hover:bg-accent hover:text-accent-foreground ${
-                  m === value ? "bg-accent text-accent-foreground" : ""
-                }`}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  onChange(m);
-                  setOpen(false);
-                  setQuery("");
-                }}
-              >
-                {m}
-              </button>
-            ))
-          )}
-        </div>
-        <div className="sticky bottom-0 border-t border-border bg-popover px-3 py-1.5">
-          <span className="text-[0.65rem] text-muted-foreground">
-            Type and press Enter for custom value
-          </span>
-        </div>
-      </PopoverContent>
-    </Popover>
+        provider converts
+      </Badge>
+    );
+  }
+  const converts = provider.format !== clientFmt;
+  return (
+    <Badge
+      variant={converts ? "warning" : "secondary"}
+      title={
+        converts
+          ? `Gateway converts ${clientFmt} → ${provider.format} for this hop.`
+          : "Same wire format — no conversion for this hop."
+      }
+    >
+      {converts ? "gateway converts" : "no conversion"}
+    </Badge>
   );
 }
+

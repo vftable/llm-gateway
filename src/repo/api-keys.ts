@@ -8,7 +8,7 @@
 
 import crypto from "crypto";
 import type { Database as DB } from "better-sqlite3";
-import type { ApiKey } from "../shared/types";
+import type { ApiKey } from "../types";
 import { sha256 } from "../config";
 import { slugify } from "./providers";
 

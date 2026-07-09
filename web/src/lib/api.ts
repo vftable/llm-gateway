@@ -12,6 +12,12 @@ import type {
   Provider,
   ProviderInput,
   ProviderTestResult,
+  ProviderTemplate,
+  ProviderTestInput,
+  ProviderTestProbe,
+  ProviderModel,
+  ProviderModelInput,
+  TransformDefInfo,
   RequestLog,
   RequestLogDetail,
   Settings,
@@ -97,6 +103,12 @@ export const api = {
   upstreamModels: (id: string) =>
     req<UpstreamModelsResponse>(`/api/providers/${id}/upstream-models`),
 
+  // provider catalog (stock provider registry)
+  listProviderCatalog: () =>
+    req<ProviderTemplate[]>("/api/provider-catalog"),
+  testProviderConfig: (input: ProviderTestInput) =>
+    req<ProviderTestProbe>("/api/provider-catalog/test", json("POST", input)),
+
   // models
   listModels: () => req<Model[]>("/api/models"),
   createModel: (input: ModelInput) =>
@@ -105,6 +117,28 @@ export const api = {
     req<Model>(`/api/models/${id}`, json("PUT", input)),
   deleteModel: (id: string) =>
     req<void>(`/api/models/${id}`, { method: "DELETE" }),
+
+  // imported provider models (per-provider catalog, not exposed)
+  listProviderModels: (providerId: string) =>
+    req<ProviderModel[]>(`/api/providers/${providerId}/models`),
+  createProviderModel: (providerId: string, input: ProviderModelInput) =>
+    req<ProviderModel>(`/api/providers/${providerId}/models`, json("POST", input)),
+  updateProviderModel: (
+    providerId: string,
+    mid: number,
+    input: ProviderModelInput,
+  ) =>
+    req<ProviderModel>(
+      `/api/providers/${providerId}/models/${mid}`,
+      json("PUT", input),
+    ),
+  deleteProviderModel: (providerId: string, mid: number) =>
+    req<void>(`/api/providers/${providerId}/models/${mid}`, {
+      method: "DELETE",
+    }),
+
+  // transform library (for the per-model transform editor)
+  listTransforms: () => req<TransformDefInfo[]>("/api/transforms"),
 
   // users
   listUsers: () => req<User[]>("/api/users"),

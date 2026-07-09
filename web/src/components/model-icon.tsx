@@ -8,7 +8,7 @@
 // and only then to a generic chip icon.
 
 import { useEffect, useState } from "react";
-import { Cpu } from "lucide-react";
+import { Cpu, Boxes } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 
@@ -30,6 +30,8 @@ import cohereSvg from "@lobehub/icons-static-svg/icons/cohere.svg?raw";
 import huggingfaceSvg from "@lobehub/icons-static-svg/icons/huggingface.svg?raw";
 import microsoftSvg from "@lobehub/icons-static-svg/icons/microsoft.svg?raw";
 import nvidiaSvg from "@lobehub/icons-static-svg/icons/nvidia.svg?raw";
+import openrouterSvg from "@lobehub/icons-static-svg/icons/openrouter.svg?raw";
+import opencodeSvg from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
 
 // Ordered: more specific patterns before broader ones (e.g. "gemini" before
 // a generic "google", "kimi" before "k2").
@@ -78,6 +80,69 @@ export function brandForModel(
     }
   }
   return (type && TYPE_FALLBACK[type]) || null;
+}
+
+// Provider brand catalog, keyed by a ProviderTemplate's `brand` field. Used by
+// the provider browser + Add-Provider wizard to show a vendor logo per provider.
+// `proxy` and unknown brands fall back to a generic icon (handled by ProviderIcon).
+const PROVIDER_BRANDS: Record<string, { svg: string; label: string }> = {
+  openai: { svg: openaiSvg, label: "OpenAI" },
+  anthropic: { svg: anthropicSvg, label: "Anthropic" },
+  nvidia: { svg: nvidiaSvg, label: "NVIDIA" },
+  openrouter: { svg: openrouterSvg, label: "OpenRouter" },
+  opencode: { svg: opencodeSvg, label: "OpenCode" },
+  mimo: { svg: mimoSvg, label: "MiMo" },
+  deepseek: { svg: deepseekSvg, label: "DeepSeek" },
+  gemini: { svg: geminiSvg, label: "Gemini" },
+  zai: { svg: zaiSvg, label: "Z.ai" },
+};
+
+// Resolve a provider's icon. Prefers an explicit catalog brand key; if absent
+// (older providers, or a name typed by hand), falls back to the alias-brand
+// rules using the provider name (so "OpenAI proxy" still shows the OpenAI mark).
+export function brandForProvider(
+  brand: string | null | undefined,
+  name?: string | null,
+): { svg: string; label: string } | null {
+  if (brand && PROVIDER_BRANDS[brand]) return PROVIDER_BRANDS[brand];
+  if (name) {
+    for (const rule of BRAND_RULES) {
+      if (rule.pattern.test(name)) return { svg: rule.svg, label: rule.label };
+    }
+  }
+  return null;
+}
+
+export function ProviderIcon({
+  brand,
+  name,
+  className,
+}: {
+  brand?: string | null;
+  name?: string | null;
+  className?: string;
+}) {
+  const b = brandForProvider(brand, name);
+  if (!b) {
+    return (
+      <Boxes
+        className={cn("size-4 shrink-0 opacity-70", className)}
+        aria-label="Provider"
+      />
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "inline-flex size-4 shrink-0 items-center justify-center text-[16px] leading-none [&>svg]:size-full",
+        className,
+      )}
+      role="img"
+      aria-label={b.label}
+      title={b.label}
+      dangerouslySetInnerHTML={{ __html: b.svg }}
+    />
+  );
 }
 
 // alias -> wire type lookup for pages that only have the alias string (logs,

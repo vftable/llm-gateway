@@ -1,7 +1,7 @@
 // Providers repository. CRUD + typed row mapping for upstream provider configs.
 
 import type { Database as DB } from "better-sqlite3";
-import type { AuthScheme, Provider, ProviderFormat } from "../shared/types";
+import type { AuthScheme, Provider, ProviderFormat } from "../types";
 
 interface ProviderRow {
   id: string;
@@ -19,6 +19,11 @@ interface ProviderRow {
   format: string;
   endpoints: string;
   native_conversion: number;
+  catalog_id: string | null;
+  base_path: string | null;
+  models_path: string | null;
+  proxy: string | null;
+  country: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -66,6 +71,11 @@ export function mapProvider(r: ProviderRow): Provider {
     format: (r.format as ProviderFormat) || "openai",
     endpoints,
     nativeConversion: !!r.native_conversion,
+    catalogId: r.catalog_id ?? null,
+    basePath: r.base_path ?? "",
+    modelsPath: r.models_path || "/v1/models",
+    proxy: r.proxy ?? null,
+    country: r.country ?? null,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -101,6 +111,11 @@ export interface ProviderInput {
   format?: ProviderFormat;
   endpoints?: string[];
   nativeConversion?: boolean;
+  catalogId?: string | null;
+  basePath?: string;
+  modelsPath?: string;
+  proxy?: string | null;
+  country?: string | null;
 }
 
 export function createProvider(db: DB, input: ProviderInput): Provider {
@@ -112,10 +127,12 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
     `INSERT INTO providers
       (id, name, base_url, host, api_keys, auth_scheme, extra_headers,
        retry_attempts, retry_interval_ms, request_timeout_ms, tls_verify,
-       enabled, format, endpoints, native_conversion, sort_order, created_at, updated_at)
+       enabled, format, endpoints, native_conversion, catalog_id,
+       base_path, models_path, proxy, country, sort_order, created_at, updated_at)
      VALUES (@id, @name, @base_url, @host, @api_keys, @auth_scheme, @extra_headers,
        @retry_attempts, @retry_interval_ms, @request_timeout_ms, @tls_verify,
-       @enabled, @format, @endpoints, @native_conversion, @sort_order, @created_at, @updated_at)`,
+       @enabled, @format, @endpoints, @native_conversion, @catalog_id,
+       @base_path, @models_path, @proxy, @country, @sort_order, @created_at, @updated_at)`,
   ).run({
     id,
     name: input.name,
@@ -134,6 +151,11 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
     format,
     endpoints: JSON.stringify(input.endpoints ?? defaultEndpoints(format)),
     native_conversion: input.nativeConversion ? 1 : 0,
+    catalog_id: input.catalogId ?? null,
+    base_path: normBasePath(input.basePath),
+    models_path: input.modelsPath || "/v1/models",
+    proxy: input.proxy || null,
+    country: input.country || null,
     sort_order: 0,
     created_at: now,
     updated_at: now,
@@ -143,6 +165,16 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
 
 export function defaultEndpoints(format: ProviderFormat): string[] {
   return format === "anthropic" ? ["/v1/messages"] : ["/v1/chat/completions"];
+}
+
+// Normalize a base path: empty stays empty (legacy full-path endpoints); a set
+// value is ensured to start with "/" and have no trailing slash, so
+// `origin + basePath + suffix` composes cleanly.
+export function normBasePath(bp: string | undefined | null): string {
+  const s = (bp ?? "").trim();
+  if (!s || s === "/") return "";
+  const withLead = s.startsWith("/") ? s : "/" + s;
+  return withLead.replace(/\/+$/, "");
 }
 
 export function updateProvider(
@@ -175,6 +207,13 @@ export function updateProvider(
       input.nativeConversion !== undefined
         ? input.nativeConversion
         : existing.nativeConversion,
+    catalogId:
+      input.catalogId !== undefined ? input.catalogId : existing.catalogId,
+    basePath: input.basePath !== undefined ? input.basePath : existing.basePath,
+    modelsPath:
+      input.modelsPath !== undefined ? input.modelsPath : existing.modelsPath,
+    proxy: input.proxy !== undefined ? input.proxy : existing.proxy,
+    country: input.country !== undefined ? input.country : existing.country,
   };
   db.prepare(
     `UPDATE providers SET
@@ -183,7 +222,9 @@ export function updateProvider(
        retry_attempts=@retry_attempts, retry_interval_ms=@retry_interval_ms,
        request_timeout_ms=@request_timeout_ms, tls_verify=@tls_verify,
        enabled=@enabled, format=@format, endpoints=@endpoints,
-       native_conversion=@native_conversion, updated_at=@updated_at
+       native_conversion=@native_conversion, catalog_id=@catalog_id,
+       base_path=@base_path, models_path=@models_path, proxy=@proxy,
+       country=@country, updated_at=@updated_at
      WHERE id=@id`,
   ).run({
     id,
@@ -201,6 +242,11 @@ export function updateProvider(
     format,
     endpoints: JSON.stringify(next.endpoints ?? defaultEndpoints(format)),
     native_conversion: next.nativeConversion ? 1 : 0,
+    catalog_id: next.catalogId ?? null,
+    base_path: normBasePath(next.basePath),
+    models_path: next.modelsPath || "/v1/models",
+    proxy: next.proxy || null,
+    country: next.country || null,
     updated_at: now,
   });
   return getProvider(db, id);

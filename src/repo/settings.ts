@@ -3,7 +3,7 @@
 // stored without a column-per-field schema migration.
 
 import type { Database as DB } from "better-sqlite3";
-import { DEFAULT_SETTINGS, type Settings } from "../shared/types";
+import { DEFAULT_SETTINGS, type Settings } from "../types";
 
 interface Row {
   key: string;

@@ -7,7 +7,7 @@
 // actual).
 
 import type { Database as DB } from "better-sqlite3";
-import type { KeyUsage } from "../shared/types";
+import type { KeyUsage } from "../types";
 
 export function utcDay(d = new Date()): string {
   return d.toISOString().slice(0, 10);

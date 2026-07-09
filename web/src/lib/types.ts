@@ -25,8 +25,65 @@ export interface Provider {
   format: ProviderFormat;
   endpoints: string[];
   nativeConversion: boolean;
+  /** Catalog template id this provider was created from, or null. */
+  catalogId: string | null;
+  /** Path prefix between origin and endpoint suffix (e.g. "/v1beta/openai"). */
+  basePath: string;
+  /** Model-discovery path, joined as origin+basePath+modelsPath. */
+  modelsPath: string;
+  /** Outbound proxy URL (socks5://…, http://…) or null for direct. */
+  proxy: string | null;
+  /** ISO-3166 alpha-2 country tag (UI flag only). */
+  country: string | null;
+  /** Count of imported models in this provider's catalog (provider_models rows).
+   *  Server-computed on the list endpoint; the card badge reads this. */
+  importedModelCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+// --- Provider catalog (stock provider registry) ---
+export interface ProviderDefaults {
+  baseUrl?: string;
+  basePath?: string;
+  modelsPath?: string;
+  format?: ProviderFormat;
+  endpoints?: string[];
+  authScheme?: AuthScheme;
+  extraHeaders?: Record<string, string>;
+  nativeConversion?: boolean;
+  retryAttempts?: number;
+  retryIntervalMs?: number;
+  requestTimeoutMs?: number;
+  tlsVerify?: boolean;
+  proxy?: string | null;
+  country?: string | null;
+}
+
+export interface ProviderQuirks {
+  requiredHeaders?: Record<string, string>;
+  thinking?: { defaultType?: "adaptive" | "enabled"; supportsEffort?: boolean };
+  defaultCapabilities?: Partial<ModelCapabilities>;
+}
+
+export interface TemplateField {
+  key: "name" | "apiKeys" | "baseUrl";
+  label: string;
+  placeholder?: string;
+  required?: boolean;
+  editable?: boolean;
+  hint?: string;
+}
+
+export interface ProviderTemplate {
+  id: string;
+  label: string;
+  blurb: string;
+  brand: string;
+  defaults: ProviderDefaults;
+  fields: TemplateField[];
+  quirks?: ProviderQuirks;
+  docsUrl?: string;
 }
 
 // --- Model capabilities (Anthropic-style listing shape; snake_case mirrors
@@ -97,6 +154,62 @@ export interface ModelProviderLink {
   priority: number;
   enabled: boolean;
   endpoint: string | null;
+  /** Per-hop context-window override (null = inherit); oversized requests skip this hop. */
+  contextWindow: number | null;
+  /** Per-hop max-output override (null = inherit). */
+  maxOutputTokens: number | null;
+}
+
+// --- Per-model transforms + imported provider models ---
+
+export type TransformPhase = "request" | "response";
+
+export interface ModelTransformConfig {
+  id: string;
+  phase: TransformPhase;
+  params: Record<string, unknown>;
+}
+
+export type ParamType = "string" | "number" | "boolean";
+
+export interface ParamSpec {
+  key: string;
+  label: string;
+  type: ParamType;
+  required?: boolean;
+  placeholder?: string;
+  hint?: string;
+}
+
+export interface TransformDefInfo {
+  id: string;
+  label: string;
+  blurb: string;
+  phases: TransformPhase[];
+  params: ParamSpec[];
+}
+
+export interface ProviderModel {
+  id: number;
+  providerId: string;
+  upstreamId: string;
+  displayName: string | null;
+  contextWindow: number | null;
+  maxOutputTokens: number | null;
+  transforms: ModelTransformConfig[];
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderModelInput {
+  providerId?: string;
+  upstreamId: string;
+  displayName?: string | null;
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+  transforms?: ModelTransformConfig[];
+  notes?: string | null;
 }
 
 export interface Model {
@@ -244,6 +357,11 @@ export interface ProviderInput {
   format?: ProviderFormat;
   endpoints?: string[];
   nativeConversion?: boolean;
+  catalogId?: string | null;
+  basePath?: string;
+  modelsPath?: string;
+  proxy?: string | null;
+  country?: string | null;
 }
 
 export interface ModelInput {
@@ -260,6 +378,8 @@ export interface ModelInput {
     upstreamModel: string;
     enabled?: boolean;
     endpoint?: string | null;
+    contextWindow?: number | null;
+    maxOutputTokens?: number | null;
   }>;
 }
 
@@ -274,6 +394,24 @@ export interface ProviderTestResult {
 export interface UpstreamModelsResponse {
   models: string[];
   error?: string;
+}
+
+// Ad-hoc connectivity test for a provider that doesn't exist yet (wizard).
+export interface ProviderTestInput {
+  baseUrl: string;
+  apiKey?: string;
+  host?: string | null;
+  authScheme?: AuthScheme;
+  tlsVerify?: boolean;
+  extraHeaders?: Record<string, string>;
+  basePath?: string;
+  modelsPath?: string;
+  proxy?: string | null;
+}
+
+// Pre-create test result: a ProviderTestResult plus discovered upstream models.
+export interface ProviderTestProbe extends ProviderTestResult {
+  models: string[];
 }
 
 export interface UsageBreakdownRow {

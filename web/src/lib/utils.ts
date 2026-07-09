@@ -10,6 +10,55 @@ export function fmtNum(n: number | null | undefined): string {
   return new Intl.NumberFormat("en-US").format(n);
 }
 
+// Display label for a wire-format / model-type value. CSS `text-transform:
+// capitalize` mangles "openai" into "Openai"; this preserves the correct casing
+// ("OpenAI", "Anthropic") and title-cases anything unknown.
+export function formatLabel(v: string | null | undefined): string {
+  if (!v) return "—";
+  const known: Record<string, string> = {
+    openai: "OpenAI",
+    anthropic: "Anthropic",
+  };
+  return known[v.toLowerCase()] ?? v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+// Display label for an auth scheme (the raw values are lowercase ids).
+export function authSchemeLabel(v: string | null | undefined): string {
+  if (!v) return "—";
+  const known: Record<string, string> = {
+    bearer: "Bearer",
+    xapikey: "X-Api-Key",
+    both: "Both",
+    passthrough: "Passthrough",
+  };
+  return known[v.toLowerCase()] ?? v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+// Canonical label for a provider's conversion policy. ONE phrasing used
+// everywhere (card badge, overview, config select, wizard) so the meaning is
+// unambiguous: who translates between the client's wire format and the
+// provider's — the provider itself (native) or the gateway.
+export function conversionLabel(nativeConversion: boolean): string {
+  return nativeConversion ? "Provider converts" : "Gateway converts";
+}
+
+// One-line explanation of the conversion policy, for tooltips/help text.
+export function conversionHelp(nativeConversion: boolean): string {
+  return nativeConversion
+    ? "This provider accepts every wire format directly and converts internally — the gateway forwards the request unchanged."
+    : "The gateway converts each request/response between the client's wire format and this provider's native format.";
+}
+
+// "1 key", "27 keys" — count + correctly pluralized noun. Pass an explicit
+// plural for irregular words; default appends "s".
+export function plural(
+  n: number,
+  singular: string,
+  pluralForm?: string,
+): string {
+  return `${n} ${n === 1 ? singular : (pluralForm ?? singular + "s")}`;
+}
+
 // Compact token-count label. Keeps small counts exact (so a low-usage chart
 // axis reads "250 / 500 / 750" instead of collapsing to "0k / 1k"), and only
 // switches to k/M once the number is large enough for that to be readable:

@@ -19,7 +19,7 @@
 // seen is the final total.
 
 import { Transform, type TransformCallback } from "stream";
-import { readCachedTokens } from "../tokens";
+import { readCachedTokens } from "../formats/tokens";
 import type { ResponseSummary } from "./debug-capture";
 
 export interface StreamUsage {

@@ -14,21 +14,21 @@ import path from "path";
 import express, { type Express } from "express";
 import type { Database as DB } from "better-sqlite3";
 import type { Logger } from "./logger";
-import type { GatewayPipeline } from "./gateway/pipeline";
+import type { GatewayRouter } from "./gateway/router";
 import type { AdminAuth } from "./auth/admin-auth";
 import { adminRouter } from "./admin/routes";
 
 export function createServerApp(
   db: DB,
   logger: Logger,
-  pipeline: GatewayPipeline,
+  router: GatewayRouter,
   auth: AdminAuth,
   opts: { webDistDir: string; corsOrigin: string | null },
 ): Express {
   const app = express();
 
   // JSON body parsing for the admin API and gateway /v1 surface. (The gateway
-  // pipeline re-applies its own /v1 body parser with a large limit; keep this
+  // router re-applies its own /v1 body parser with a large limit; keep this
   // one modest for /api.)
   app.use("/api", express.json({ limit: "4mb" }));
 
@@ -51,10 +51,10 @@ export function createServerApp(
   }
 
   // Admin API.
-  app.use("/api", adminRouter(db, logger, pipeline, auth));
+  app.use("/api", adminRouter(db, logger, router, auth));
 
   // Gateway /v1 surface.
-  pipeline.register(app);
+  router.register(app);
 
   // Health.
   app.get("/health", (_req, res) => res.json({ ok: true }));

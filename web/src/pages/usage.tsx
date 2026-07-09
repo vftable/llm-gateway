@@ -39,11 +39,13 @@ import { fmtNum } from "@/lib/utils";
 import { ModelIcon, useModelTypes } from "@/components/model-icon";
 
 const BREAKDOWN_PAGE_SIZE = 15;
+const KEYS_PAGE_SIZE = 10;
 
 export default function Usage() {
   const [data, setData] = useState<UsageResponse | null>(null);
   const [rows, setRows] = useState<FullBreakdownRow[]>([]);
   const [breakdownPage, setBreakdownPage] = useState(0);
+  const [keysPage, setKeysPage] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
   const [resolution, setResolution] = useState<ModelResolutionRow[] | null>(
     null,
@@ -81,6 +83,14 @@ export default function Usage() {
   if (!data) return <Spinner label="Loading usage…" />;
 
   const sorted = [...data.today.keys].sort((a, b) => b.used - a.used);
+  const keysPageCount = Math.max(1, Math.ceil(sorted.length / KEYS_PAGE_SIZE));
+  // Clamp so a shrinking key list (or the 20s refresh) can't strand us past
+  // the last page.
+  const keysPageClamped = Math.min(keysPage, keysPageCount - 1);
+  const visibleKeys = sorted.slice(
+    keysPageClamped * KEYS_PAGE_SIZE,
+    (keysPageClamped + 1) * KEYS_PAGE_SIZE,
+  );
   const totalBreakdownTokens = rows.reduce((a, r) => a + r.tokens, 0);
   const breakdownPageCount = Math.max(
     1,
@@ -111,7 +121,10 @@ export default function Usage() {
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-1">
+        {/* self-start keeps the chart at its natural height instead of being
+            stretched to match the (taller, expandable) keys card in the same
+            grid row — which otherwise inflated the chart and never shrank back. */}
+        <Card className="self-start lg:col-span-1">
           <CardHeader>
             <CardTitle>14-Day History</CardTitle>
             <CardAction>
@@ -154,11 +167,18 @@ export default function Usage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sorted.map((k) => (
+                  {visibleKeys.map((k) => (
                     <KeyUsageRow key={k.apiKeyId} row={k} onChanged={loadAll} />
                   ))}
                 </TableBody>
               </Table>
+            )}
+            {sorted.length > 0 && (
+              <Pagination
+                page={keysPageClamped}
+                pageCount={keysPageCount}
+                onChange={setKeysPage}
+              />
             )}
           </CardContent>
         </Card>

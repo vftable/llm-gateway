@@ -28,7 +28,7 @@ import {
 } from "../repo/models";
 import { createApiKey, deleteApiKey } from "../repo/api-keys";
 import { saveSettings } from "../repo/settings";
-import { DEFAULT_CAPABILITIES, type ModelCapabilities } from "../shared/types";
+import { DEFAULT_CAPABILITIES, type ModelCapabilities } from "../types";
 
 interface ConfigMapping {
   upstream: string;

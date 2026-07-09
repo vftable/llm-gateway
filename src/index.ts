@@ -1,7 +1,7 @@
 // Gateway entry point.
 //
 // Loads bootstrap config, opens (and seeds on first run) the SQLite database,
-// initialises admin auth, wires the gateway pipeline + admin API, and starts
+// initialises admin auth, wires the gateway router + admin API, and starts
 // listening. Server timeouts are disabled for long-lived LLM streams.
 
 import type { Server } from "http";
@@ -10,7 +10,7 @@ import { openDatabase, closeDatabase, vacuumFreePages } from "./db";
 import { syncFromConfig } from "./db/sync";
 import { getSettings } from "./repo/settings";
 import { initAdminAuth } from "./auth/admin-auth";
-import { GatewayPipeline } from "./gateway/pipeline";
+import { GatewayRouter } from "./gateway/router";
 import { createServerApp } from "./server";
 import { Logger } from "./logger";
 import { pruneOldLogs } from "./repo/request-logs";
@@ -47,9 +47,9 @@ function main(): void {
     bootstrap.adminPassword,
   );
 
-  const pipeline = new GatewayPipeline(db, logger, settings.ssePingInterval);
+  const router = new GatewayRouter(db, logger, settings.ssePingInterval);
 
-  const app = createServerApp(db, logger, pipeline, auth, {
+  const app = createServerApp(db, logger, router, auth, {
     webDistDir: bootstrap.webDistDir,
     corsOrigin: bootstrap.corsOrigin,
   });

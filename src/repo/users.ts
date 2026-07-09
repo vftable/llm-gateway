@@ -1,7 +1,7 @@
 // Users repository.
 
 import type { Database as DB } from "better-sqlite3";
-import type { User } from "../shared/types";
+import type { User } from "../types";
 import { slugify } from "./providers";
 
 interface UserRow {
