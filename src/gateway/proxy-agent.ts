@@ -46,8 +46,6 @@ export function agentFor(
 export function isSupportedProxy(proxyUrl: string): boolean {
   const s = proxyUrl.trim().toLowerCase();
   return (
-    s.startsWith("socks") ||
-    s.startsWith("http://") ||
-    s.startsWith("https://")
+    s.startsWith("socks") || s.startsWith("http://") || s.startsWith("https://")
   );
 }

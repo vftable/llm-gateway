@@ -3,7 +3,12 @@ import { Plus, Pencil, Trash2, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import type { User } from "@/lib/types";
-import { PageHeader, Spinner, EmptyState, Field } from "@/components/shared";
+import {
+  PageHeader,
+  TableSkeleton,
+  EmptyState,
+  Field,
+} from "@/components/shared";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
@@ -52,7 +57,10 @@ export default function Users() {
       <Card>
         <CardContent className="p-0">
           {!items ? (
-            <Spinner />
+            <TableSkeleton
+              cols={5}
+              widths={["50%", "70%", "60%", "35%", "20%"]}
+            />
           ) : items.length === 0 ? (
             <EmptyState msg="No users yet — optional, for organizing keys" />
           ) : (
@@ -69,8 +77,10 @@ export default function Users() {
               <TableBody>
                 {items.map((u) => (
                   <TableRow key={u.id}>
-                    <TableCell className="font-medium">{u.name}</TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="max-w-[14rem] truncate font-medium">
+                      {u.name}
+                    </TableCell>
+                    <TableCell className="max-w-[16rem] truncate text-muted-foreground">
                       {u.email ?? "—"}
                     </TableCell>
                     <TableCell className="max-w-[28rem] truncate text-muted-foreground">
@@ -86,6 +96,8 @@ export default function Users() {
                         variant="ghost"
                         size="icon"
                         onClick={() => setEditing(u)}
+                        title="Edit user"
+                        aria-label="Edit user"
                       >
                         <Pencil className="h-3.5 w-3.5" />
                       </Button>

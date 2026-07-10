@@ -8,9 +8,16 @@
 
 import type { Json, BodyXform } from "../pipeline";
 import type { ParamSpec, TransformPhase, TransformDefInfo } from "../../types";
+import {
+  anthropicCache,
+  systemPrepend,
+  sanitizeToolArgs,
+} from "./builtins-extra";
 
 // Body-shape ops apply equally to the request or the buffered response.
 const BOTH: TransformPhase[] = ["request", "response"];
+const REQUEST: TransformPhase[] = ["request"];
+const RESPONSE: TransformPhase[] = ["response"];
 
 export interface TransformDef {
   id: string;
@@ -73,8 +80,20 @@ const LIBRARY: TransformDef[] = [
     blurb: "Set a body field to a fixed value (JSON-parsed when possible).",
     phases: BOTH,
     params: [
-      { key: "path", label: "Field path", type: "string", required: true, placeholder: "e.g. temperature or metadata.tag" },
-      { key: "value", label: "Value", type: "string", required: true, placeholder: 'e.g. 0.7 or "x" or true' },
+      {
+        key: "path",
+        label: "Field path",
+        type: "string",
+        required: true,
+        placeholder: "e.g. temperature or metadata.tag",
+      },
+      {
+        key: "value",
+        label: "Value",
+        type: "string",
+        required: true,
+        placeholder: 'e.g. 0.7 or "x" or true',
+      },
     ],
     build: (p) => {
       const path = str(p.path);
@@ -90,7 +109,8 @@ const LIBRARY: TransformDef[] = [
   {
     id: "set-default",
     label: "Set default",
-    blurb: "Set a field only if it is missing (won't overwrite a client value).",
+    blurb:
+      "Set a field only if it is missing (won't overwrite a client value).",
     phases: BOTH,
     params: [
       { key: "path", label: "Field path", type: "string", required: true },
@@ -113,7 +133,13 @@ const LIBRARY: TransformDef[] = [
     blurb: "Remove a body field entirely.",
     phases: BOTH,
     params: [
-      { key: "path", label: "Field path", type: "string", required: true, placeholder: "e.g. logprobs" },
+      {
+        key: "path",
+        label: "Field path",
+        type: "string",
+        required: true,
+        placeholder: "e.g. logprobs",
+      },
     ],
     build: (p) => {
       const path = str(p.path);
@@ -155,8 +181,20 @@ const LIBRARY: TransformDef[] = [
     blurb: "Cap a numeric field to a max (e.g. max_tokens ≤ 8192).",
     phases: BOTH,
     params: [
-      { key: "path", label: "Field path", type: "string", required: true, placeholder: "e.g. max_tokens" },
-      { key: "max", label: "Maximum", type: "number", required: true, placeholder: "8192" },
+      {
+        key: "path",
+        label: "Field path",
+        type: "string",
+        required: true,
+        placeholder: "e.g. max_tokens",
+      },
+      {
+        key: "max",
+        label: "Maximum",
+        type: "number",
+        required: true,
+        placeholder: "8192",
+      },
     ],
     build: (p) => {
       const path = str(p.path);
@@ -172,11 +210,54 @@ const LIBRARY: TransformDef[] = [
       };
     },
   },
+  {
+    id: "anthropic-cache",
+    label: "Anthropic prompt caching",
+    blurb:
+      "Add ephemeral cache_control breakpoints to the stable prefix (last system block, last tool, last message) for Anthropic prompt caching. Request phase; only affects Anthropic-shaped bodies.",
+    phases: REQUEST,
+    params: [
+      {
+        key: "ttl",
+        label: "Cache TTL",
+        type: "string",
+        required: false,
+        placeholder: "5m",
+        hint: "5m (default) or 1h",
+      },
+    ],
+    build: (p) => anthropicCache(str(p.ttl) ?? "5m"),
+  },
+  {
+    id: "system-prepend",
+    label: "Prepend system text",
+    blurb:
+      "Prepend a fixed system instruction (works for Anthropic system + chat system message). The text is yours — not any client-impersonation prompt.",
+    phases: REQUEST,
+    params: [
+      {
+        key: "text",
+        label: "System text",
+        type: "string",
+        required: true,
+        placeholder: "e.g. Always answer concisely.",
+      },
+    ],
+    build: (p) => systemPrepend(str(p.text) ?? ""),
+  },
+  {
+    id: "sanitize-tool-args",
+    label: "Sanitize tool-call arguments",
+    blurb:
+      "Fix malformed tool-call arguments from non-Claude models (numeric strings → numbers, clamp Read.limit ≤ 2000, drop negative offsets / invalid pdf pages). Response phase.",
+    phases: RESPONSE,
+    params: [],
+    build: () => sanitizeToolArgs(),
+  },
 ];
 
-export const TRANSFORM_LIBRARY: Record<string, TransformDef> = Object.fromEntries(
-  LIBRARY.map((d) => [d.id, d]),
-);
+export const TRANSFORM_LIBRARY: Record<string, TransformDef> =
+  Object.fromEntries(LIBRARY.map((d) => [d.id, d]));
 
 export function getTransformDef(id: string): TransformDef | undefined {
   return TRANSFORM_LIBRARY[id];

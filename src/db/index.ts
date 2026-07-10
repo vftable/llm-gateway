@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS providers (
   base_url          TEXT NOT NULL,
   host              TEXT,
   api_keys          TEXT NOT NULL DEFAULT '[]',
+  disabled_api_keys TEXT NOT NULL DEFAULT '[]',
   auth_scheme       TEXT NOT NULL DEFAULT 'bearer',
   extra_headers     TEXT NOT NULL DEFAULT '{}',
   retry_attempts    INTEGER NOT NULL DEFAULT 1,
@@ -25,8 +26,9 @@ CREATE TABLE IF NOT EXISTS providers (
   request_timeout_ms INTEGER NOT NULL DEFAULT 600000,
   tls_verify        INTEGER NOT NULL DEFAULT 1,
   enabled           INTEGER NOT NULL DEFAULT 1,
-  format            TEXT NOT NULL DEFAULT 'openai',
+  format            TEXT,
   endpoints         TEXT NOT NULL DEFAULT '[]',
+  endpoint_paths    TEXT NOT NULL DEFAULT '{}',
   native_conversion INTEGER NOT NULL DEFAULT 0,
   catalog_id        TEXT,
   base_path         TEXT NOT NULL DEFAULT '',
@@ -81,6 +83,7 @@ CREATE TABLE IF NOT EXISTS provider_models (
   display_name      TEXT,
   context_window    INTEGER,
   max_output_tokens INTEGER,
+  capabilities      TEXT,
   transforms        TEXT NOT NULL DEFAULT '[]',
   notes             TEXT,
   created_at        TEXT NOT NULL,
@@ -293,15 +296,43 @@ function migrate(db: DB): void {
   );
   addColumnIfMissing(db, "providers", "proxy", "TEXT");
   addColumnIfMissing(db, "providers", "country", "TEXT");
+  // Per-kind path override (JSON) for non-standard layouts; back-filled below.
+  addColumnIfMissing(
+    db,
+    "providers",
+    "endpoint_paths",
+    "TEXT NOT NULL DEFAULT '{}'",
+  );
+  // Convert legacy path-string endpoints (e.g. ["/v1/chat/completions"]) into
+  // wire KINDS (["chat"]), back-filling any NON-STANDARD path into endpoint_paths
+  // so existing rows keep byte-identical upstream URLs. Idempotent: rows already
+  // in kind form are left untouched.
+  migrateEndpointsToKinds(db);
+  // Keys the operator has toggled OFF: kept aside so key selection skips them
+  // (only `api_keys` is rotated) but they aren't lost. Round-trips through the
+  // admin API as `disabledApiKeys`.
+  addColumnIfMissing(
+    db,
+    "providers",
+    "disabled_api_keys",
+    "TEXT NOT NULL DEFAULT '[]'",
+  );
   addColumnIfMissing(db, "model_providers", "endpoint", "TEXT");
   // Per-link (per-hop) overrides of the imported model's base limits, so one
   // fallback hop can advertise a smaller context window and be skipped safely.
   addColumnIfMissing(db, "model_providers", "context_window", "INTEGER");
   addColumnIfMissing(db, "model_providers", "max_output_tokens", "INTEGER");
+  // Anthropic-style capability listing captured when a rich upstream model is
+  // imported (JSON; null when the provider reports none).
+  addColumnIfMissing(db, "provider_models", "capabilities", "TEXT");
   // Relax the old UNIQUE(model_id, provider_id) to include upstream_model so a
   // provider can appear multiple times in a chain. SQLite can't ALTER a
   // constraint, so rebuild the table when the old constraint is still present.
   migrateModelProvidersUnique(db);
+  // Drop the legacy `format NOT NULL DEFAULT 'openai'` constraint so an
+  // adapter-backed provider can store format=NULL (format is now a derived hint).
+  // SQLite can't ALTER a constraint, so rebuild the table when it's still present.
+  migrateProvidersFormatNullable(db);
   addColumnIfMissing(db, "models", "type", "TEXT NOT NULL DEFAULT 'openai'");
   addColumnIfMissing(db, "request_logs", "client", "TEXT");
   addColumnIfMissing(db, "request_logs", "cached_tokens", "INTEGER");
@@ -323,6 +354,86 @@ function migrate(db: DB): void {
 // UNIQUE(model_id, provider_id) constraint, replacing it with
 // UNIQUE(model_id, provider_id, upstream_model). No-op once migrated (new DBs
 // are created correctly by SCHEMA_SQL).
+// Convert a legacy endpoints column (array of path strings) into wire kinds,
+// back-filling non-standard paths into endpoint_paths so URLs stay byte-identical.
+// Skips rows already in kind form (idempotent).
+function migrateEndpointsToKinds(db: DB): void {
+  const kindOf = (p: string): "chat" | "messages" | "responses" | null => {
+    const x = p.split("?")[0];
+    if (x === "chat" || x === "messages" || x === "responses") return x;
+    if (x.endsWith("/messages")) return "messages";
+    if (x.endsWith("/responses")) return "responses";
+    if (x.endsWith("/chat/completions")) return "chat";
+    return null;
+  };
+  const stdPath = (
+    kind: "chat" | "messages" | "responses",
+    hasBase: boolean,
+  ): string => {
+    const bare =
+      kind === "messages"
+        ? "/messages"
+        : kind === "responses"
+          ? "/responses"
+          : "/chat/completions";
+    return hasBase ? bare : "/v1" + bare;
+  };
+
+  const rows = db
+    .prepare("SELECT id, endpoints, endpoint_paths, base_path FROM providers")
+    .all() as Array<{
+    id: string;
+    endpoints: string;
+    endpoint_paths: string;
+    base_path: string | null;
+  }>;
+
+  const update = db.prepare(
+    "UPDATE providers SET endpoints=@endpoints, endpoint_paths=@endpoint_paths WHERE id=@id",
+  );
+
+  for (const r of rows) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(r.endpoints);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(parsed)) continue;
+    // Nothing to do if every entry is already a bare kind.
+    const anyPath = parsed.some(
+      (e) => typeof e === "string" && e.startsWith("/"),
+    );
+    if (!anyPath) continue;
+
+    const hasBase = !!(r.base_path && r.base_path.length);
+    let overrides: Record<string, string> = {};
+    try {
+      const existing = JSON.parse(r.endpoint_paths || "{}");
+      if (existing && typeof existing === "object" && !Array.isArray(existing))
+        overrides = existing as Record<string, string>;
+    } catch {
+      /* ignore */
+    }
+
+    const kinds: string[] = [];
+    for (const e of parsed) {
+      if (typeof e !== "string") continue;
+      const kind = kindOf(e);
+      if (!kind) continue;
+      if (!kinds.includes(kind)) kinds.push(kind);
+      // A path that isn't the standard one for this kind → preserve as override.
+      if (e.startsWith("/") && e !== stdPath(kind, hasBase) && !overrides[kind])
+        overrides[kind] = e;
+    }
+    update.run({
+      id: r.id,
+      endpoints: JSON.stringify(kinds),
+      endpoint_paths: JSON.stringify(overrides),
+    });
+  }
+}
+
 function migrateModelProvidersUnique(db: DB): void {
   const row = db
     .prepare(
@@ -331,7 +442,11 @@ function migrateModelProvidersUnique(db: DB): void {
     .get() as { sql?: string } | undefined;
   const sql = row?.sql ?? "";
   // Already migrated (or fresh) if the 3-col unique is present.
-  if (/UNIQUE\s*\(\s*model_id\s*,\s*provider_id\s*,\s*upstream_model\s*\)/i.test(sql))
+  if (
+    /UNIQUE\s*\(\s*model_id\s*,\s*provider_id\s*,\s*upstream_model\s*\)/i.test(
+      sql,
+    )
+  )
     return;
   if (!/UNIQUE\s*\(\s*model_id\s*,\s*provider_id\s*\)/i.test(sql)) return;
 
@@ -360,6 +475,81 @@ function migrateModelProvidersUnique(db: DB): void {
       CREATE INDEX IF NOT EXISTS idx_model_providers_model    ON model_providers(model_id);
       CREATE INDEX IF NOT EXISTS idx_model_providers_provider ON model_providers(provider_id);
     `);
+  });
+  tx();
+  db.exec("PRAGMA foreign_keys=ON;");
+}
+
+// Rebuild `providers` to make `format` nullable when a legacy DB still has the
+// old `format ... NOT NULL` (with a DEFAULT 'openai'). No-op on fresh DBs (whose
+// format column is already nullable) and once rebuilt. Child tables reference
+// providers by id, which is preserved, so foreign_keys=OFF during the swap keeps
+// them intact. Runs AFTER the additive column migrations so every column exists.
+function migrateProvidersFormatNullable(db: DB): void {
+  const row = db
+    .prepare(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND name='providers'",
+    )
+    .get() as { sql?: string } | undefined;
+  const sql = row?.sql ?? "";
+  // The legacy column is `format TEXT NOT NULL DEFAULT 'openai'`. If `format` is
+  // not declared NOT NULL, there's nothing to do.
+  if (!/\bformat\b[^,]*\bNOT\s+NULL/i.test(sql)) return;
+
+  // Copy only the columns that exist in BOTH the old table and the rebuilt one,
+  // so the migration is resilient to partially-patched DBs (any column the old
+  // table lacks takes the new schema's DEFAULT).
+  const oldCols = new Set(
+    (
+      db.prepare("PRAGMA table_info(providers)").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name),
+  );
+
+  db.exec("PRAGMA foreign_keys=OFF;");
+  const tx = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE providers_new (
+        id                TEXT PRIMARY KEY,
+        name              TEXT NOT NULL,
+        base_url          TEXT NOT NULL,
+        host              TEXT,
+        api_keys          TEXT NOT NULL DEFAULT '[]',
+        disabled_api_keys TEXT NOT NULL DEFAULT '[]',
+        auth_scheme       TEXT NOT NULL DEFAULT 'bearer',
+        extra_headers     TEXT NOT NULL DEFAULT '{}',
+        retry_attempts    INTEGER NOT NULL DEFAULT 1,
+        retry_interval_ms INTEGER NOT NULL DEFAULT 3000,
+        request_timeout_ms INTEGER NOT NULL DEFAULT 600000,
+        tls_verify        INTEGER NOT NULL DEFAULT 1,
+        enabled           INTEGER NOT NULL DEFAULT 1,
+        format            TEXT,
+        endpoints         TEXT NOT NULL DEFAULT '[]',
+        endpoint_paths    TEXT NOT NULL DEFAULT '{}',
+        native_conversion INTEGER NOT NULL DEFAULT 0,
+        catalog_id        TEXT,
+        base_path         TEXT NOT NULL DEFAULT '',
+        models_path       TEXT NOT NULL DEFAULT '/v1/models',
+        proxy             TEXT,
+        country           TEXT,
+        sort_order        INTEGER NOT NULL DEFAULT 0,
+        created_at        TEXT NOT NULL,
+        updated_at        TEXT NOT NULL
+      );
+    `);
+    const newCols = (
+      db.prepare("PRAGMA table_info(providers_new)").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name);
+    const shared = newCols.filter((c) => oldCols.has(c));
+    const cols = shared.join(", ");
+    db.exec(
+      `INSERT INTO providers_new (${cols}) SELECT ${cols} FROM providers;
+       DROP TABLE providers;
+       ALTER TABLE providers_new RENAME TO providers;`,
+    );
   });
   tx();
   db.exec("PRAGMA foreign_keys=ON;");

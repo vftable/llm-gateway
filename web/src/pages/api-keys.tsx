@@ -1,11 +1,11 @@
 import { memo, useCallback, useEffect, useState } from "react";
-import { Plus, Trash2, Check, X, Copy, KeyRound } from "lucide-react";
+import { Plus, Trash2, Check, X, Copy, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import type { ApiKey, User } from "@/lib/types";
 import {
   PageHeader,
-  Spinner,
+  TableSkeleton,
   EmptyState,
   Field,
   Pagination,
@@ -82,7 +82,10 @@ export default function ApiKeys() {
       <Card>
         <CardContent className="p-0">
           {!items ? (
-            <Spinner />
+            <TableSkeleton
+              cols={7}
+              widths={["55%", "40%", "50%", "30%", "45%", "25%", "20%"]}
+            />
           ) : items.length === 0 ? (
             <EmptyState msg="No keys yet — until you create one, the gateway is open (no auth)" />
           ) : (
@@ -183,21 +186,24 @@ const KeyRow = memo(function KeyRow({
 
   return (
     <TableRow>
-      <TableCell>{k.name ?? "—"}</TableCell>
+      <TableCell className="max-w-[12rem] truncate">{k.name ?? "—"}</TableCell>
       <TableCell>
         <span className="inline-flex items-center gap-1.5">
           <span className="font-mono text-primary">{k.keyPrefix}</span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             title="Copy full key"
             onClick={copyFull}
-            className="cursor-pointer text-muted-foreground transition-colors hover:text-foreground"
+            className="text-muted-foreground hover:text-foreground"
           >
             <Copy className="h-3 w-3" />
-          </button>
+          </Button>
         </span>
       </TableCell>
-      <TableCell>{k.userName ?? "—"}</TableCell>
+      <TableCell className="max-w-[12rem] truncate">
+        {k.userName ?? "—"}
+      </TableCell>
       <TableCell className="text-right tabular-nums">
         {k.tokensPerDay ? fmtNum(k.tokensPerDay) : "∞"}
       </TableCell>
@@ -219,7 +225,7 @@ const KeyRow = memo(function KeyRow({
           onClick={() => onEdit(k)}
           title="Edit"
         >
-          <KeyRound className="h-3.5 w-3.5" />
+          <Pencil className="h-3.5 w-3.5" />
         </Button>
       </TableCell>
     </TableRow>

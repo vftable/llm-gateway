@@ -10,6 +10,7 @@ import {
   type ModelCapabilities,
   type ModelProviderLink,
 } from "../types";
+import { parseJsonObject } from "./json";
 import { stockAnthropicModel } from "../formats/anthropic/stock-models";
 import { slugify } from "./providers";
 
@@ -45,16 +46,10 @@ interface LinkJoinedRow extends LinkRow {
 }
 
 function parseCapabilities(raw: string): ModelCapabilities {
-  if (!raw) return DEFAULT_CAPABILITIES;
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return { ...DEFAULT_CAPABILITIES, ...(parsed as ModelCapabilities) };
-    }
-  } catch {
-    /* fall through */
-  }
-  return DEFAULT_CAPABILITIES;
+  // Merge over defaults so a partial/legacy stored object still yields a full
+  // capability set; a null/malformed value (parseJsonObject → null) → defaults.
+  const parsed = parseJsonObject<ModelCapabilities | null>(raw, null);
+  return parsed ? { ...DEFAULT_CAPABILITIES, ...parsed } : DEFAULT_CAPABILITIES;
 }
 
 function mapModel(r: ModelRow, links: LinkJoinedRow[]): Model {

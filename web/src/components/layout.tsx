@@ -10,6 +10,7 @@ import {
   Activity,
   Boxes,
   Cpu,
+  Gauge,
   KeyRound,
   LineChart,
   ScrollText,
@@ -49,7 +50,8 @@ const navGroups = [
   {
     label: "Access",
     items: [
-      { to: "/providers", label: "Providers", icon: Boxes },
+      { to: "/providers", label: "Providers", icon: Boxes, end: true },
+      { to: "/providers/usage", label: "Provider Usage", icon: Gauge },
       { to: "/models", label: "Models", icon: Cpu },
       { to: "/keys", label: "API Keys", icon: KeyRound },
     ],
@@ -97,13 +99,23 @@ const NavItem = React.memo(function NavItem({
       end={item.end}
       onClick={onClick}
       className={cn(
-        "flex items-center gap-3 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200 ease-in-out",
+        "group flex items-center gap-3 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200 ease-in-out",
         active
           ? "bg-sidebar-accent text-sidebar-accent-foreground"
           : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
       )}
     >
-      <item.icon className="h-4 w-4 shrink-0" />
+      {/* Dim the icon with element opacity (not a color alpha) so the stroked
+          SVG doesn't double-up alpha at self-intersections. The label keeps its
+          color alpha above — flat text has no overlap to worry about. */}
+      <item.icon
+        className={cn(
+          "h-4 w-4 shrink-0 transition-opacity duration-200",
+          active
+            ? "opacity-100"
+            : "text-sidebar-foreground opacity-60 group-hover:opacity-100",
+        )}
+      />
       {/* Stays mounted so it fades instead of popping; the parent's
           overflow-hidden clips it as the width animates. */}
       <span
@@ -141,7 +153,7 @@ function SidebarNav({
   onNavigate?: () => void;
 }) {
   return (
-    <nav className="flex-1 overflow-y-auto overflow-x-hidden px-2 py-2">
+    <nav className="no-scrollbar flex-1 overflow-y-auto overflow-x-hidden px-2 py-2">
       {navGroups.map((group, i) => (
         <React.Fragment key={group.label}>
           {i > 0 && (
@@ -193,9 +205,9 @@ function SidebarFooter({ collapsed }: { collapsed: boolean }) {
     <button
       type="button"
       onClick={logout}
-      className="flex w-full items-center gap-3 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/60 transition-colors duration-200 ease-in-out hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+      className="group flex w-full items-center gap-3 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground/60 transition-colors duration-200 ease-in-out hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
     >
-      <LogOut className="h-4 w-4 shrink-0" />
+      <LogOut className="h-4 w-4 shrink-0 text-sidebar-foreground opacity-60 transition-opacity duration-200 group-hover:opacity-100" />
       <span
         aria-hidden={collapsed}
         className={cn(
@@ -338,7 +350,7 @@ function TopBar() {
       <div className="flex items-center gap-4 text-xs text-muted-foreground">
         <span className="hidden sm:inline font-mono tabular-nums">{time}</span>
         <span className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+          <span className="h-1.5 w-1.5 rounded-full bg-success" />
           operational
         </span>
       </div>
@@ -362,7 +374,7 @@ export function Layout() {
         <div className="flex flex-1 flex-col overflow-hidden">
           <TopBar />
           <main
-            className="flex-1 overflow-y-auto p-6"
+            className="no-scrollbar flex-1 overflow-y-auto p-6"
             style={{ contain: "layout style" }}
           >
             <Outlet />

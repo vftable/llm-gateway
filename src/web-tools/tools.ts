@@ -18,6 +18,15 @@
 // failing the request, so the model can recover gracefully.
 
 import type { SearchProvider } from "./backends";
+import type { WireFmt } from "../formats/pipeline";
+import { onRequest, type TaggedRequestTransform } from "../formats/pipeline";
+import {
+  toWireToolDef,
+  readTools,
+  writeTools,
+  toolDefName,
+  type NeutralToolDef,
+} from "./tool-ops";
 
 export const WEB_SEARCH = "web_search";
 export const WEB_FETCH = "web_fetch";
@@ -33,7 +42,16 @@ function isHostedWebTool(
   t: Record<string, unknown>,
 ): "search" | "fetch" | null {
   const type = typeof t.type === "string" ? t.type : "";
-  const name = typeof t.name === "string" ? t.name : "";
+  // Name may sit at the top level (messages/responses tool defs) or nested under
+  // `function.name` (chat tool defs) — check both so detection is format-agnostic
+  // (a Claude model behind an OpenAI-type provider sends chat-shaped tool defs).
+  const fn = t.function as { name?: unknown } | undefined;
+  const name =
+    typeof t.name === "string"
+      ? t.name
+      : fn && typeof fn.name === "string"
+        ? fn.name
+        : "";
   if (type.startsWith("web_search") || name === WEB_SEARCH) return "search";
   if (type.startsWith("web_fetch") || name === WEB_FETCH) return "fetch";
   return null;
@@ -95,14 +113,16 @@ function contentToText(content: unknown): string {
     .join("\n");
 }
 
-// Custom function-tool definitions the model calls with a normal tool_use.
-const SEARCH_DEF = {
+// Neutral function-tool definitions the model calls with a normal tool call.
+// Rendered into the target wire shape (chat/messages/responses) by tool-ops, so
+// the SAME defs work whatever format the hop speaks.
+const SEARCH_DEF: NeutralToolDef = {
   name: WEB_SEARCH,
   description:
     "Search the web for current information. Returns a list of results with " +
     "titles, URLs and short descriptions. Use it when you need up-to-date or " +
     "external facts.",
-  input_schema: {
+  schema: {
     type: "object",
     properties: {
       query: { type: "string", description: "The search query." },
@@ -111,12 +131,12 @@ const SEARCH_DEF = {
   },
 };
 
-const FETCH_DEF = {
+const FETCH_DEF: NeutralToolDef = {
   name: WEB_FETCH,
   description:
     "Fetch the readable text content of a web page by URL, as markdown. Use it " +
     "to read a specific page (e.g. one returned by web_search).",
-  input_schema: {
+  schema: {
     type: "object",
     properties: {
       url: { type: "string", description: "The absolute URL to fetch." },
@@ -125,28 +145,56 @@ const FETCH_DEF = {
   },
 };
 
-// Replace hosted web tool defs with the custom function equivalents, leaving any
-// other (client-provided) tools untouched. Also forces stream off for the loop.
-// Returns a NEW body; the input is not mutated.
+// Replace hosted web tool defs with the custom function equivalents (rendered in
+// `fmt`'s shape), leaving any other (client-provided) tools untouched. Also
+// forces stream off for the loop. Returns a NEW body; the input is not mutated.
+// `fmt` defaults to "messages" (the loop's working shape) so existing callers are
+// byte-identical; pass another format to inject for a chat/responses hop.
 export function rewriteRequest(
   body: Record<string, unknown>,
   present: WebToolsPresent,
+  fmt: WireFmt = "messages",
 ): Record<string, unknown> {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
   const kept: unknown[] = [];
-  for (const tRaw of tools) {
+  for (const tRaw of readTools(body)) {
     if (tRaw && typeof tRaw === "object") {
       const kind = isHostedWebTool(tRaw as Record<string, unknown>);
       if (kind) continue; // drop hosted defs; replaced below
     }
     kept.push(tRaw);
   }
-  if (present.search) kept.push(SEARCH_DEF);
-  if (present.fetch) kept.push(FETCH_DEF);
+  if (present.search) kept.push(toWireToolDef(fmt, SEARCH_DEF));
+  if (present.fetch) kept.push(toWireToolDef(fmt, FETCH_DEF));
 
-  const out: Record<string, unknown> = { ...body, tools: kept };
+  const out = writeTools(body, kept);
   delete out.stream; // the loop runs non-streaming internally
   return out;
+}
+
+// The hosted-tool definition rewrite as a FORMAT-TAGGED request transform, so the
+// web-tool machinery injects tool defs through the same tagged pipeline as every
+// other transform. Detects hosted web tools in the given format's tool list and
+// swaps them for the neutral function defs rendered in that format. Used for the
+// short-circuit / non-loop paths and any hop that needs the rewrite inline.
+export function webToolRewrite(fmt: WireFmt): TaggedRequestTransform {
+  return onRequest(fmt, `web-tools:rewrite:${fmt}`, (body) => {
+    const b = body as Record<string, unknown>;
+    const present: WebToolsPresent = { search: false, fetch: false };
+    for (const t of readTools(b)) {
+      const kind = isHostedWebTool((t ?? {}) as Record<string, unknown>);
+      if (kind === "search") present.search = true;
+      if (kind === "fetch") present.fetch = true;
+    }
+    if (!present.search && !present.fetch) return body;
+    return rewriteRequest(b, present, fmt) as typeof body;
+  });
+}
+
+// True when a tool DEFINITION (any format) is a hosted web tool. Wraps the
+// format-aware name read so callers needn't know the wire shape.
+export function isHostedWebToolDef(fmt: WireFmt, tool: unknown): boolean {
+  const name = toolDefName(fmt, tool);
+  return name === WEB_SEARCH || name === WEB_FETCH;
 }
 
 // Is this tool_use name one the gateway handles server-side?

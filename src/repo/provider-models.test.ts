@@ -15,7 +15,9 @@ import {
 
 function freshDb() {
   const db = openDatabase(":memory:");
-  createProvider(db, { name: "zai", baseUrl: "https://api.z.ai" });
+  // Explicit id so the model rows below can reference "zai" (ids are otherwise
+  // randomly generated, decoupled from name).
+  createProvider(db, { id: "zai", name: "zai", baseUrl: "https://api.z.ai" });
   return db;
 }
 
@@ -51,12 +53,67 @@ test("transforms round-trip as JSON", () => {
       providerId: "zai",
       upstreamId: "glm-4.6",
       transforms: [
-        { id: "clamp-number", phase: "request", params: { path: "max_tokens", max: 8192 } },
+        {
+          id: "clamp-number",
+          phase: "request",
+          params: { path: "max_tokens", max: 8192 },
+        },
       ],
     });
     const read = getProviderModel(db, "zai", "glm-4.6")!;
     assert.deepEqual(read.transforms, pm.transforms);
     assert.equal(read.transforms[0].id, "clamp-number");
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("capabilities round-trip as JSON, default null, preserved on partial update", () => {
+  const db = freshDb();
+  try {
+    // Default: no capabilities → null.
+    const bare = upsertProviderModel(db, {
+      providerId: "zai",
+      upstreamId: "glm-plain",
+    });
+    assert.equal(bare.capabilities, null);
+
+    // Import with a rich capability object.
+    const caps = {
+      batch: { supported: true },
+      citations: { supported: false },
+      code_execution: { supported: true },
+      image_input: { supported: true },
+      pdf_input: { supported: false },
+      structured_outputs: { supported: true },
+      thinking: {
+        supported: true,
+        types: { adaptive: { supported: true }, enabled: { supported: false } },
+      },
+      effort: {
+        supported: true,
+        low: { supported: true },
+        medium: { supported: true },
+        high: { supported: true },
+        xhigh: { supported: false },
+        max: { supported: false },
+      },
+    };
+    const rich = upsertProviderModel(db, {
+      providerId: "zai",
+      upstreamId: "glm-rich",
+      capabilities: caps,
+    });
+    const read = getProviderModel(db, "zai", "glm-rich")!;
+    assert.deepEqual(read.capabilities, caps);
+
+    // A partial update that omits capabilities preserves them.
+    const patched = updateProviderModel(db, rich.id, { displayName: "GLM" })!;
+    assert.deepEqual(patched.capabilities, caps);
+
+    // Explicit null clears them.
+    const cleared = updateProviderModel(db, rich.id, { capabilities: null })!;
+    assert.equal(cleared.capabilities, null);
   } finally {
     closeDatabase(db);
   }
@@ -78,7 +135,11 @@ test("update + delete", () => {
 test("imported models are scoped per provider (cascade on provider delete)", () => {
   const db = freshDb();
   try {
-    createProvider(db, { name: "other", baseUrl: "https://x.example.com" });
+    createProvider(db, {
+      id: "other",
+      name: "other",
+      baseUrl: "https://x.example.com",
+    });
     upsertProviderModel(db, { providerId: "zai", upstreamId: "a" });
     upsertProviderModel(db, { providerId: "other", upstreamId: "a" });
     assert.equal(listProviderModels(db, "zai").length, 1);

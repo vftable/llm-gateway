@@ -10,7 +10,10 @@ import { createProvider } from "../repo/providers";
 import { KeyHealthStore, parseRateLimit, hashKey } from "./key-health";
 import type { Provider } from "../types";
 
-function provider(db: ReturnType<typeof openDatabase>, keys: string[]): Provider {
+function provider(
+  db: ReturnType<typeof openDatabase>,
+  keys: string[],
+): Provider {
   return createProvider(db, {
     name: "p",
     baseUrl: "https://x.example.com",

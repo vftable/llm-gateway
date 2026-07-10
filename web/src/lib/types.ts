@@ -3,11 +3,16 @@
 export type AuthScheme = "bearer" | "xapikey" | "both" | "passthrough";
 export type ProviderFormat = "anthropic" | "openai";
 
-export const ENDPOINTS = [
-  "/v1/messages",
-  "/v1/chat/completions",
-  "/v1/responses",
-] as const;
+// Endpoint KINDS a provider accepts (not paths — the adapter assembles the path).
+export type WireKind = "chat" | "messages" | "responses";
+export const WIRE_KINDS: WireKind[] = ["chat", "messages", "responses"];
+
+// Human labels for the endpoint kinds (UI).
+export const WIRE_KIND_LABELS: Record<WireKind, string> = {
+  chat: "Chat Completions",
+  messages: "Messages",
+  responses: "Responses",
+};
 
 export interface Provider {
   id: string;
@@ -15,6 +20,8 @@ export interface Provider {
   baseUrl: string;
   host: string | null;
   apiKeys: string[];
+  /** Keys toggled off by the operator: retained but skipped in rotation. */
+  disabledApiKeys: string[];
   authScheme: AuthScheme;
   extraHeaders: Record<string, string>;
   retryAttempts: number;
@@ -22,8 +29,12 @@ export interface Provider {
   requestTimeoutMs: number;
   tlsVerify: boolean;
   enabled: boolean;
-  format: ProviderFormat;
-  endpoints: string[];
+  /** Generic-adapter hint; null when adapter-backed or nativeConversion. */
+  format: ProviderFormat | null;
+  /** Endpoint KINDS this provider accepts. */
+  endpoints: WireKind[];
+  /** Optional per-kind path override for a non-standard layout. */
+  endpointPaths: Partial<Record<WireKind, string>>;
   nativeConversion: boolean;
   /** Catalog template id this provider was created from, or null. */
   catalogId: string | null;
@@ -42,13 +53,51 @@ export interface Provider {
   updatedAt: string;
 }
 
+// --- Provider key-usage report (upstream quota view) ---
+export type UsageUnit = "tokens" | "requests" | "credits";
+
+export interface ProviderKeyUsageWindow {
+  id: string;
+  label: string;
+  used: number;
+  limit: number;
+  unit: UsageUnit;
+  resetsAt: string;
+}
+
+export interface ProviderKeyUsage {
+  keyMask: string;
+  enabled: boolean;
+  windows: ProviderKeyUsageWindow[];
+  /** Provider can't report usage for this key — UI shows "Unavailable". */
+  unavailable?: boolean;
+  /** Optional free-text note for the key (tier, rate-limit, error detail). */
+  message?: string;
+}
+
+export interface ProviderUsageReport {
+  providerId: string;
+  providerName: string;
+  catalogId: string | null;
+  brand: string;
+  /**
+   * Whether the adapter reports upstream usage at all. False = omitted from the
+   * dashboard; `keys` is empty. The per-provider detail view shows a "not
+   * reported" note instead.
+   */
+  supported: boolean;
+  dummy: boolean;
+  keys: ProviderKeyUsage[];
+}
+
 // --- Provider catalog (stock provider registry) ---
 export interface ProviderDefaults {
   baseUrl?: string;
   basePath?: string;
   modelsPath?: string;
   format?: ProviderFormat;
-  endpoints?: string[];
+  endpoints?: WireKind[];
+  endpointPaths?: Partial<Record<WireKind, string>>;
   authScheme?: AuthScheme;
   extraHeaders?: Record<string, string>;
   nativeConversion?: boolean;
@@ -189,6 +238,41 @@ export interface TransformDefInfo {
   params: ParamSpec[];
 }
 
+// --- Resolved transform stack (read-only preview of what a provider does) ----
+// Mirrors src/admin/routes/resolved-transforms.ts's ResolvedTransforms exactly.
+// GET /api/providers/:id/transforms/resolved — see docs/transforms-api.md
+// § "The default provider transform stack".
+
+export type TransformSource = "builtin" | "family" | "adapter" | "model";
+export type ResolvedPhase = TransformPhase | "stream";
+
+export interface ResolvedTransformStage {
+  name: string;
+  source: TransformSource;
+  phase: ResolvedPhase;
+  /** Human label — falls back to a humanized `name` in the UI when absent. */
+  label?: string;
+  blurb?: string;
+  params?: Record<string, unknown>;
+  /** Siblings (same phase+source) sharing a `group` string cluster under one
+   *  collapsible row instead of showing individually. */
+  group?: string;
+  /** True for a `family` stage a model's own config overrides — shown
+   *  separately in `overridden`, not in the live request/response/stream lists. */
+  overridden?: boolean;
+}
+
+export interface ResolvedTransforms {
+  providerId: string;
+  catalogId: string | null;
+  nativeFormat: ProviderFormat;
+  nativeWireKind: WireKind;
+  request: ResolvedTransformStage[];
+  response: ResolvedTransformStage[];
+  stream: ResolvedTransformStage[];
+  overridden: ResolvedTransformStage[];
+}
+
 export interface ProviderModel {
   id: number;
   providerId: string;
@@ -196,6 +280,7 @@ export interface ProviderModel {
   displayName: string | null;
   contextWindow: number | null;
   maxOutputTokens: number | null;
+  capabilities: ModelCapabilities | null;
   transforms: ModelTransformConfig[];
   notes: string | null;
   createdAt: string;
@@ -208,8 +293,21 @@ export interface ProviderModelInput {
   displayName?: string | null;
   contextWindow?: number | null;
   maxOutputTokens?: number | null;
+  capabilities?: ModelCapabilities | null;
   transforms?: ModelTransformConfig[];
   notes?: string | null;
+}
+
+// The universal, dialect-agnostic model descriptor the /upstream-models endpoint
+// returns (mirror of the backend UpstreamModel). Only `id` is guaranteed.
+export interface UpstreamModel {
+  id: string;
+  displayName?: string;
+  contextWindow?: number;
+  maxOutputTokens?: number;
+  created?: string;
+  capabilities?: ModelCapabilities;
+  raw?: Record<string, unknown>;
 }
 
 export interface Model {
@@ -280,6 +378,13 @@ export interface RequestLogDetail {
   response: string | null;
 }
 
+export interface HopStat {
+  providerId: string;
+  upstreamModel: string;
+  success: number;
+  errors: number;
+}
+
 export interface DashboardStats {
   requestsToday: number;
   requestsErrorToday: number;
@@ -347,6 +452,7 @@ export interface ProviderInput {
   baseUrl: string;
   host?: string | null;
   apiKeys?: string[];
+  disabledApiKeys?: string[];
   authScheme?: AuthScheme;
   extraHeaders?: Record<string, string>;
   retryAttempts?: number;
@@ -354,8 +460,9 @@ export interface ProviderInput {
   requestTimeoutMs?: number;
   tlsVerify?: boolean;
   enabled?: boolean;
-  format?: ProviderFormat;
-  endpoints?: string[];
+  format?: ProviderFormat | null;
+  endpoints?: WireKind[];
+  endpointPaths?: Partial<Record<WireKind, string>>;
   nativeConversion?: boolean;
   catalogId?: string | null;
   basePath?: string;
@@ -389,10 +496,21 @@ export interface ProviderTestResult {
   ms: number;
   error?: string;
   sample?: string;
+  /** Masked form (head…tail) of the API key this test attempt actually sent —
+   *  picked via the same rotation/health algorithm live traffic uses. Absent
+   *  when the provider has no keys configured. */
+  keyMask?: string;
+}
+
+export interface TestModelResult {
+  ok: boolean;
+  status: number | null;
+  data: unknown;
+  ms: number;
 }
 
 export interface UpstreamModelsResponse {
-  models: string[];
+  models: UpstreamModel[];
   error?: string;
 }
 
@@ -409,9 +527,11 @@ export interface ProviderTestInput {
   proxy?: string | null;
 }
 
-// Pre-create test result: a ProviderTestResult plus discovered upstream models.
+// Pre-create test result: a ProviderTestResult plus discovered upstream models
+// (universal shape, so the wizard imports the same rich metadata as the
+// standalone importer).
 export interface ProviderTestProbe extends ProviderTestResult {
-  models: string[];
+  models: UpstreamModel[];
 }
 
 export interface UsageBreakdownRow {

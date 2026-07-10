@@ -6,10 +6,12 @@ import { fmtNum } from "@/lib/utils";
 import {
   PageHeader,
   Stat,
-  Spinner,
+  StatGridSkeleton,
+  TableSkeleton,
   EmptyState,
   TokenChart,
 } from "@/components/shared";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Card,
   CardAction,
@@ -46,7 +48,55 @@ export default function Dashboard() {
   }, []);
 
   if (error) return <EmptyState msg={`error: ${error}`} />;
-  if (!data) return <Spinner label="Fetching telemetry…" />;
+  if (!data)
+    return (
+      <div>
+        <PageHeader
+          title="Overview"
+          desc="Live gateway telemetry — auto-refreshes every 15 seconds"
+        />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StatGridSkeleton count={4} />
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StatGridSkeleton count={4} />
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <Skeleton className="h-4 w-48" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-40 w-full" />
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <Skeleton className="h-4 w-32" />
+            </CardHeader>
+            <CardContent className="p-0">
+              <TableSkeleton
+                rows={5}
+                cols={4}
+                widths={["70%", "40%", "40%", "30%"]}
+              />
+            </CardContent>
+          </Card>
+        </div>
+        <Card className="mt-4">
+          <CardHeader>
+            <Skeleton className="h-4 w-36" />
+          </CardHeader>
+          <CardContent className="p-0">
+            <TableSkeleton
+              rows={5}
+              cols={4}
+              widths={["60%", "40%", "40%", "30%"]}
+            />
+          </CardContent>
+        </Card>
+      </div>
+    );
 
   const s = data.stats;
   const hourly = data.hourlyUsage ?? [];
@@ -135,13 +185,13 @@ export default function Dashboard() {
                 <TableBody>
                   {s.byModel.map((m) => (
                     <TableRow key={m.model}>
-                      <TableCell className="font-mono text-primary">
-                        <span className="flex items-center gap-2">
+                      <TableCell className="max-w-[16rem] font-mono text-primary">
+                        <span className="flex min-w-0 items-center gap-2">
                           <ModelIcon
                             alias={m.model}
                             type={modelTypes[m.model]}
                           />
-                          {m.model}
+                          <span className="truncate">{m.model}</span>
                         </span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
@@ -193,7 +243,9 @@ export default function Dashboard() {
                   );
                   return (
                     <TableRow key={p.providerId}>
-                      <TableCell>{p.provider}</TableCell>
+                      <TableCell className="max-w-[16rem] truncate">
+                        {p.provider}
+                      </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNum(p.requests)}
                       </TableCell>

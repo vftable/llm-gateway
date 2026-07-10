@@ -3,6 +3,7 @@
 // /v1/models — only user-authored exposed Models (with chains) are.
 
 import type { ModelTransformConfig } from "./transforms";
+import type { ModelCapabilities } from "./capabilities";
 
 export interface ProviderModel {
   id: number;
@@ -13,6 +14,12 @@ export interface ProviderModel {
   /** Base context window (a chain link may override this per hop). */
   contextWindow: number | null;
   maxOutputTokens: number | null;
+  /**
+   * Anthropic-style capability listing captured at import from a rich upstream
+   * (null when the provider didn't report any). Informational metadata carried
+   * alongside the imported model; the exposed Model owns what /v1/models serves.
+   */
+  capabilities: ModelCapabilities | null;
   /** Ordered per-model transform config (from the transform library). */
   transforms: ModelTransformConfig[];
   notes: string | null;
@@ -26,6 +33,7 @@ export interface ProviderModelInput {
   displayName?: string | null;
   contextWindow?: number | null;
   maxOutputTokens?: number | null;
+  capabilities?: ModelCapabilities | null;
   transforms?: ModelTransformConfig[];
   notes?: string | null;
 }

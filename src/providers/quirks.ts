@@ -32,14 +32,19 @@ export function applyTemplateDefaults(
   return {
     ...input,
     baseUrl: input.baseUrl ?? d.baseUrl,
-    format: input.format ?? d.format,
+    // format is an optional generic-adapter hint; null when the template omits it
+    // (adapter-backed providers derive it from the adapter's nativeFmt).
+    format: input.format ?? d.format ?? null,
     endpoints: input.endpoints ?? d.endpoints,
+    endpointPaths: input.endpointPaths ?? d.endpointPaths,
     authScheme: input.authScheme ?? d.authScheme,
     nativeConversion: input.nativeConversion ?? d.nativeConversion,
     retryAttempts: input.retryAttempts ?? d.retryAttempts,
     retryIntervalMs: input.retryIntervalMs ?? d.retryIntervalMs,
     requestTimeoutMs: input.requestTimeoutMs ?? d.requestTimeoutMs,
     tlsVerify: input.tlsVerify ?? d.tlsVerify,
+    basePath: input.basePath ?? d.basePath,
+    modelsPath: input.modelsPath ?? d.modelsPath,
     extraHeaders,
     catalogId: template.id,
   };

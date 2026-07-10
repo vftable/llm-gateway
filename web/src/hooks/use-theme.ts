@@ -12,6 +12,12 @@ function readTheme(): Theme {
 
 function applyTheme(theme: Theme) {
   document.documentElement.classList.toggle("dark", theme === "dark");
+  // Keep the <meta name="color-scheme"> in sync so native Chromium form controls
+  // (scrollbars, <select> popups, date/number spinners, autofill) repaint to the
+  // right scheme immediately on toggle — not just after a reload. The CSS
+  // `color-scheme` on :root/.dark is the source of truth; this mirrors it.
+  const meta = document.querySelector('meta[name="color-scheme"]');
+  if (meta) meta.setAttribute("content", theme === "dark" ? "dark" : "light");
 }
 
 function getServerSnapshot(): Theme {

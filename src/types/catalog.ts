@@ -5,8 +5,9 @@
 // additive: a template produces a normal Provider row — the proxy engine never
 // sees the template. See src/providers/.
 
-import type { AuthScheme, ProviderFormat } from "./provider";
+import type { AuthScheme, ProviderFormat, WireKind } from "./provider";
 import type { ModelCapabilities } from "./capabilities";
+import type { ModelTransformConfig } from "./transforms";
 
 // Which Provider fields a template pre-fills. A subset of ProviderInput's config
 // knobs (identity/keys are supplied by the user in the wizard).
@@ -14,8 +15,12 @@ export interface ProviderDefaults {
   baseUrl?: string;
   basePath?: string;
   modelsPath?: string;
+  /** Generic-adapter hint; omitted for adapter-backed templates (derived). */
   format?: ProviderFormat;
-  endpoints?: string[];
+  /** Endpoint KINDS the provider accepts (chat/messages/responses). */
+  endpoints?: WireKind[];
+  /** Optional per-kind path override for a non-standard layout (rarely needed). */
+  endpointPaths?: Partial<Record<WireKind, string>>;
   authScheme?: AuthScheme;
   extraHeaders?: Record<string, string>;
   nativeConversion?: boolean;
@@ -40,6 +45,15 @@ export interface ProviderQuirks {
   };
   /** Capability overrides merged onto DEFAULT_CAPABILITIES for imported models. */
   defaultCapabilities?: Partial<ModelCapabilities>;
+  /**
+   * Default per-model transforms for this provider family. Applied two ways:
+   *   1. Seeded (editable) onto a provider-model's transforms when it is first
+   *      imported and none were supplied.
+   *   2. Applied as an always-on BASE layer at request time (buildRoute),
+   *      deduped by id+phase so a seeded/edited entry wins.
+   * See src/providers/quirks.ts familyDefaultTransforms + engine buildRoute.
+   */
+  defaultTransforms?: ModelTransformConfig[];
 }
 
 // One field the Add-Provider wizard should surface for a template. `key` maps to

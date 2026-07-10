@@ -31,7 +31,7 @@ import {
   WEB_SEARCH,
   type WebToolsPresent,
 } from "./tools";
-import { messagesResponseToChat } from "../formats/anthropic/bridge";
+import { messagesResponseToChat } from "../formats/converters/chat-messages";
 import {
   emitMessagesSse,
   emitChatSse,
@@ -113,9 +113,11 @@ export async function runWebToolLoop(
     }
   }
 
-  // Working conversation in Messages shape. If the client spoke chat/responses,
-  // ctx.requestBody has already been handed to us in Messages shape by the hook
-  // (it converts before calling us), so we can treat it uniformly.
+  // Working conversation in Messages shape. If the client spoke Chat, the engine
+  // hook (forwardWebToolLoop) already converted ctx.requestBody to Messages shape
+  // before calling us, so we treat it uniformly here. (Responses clients don't
+  // reach this loop — they use `input`, not `messages`; they fall through to the
+  // normal proxy.)
   const base = rewriteRequest(ctx.requestBody, present);
   const messages: unknown[] = Array.isArray(base.messages)
     ? [...(base.messages as unknown[])]

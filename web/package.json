@@ -11,13 +11,13 @@
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",
+    "@radix-ui/react-collapsible": "^1.1.16",
     "@radix-ui/react-dialog": "^1.1.17",
     "@radix-ui/react-popover": "^1.1.17",
     "@radix-ui/react-select": "^2.1.2",
     "@radix-ui/react-separator": "^1.1.0",
     "@radix-ui/react-tabs": "^1.1.17",
     "@radix-ui/react-tooltip": "^1.2.10",
-    "@twemoji/api": "^17.0.3",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -27,6 +27,7 @@
     "react-dom": "^18.3.1",
     "react-json-view-lite": "^2.5.0",
     "react-router-dom": "^6.26.2",
+    "react-simple-code-editor": "^0.14.1",
     "recharts": "^2.15.4",
     "sonner": "^1.5.0",
     "tailwind-merge": "^2.5.2"

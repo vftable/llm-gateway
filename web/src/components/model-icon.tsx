@@ -134,7 +134,7 @@ export function ProviderIcon({
   return (
     <span
       className={cn(
-        "inline-flex size-4 shrink-0 items-center justify-center text-[16px] leading-none [&>svg]:size-full",
+        "inline-flex size-4 shrink-0 items-center justify-center text-base leading-none [&>svg]:size-full",
         className,
       )}
       role="img"
@@ -204,7 +204,7 @@ export function ModelIcon({
     <span
       className={cn(
         // The SVGs are 1em square — size via font-size on the wrapper.
-        "inline-flex size-4 shrink-0 items-center justify-center text-[16px] leading-none [&>svg]:size-full",
+        "inline-flex size-4 shrink-0 items-center justify-center text-base leading-none [&>svg]:size-full",
         className,
       )}
       role="img"

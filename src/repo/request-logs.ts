@@ -212,6 +212,33 @@ export function clearRequestLogs(db: DB, scope: "errors" | "all"): number {
   return db.prepare(sql).run().changes;
 }
 
+export interface HopStat {
+  providerId: string;
+  upstreamModel: string;
+  success: number;
+  /** Non-2xx status (including null, e.g. a timeout that never got a response). */
+  errors: number;
+}
+
+// Per-hop success/error counts for one exposed model, keyed by (providerId,
+// upstreamModel) — the same identity a chain link routes through — so the
+// chain editor can show each hop's own hit-rate. Same success/error split as
+// the rest of the app: 2xx = success, everything else (incl. null = timeout,
+// aborted, or a request that never reached the upstream) = error.
+export function hopStats(db: DB, modelAlias: string): HopStat[] {
+  const rows = db
+    .prepare(
+      `SELECT provider_id AS providerId, upstream_model AS upstreamModel,
+         COALESCE(SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END), 0) AS success,
+         COALESCE(SUM(CASE WHEN status IS NULL OR status >= 300 THEN 1 ELSE 0 END), 0) AS errors
+       FROM request_logs
+       WHERE model = @modelAlias AND provider_id IS NOT NULL AND upstream_model IS NOT NULL
+       GROUP BY provider_id, upstream_model`,
+    )
+    .all({ modelAlias }) as HopStat[];
+  return rows;
+}
+
 // --- Aggregated dashboard stats -------------------------------------------
 
 export interface DashboardStats {

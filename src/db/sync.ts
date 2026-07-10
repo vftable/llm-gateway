@@ -19,6 +19,7 @@
 import type { Database as DB } from "better-sqlite3";
 import { sha256, type ConfigJson } from "../config";
 import { createProvider, getProvider, updateProvider } from "../repo/providers";
+import { getProviderTemplate, applyTemplateDefaults } from "../providers";
 import {
   createModel,
   deleteModel,
@@ -159,15 +160,35 @@ export function syncFromConfig(db: DB, cfg: ConfigJson): SyncResult {
       if (providerId) {
         updateProvider(db, providerId, { baseUrl, apiKeys, tlsVerify });
       } else {
+        // Seed as the "proxy" provider type: it accepts all three wire formats
+        // and converts internally (nativeConversion), matching a LiteLLM/9router
+        // style upstream — the defaults (endpoints, authScheme "both", catalogId)
+        // come from that one template so there's no drift.
+        const proxyTpl = getProviderTemplate("proxy");
+        const seed = proxyTpl
+          ? applyTemplateDefaults(proxyTpl, {
+              name: "Config Upstream",
+              baseUrl,
+              apiKeys,
+              tlsVerify,
+              retryAttempts: 1,
+              enabled: true,
+            })
+          : {
+              name: "Config Upstream",
+              baseUrl,
+              apiKeys,
+              authScheme: "both" as const,
+              nativeConversion: true,
+              tlsVerify,
+              retryAttempts: 1,
+              enabled: true,
+            };
         const p = createProvider(db, {
           id: "config-upstream",
-          name: "Config Upstream",
-          baseUrl,
-          apiKeys,
-          authScheme: "both",
-          tlsVerify,
-          retryAttempts: 1,
-          enabled: true,
+          ...seed,
+          name: seed.name ?? "Config Upstream",
+          baseUrl: seed.baseUrl ?? baseUrl,
         });
         providerId = p.id;
       }

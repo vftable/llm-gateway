@@ -1,11 +1,19 @@
-// Inline country flags via twemoji. A 2-letter ISO code is turned into its
-// regional-indicator emoji, then twemoji renders that to a CDN SVG <img> so the
-// flag looks identical across platforms (native emoji flags don't render on
-// Windows). Mirrors the inline-SVG pattern used by model-icon.tsx.
+// Inline country flags via the Twemoji CDN. A 2-letter ISO code becomes its
+// regional-indicator codepoints, which name the Twemoji SVG — so the flag looks
+// identical across platforms (native emoji flags don't render on Windows).
+//
+// We build the <img> in JSX (rather than twemoji.parse + dangerouslySetInnerHTML)
+// so we can attach an onError fallback: if the CDN is unreachable (offline /
+// air-gapped deploy / blocked), we show the 2-letter code instead of a broken
+// image or the raw-emoji tofu that Windows would render. Explicit sizing avoids
+// layout shift while the SVG loads.
 
-import { useMemo } from "react";
-import twemoji from "@twemoji/api";
+import { useState } from "react";
 import { cn } from "@/lib/utils";
+
+// Twemoji CDN base (jdecked fork, pinned) — the same URL @twemoji/api composes.
+const TWEMOJI_BASE =
+  "https://cdn.jsdelivr.net/gh/jdecked/twemoji@17.0.3/assets";
 
 // A compact, commonly-useful country list for the picker. Not exhaustive — the
 // backend accepts any 2-letter code, so this is just the dropdown's convenience
@@ -40,15 +48,15 @@ export const COUNTRIES: Array<{ code: string; name: string }> = [
 
 const NAME_BY_CODE = new Map(COUNTRIES.map((c) => [c.code, c.name]));
 
-// Convert "US" -> "🇺🇸" (two regional-indicator symbols).
-function codeToEmoji(code: string): string | null {
+// Convert "US" -> "1f1fa-1f1f8" (the two regional-indicator codepoints, hex,
+// dash-joined) — the Twemoji SVG file naming. Null for a non-2-letter code.
+function codeToTwemojiName(code: string): string | null {
   const cc = code.trim().toUpperCase();
   if (!/^[A-Z]{2}$/.test(cc)) return null;
   const A = 0x1f1e6; // regional indicator "A"
-  return (
-    String.fromCodePoint(A + cc.charCodeAt(0) - 65) +
-    String.fromCodePoint(A + cc.charCodeAt(1) - 65)
-  );
+  const a = A + cc.charCodeAt(0) - 65;
+  const b = A + cc.charCodeAt(1) - 65;
+  return `${a.toString(16)}-${b.toString(16)}`;
 }
 
 export function CountryFlag({
@@ -60,27 +68,39 @@ export function CountryFlag({
   className?: string;
   title?: string;
 }) {
-  const html = useMemo(() => {
-    if (!code) return null;
-    const emoji = codeToEmoji(code);
-    if (!emoji) return null;
-    // twemoji.parse returns an <img> string pointing at the CDN SVG.
-    return twemoji.parse(emoji, { folder: "svg", ext: ".svg" });
-  }, [code]);
-
-  if (!html) return null;
+  const [failed, setFailed] = useState(false);
+  const name = code ? codeToTwemojiName(code) : null;
+  if (!name) return null;
   const label = title || NAME_BY_CODE.get(code!.toUpperCase()) || code!;
+
   return (
     <span
       className={cn(
-        "inline-flex size-4 shrink-0 items-center justify-center [&>img]:size-full [&>img]:rounded-[1px]",
+        "inline-flex size-4 shrink-0 items-center justify-center overflow-hidden rounded-xs",
         className,
       )}
       role="img"
       aria-label={label}
       title={label}
-      dangerouslySetInnerHTML={{ __html: html }}
-    />
+    >
+      {failed ? (
+        // CDN unreachable — a legible 2-letter code beats a broken image / tofu.
+        <span className="text-[0.5rem] font-semibold leading-none tracking-tight text-muted-foreground">
+          {code!.toUpperCase()}
+        </span>
+      ) : (
+        <img
+          src={`${TWEMOJI_BASE}/svg/${name}.svg`}
+          alt=""
+          width={16}
+          height={16}
+          loading="lazy"
+          draggable={false}
+          className="size-full"
+          onError={() => setFailed(true)}
+        />
+      )}
+    </span>
   );
 }
 

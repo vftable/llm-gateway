@@ -10,13 +10,15 @@ import type {
 } from "@/lib/types";
 import {
   PageHeader,
-  Spinner,
+  TableSkeleton,
+  StatGridSkeleton,
   EmptyState,
   Stat,
   Field,
   Pagination,
   TokenChart,
 } from "@/components/shared";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Card,
   CardAction,
@@ -80,7 +82,52 @@ export default function Usage() {
       .catch(() => setResolution([]));
   };
 
-  if (!data) return <Spinner label="Loading usage…" />;
+  if (!data)
+    return (
+      <div>
+        <PageHeader
+          title="Usage"
+          desc="Per-key token consumption, quotas and provider resolution — resets at UTC midnight"
+        />
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+          <StatGridSkeleton count={4} />
+        </div>
+        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Card className="self-start lg:col-span-1">
+            <CardHeader>
+              <Skeleton className="h-4 w-32" />
+            </CardHeader>
+            <CardContent>
+              <Skeleton className="h-40 w-full" />
+            </CardContent>
+          </Card>
+          <Card className="lg:col-span-2">
+            <CardHeader>
+              <Skeleton className="h-4 w-48" />
+            </CardHeader>
+            <CardContent className="p-0">
+              <TableSkeleton
+                rows={6}
+                cols={6}
+                widths={["10%", "50%", "40%", "60%", "30%", "30%"]}
+              />
+            </CardContent>
+          </Card>
+        </div>
+        <Card className="mt-4">
+          <CardHeader>
+            <Skeleton className="h-4 w-56" />
+          </CardHeader>
+          <CardContent className="p-0">
+            <TableSkeleton
+              rows={6}
+              cols={7}
+              widths={["50%", "40%", "60%", "60%", "30%", "30%", "30%"]}
+            />
+          </CardContent>
+        </Card>
+      </div>
+    );
 
   const sorted = [...data.today.keys].sort((a, b) => b.used - a.used);
   const keysPageCount = Math.max(1, Math.ceil(sorted.length / KEYS_PAGE_SIZE));
@@ -216,18 +263,20 @@ export default function Usage() {
                     <TableCell className="font-mono text-primary">
                       {r.keyPrefix}
                     </TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="max-w-[10rem] truncate text-muted-foreground">
                       {r.userName ?? "—"}
                     </TableCell>
-                    <TableCell className="font-mono">
-                      <span className="flex items-center gap-2">
+                    <TableCell className="max-w-[14rem] font-mono">
+                      <span className="flex min-w-0 items-center gap-2">
                         <ModelIcon alias={r.model} type={modelTypes[r.model]} />
-                        {r.model}
+                        <span className="truncate">{r.model}</span>
                       </span>
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="max-w-[12rem]">
                       {r.providerName ? (
-                        <Badge variant="default">{r.providerName}</Badge>
+                        <Badge variant="default" className="block truncate">
+                          {r.providerName}
+                        </Badge>
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
@@ -299,8 +348,11 @@ export default function Usage() {
                       );
                       return (
                         <TableRow key={i}>
-                          <TableCell>
-                            <Badge variant="default">
+                          <TableCell className="max-w-[12rem]">
+                            <Badge
+                              variant="default"
+                              className="block max-w-full truncate"
+                            >
                               {r.providerName ?? r.providerId ?? "(unknown)"}
                             </Badge>
                           </TableCell>
@@ -391,13 +443,13 @@ const KeyUsageRow = memo(function KeyUsageRow({
             <ChevronRight className="h-3.5 w-3.5" />
           )}
         </TableCell>
-        <TableCell>
-          <div className="font-mono text-primary">{k.keyPrefix}</div>
-          <div className="text-[0.65rem] text-muted-foreground">
+        <TableCell className="max-w-[12rem]">
+          <div className="truncate font-mono text-primary">{k.keyPrefix}</div>
+          <div className="truncate text-[0.65rem] text-muted-foreground">
             {k.keyName ?? "—"}
           </div>
         </TableCell>
-        <TableCell className="text-muted-foreground">
+        <TableCell className="max-w-[10rem] truncate text-muted-foreground">
           {k.userName ?? "—"}
         </TableCell>
         <TableCell onClick={(e) => e.stopPropagation()}>
@@ -414,7 +466,7 @@ const KeyUsageRow = memo(function KeyUsageRow({
               />
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 onClick={saveQuota}
                 disabled={saving}
                 title="Save"
@@ -423,7 +475,7 @@ const KeyUsageRow = memo(function KeyUsageRow({
               </Button>
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 onClick={() => {
                   setEditing(false);
                   setQuota(k.limit?.toString() ?? "");
@@ -458,14 +510,15 @@ const KeyUsageRow = memo(function KeyUsageRow({
                   <span className="text-muted-foreground">∞ unlimited</span>
                 )}
               </div>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="icon-xs"
                 title="Edit quota"
                 onClick={() => setEditing(true)}
-                className="cursor-pointer text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/quota:opacity-100"
+                className="text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/quota:opacity-100"
               >
                 <Pencil className="h-3 w-3" />
-              </button>
+              </Button>
             </div>
           )}
         </TableCell>
@@ -488,9 +541,11 @@ const KeyUsageRow = memo(function KeyUsageRow({
         <TableRow className="hover:bg-transparent">
           <TableCell colSpan={6} className="bg-muted/30 p-0">
             {detail === null ? (
-              <div className="p-3">
-                <Spinner />
-              </div>
+              <TableSkeleton
+                rows={3}
+                cols={5}
+                widths={["70%", "40%", "30%", "30%", "20%"]}
+              />
             ) : detail.length === 0 ? (
               <p className="p-3 text-xs text-muted-foreground">
                 No requests from this key today.
@@ -503,7 +558,9 @@ const KeyUsageRow = memo(function KeyUsageRow({
                     <TableHead className="w-40">Provider</TableHead>
                     <TableHead className="w-24 text-right">Requests</TableHead>
                     <TableHead className="w-28 text-right">Tokens</TableHead>
-                    <TableHead className="w-20 text-right pr-4">Share</TableHead>
+                    <TableHead className="w-20 text-right pr-4">
+                      Share
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -511,8 +568,8 @@ const KeyUsageRow = memo(function KeyUsageRow({
                     const total = detail.reduce((a, x) => a + x.tokens, 0);
                     return (
                       <TableRow key={i}>
-                        <TableCell className="pl-12 font-mono">
-                          <span className="flex items-center gap-2">
+                        <TableCell className="max-w-[16rem] pl-12 font-mono">
+                          <span className="flex min-w-0 items-center gap-2">
                             <ModelIcon
                               alias={d.model}
                               type={modelTypes[d.model]}
@@ -520,9 +577,14 @@ const KeyUsageRow = memo(function KeyUsageRow({
                             <span className="truncate">{d.model}</span>
                           </span>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="max-w-[12rem]">
                           {d.providerName ? (
-                            <Badge variant="secondary">{d.providerName}</Badge>
+                            <Badge
+                              variant="secondary"
+                              className="block truncate"
+                            >
+                              {d.providerName}
+                            </Badge>
                           ) : (
                             <span className="text-muted-foreground">—</span>
                           )}

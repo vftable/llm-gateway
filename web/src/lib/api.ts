@@ -17,9 +17,13 @@ import type {
   ProviderTestProbe,
   ProviderModel,
   ProviderModelInput,
+  ProviderUsageReport,
   TransformDefInfo,
+  ResolvedTransforms,
   RequestLog,
   RequestLogDetail,
+  HopStat,
+  TestModelResult,
   Settings,
   UpstreamModelsResponse,
   UsageBreakdownRow,
@@ -92,20 +96,40 @@ export const api = {
 
   // providers
   listProviders: () => req<Provider[]>("/api/providers"),
+  providerUsage: () => req<ProviderUsageReport[]>("/api/providers/usage"),
+  providerUsageOne: (id: string) =>
+    req<ProviderUsageReport>(`/api/providers/${id}/usage`),
   createProvider: (input: ProviderInput) =>
     req<Provider>("/api/providers", json("POST", input)),
-  updateProvider: (id: string, input: ProviderInput) =>
+  // Partial: the backend merges (undefined keeps existing), so callers can PUT
+  // just the fields they changed (e.g. the Keys tab sends only { apiKeys }).
+  updateProvider: (id: string, input: Partial<ProviderInput>) =>
     req<Provider>(`/api/providers/${id}`, json("PUT", input)),
   deleteProvider: (id: string) =>
     req<void>(`/api/providers/${id}`, { method: "DELETE" }),
-  testProvider: (id: string) =>
-    req<ProviderTestResult>(`/api/providers/${id}/test`, { method: "POST" }),
+  // `key` tests that exact key (bypassing the live rotation pick) — used by
+  // the per-key Test button in the Keys tab; omit it for the provider-level
+  // "Test connection" button, which lets pickKeyForTest choose live.
+  testProvider: (id: string, key?: string) =>
+    req<ProviderTestResult>(
+      `/api/providers/${id}/test`,
+      key ? json("POST", { key }) : { method: "POST" },
+    ),
   upstreamModels: (id: string) =>
     req<UpstreamModelsResponse>(`/api/providers/${id}/upstream-models`),
+  // The full resolved default transform stack — read-only, never edited from
+  // here. Omit `upstreamId` for the provider-level defaults every imported
+  // model starts from; pass it to layer that specific model's own transforms
+  // on top, exactly as a live request would (see docs/transforms-api.md).
+  resolvedTransforms: (id: string, upstreamId?: string) =>
+    req<ResolvedTransforms>(
+      `/api/providers/${id}/transforms/resolved${
+        upstreamId ? `?upstreamId=${encodeURIComponent(upstreamId)}` : ""
+      }`,
+    ),
 
   // provider catalog (stock provider registry)
-  listProviderCatalog: () =>
-    req<ProviderTemplate[]>("/api/provider-catalog"),
+  listProviderCatalog: () => req<ProviderTemplate[]>("/api/provider-catalog"),
   testProviderConfig: (input: ProviderTestInput) =>
     req<ProviderTestProbe>("/api/provider-catalog/test", json("POST", input)),
 
@@ -117,12 +141,16 @@ export const api = {
     req<Model>(`/api/models/${id}`, json("PUT", input)),
   deleteModel: (id: string) =>
     req<void>(`/api/models/${id}`, { method: "DELETE" }),
+  hopStats: (id: string) => req<HopStat[]>(`/api/models/${id}/hop-stats`),
 
   // imported provider models (per-provider catalog, not exposed)
   listProviderModels: (providerId: string) =>
     req<ProviderModel[]>(`/api/providers/${providerId}/models`),
   createProviderModel: (providerId: string, input: ProviderModelInput) =>
-    req<ProviderModel>(`/api/providers/${providerId}/models`, json("POST", input)),
+    req<ProviderModel>(
+      `/api/providers/${providerId}/models`,
+      json("POST", input),
+    ),
   updateProviderModel: (
     providerId: string,
     mid: number,
@@ -135,6 +163,10 @@ export const api = {
   deleteProviderModel: (providerId: string, mid: number) =>
     req<void>(`/api/providers/${providerId}/models/${mid}`, {
       method: "DELETE",
+    }),
+  testProviderModel: (providerId: string, mid: number) =>
+    req<TestModelResult>(`/api/providers/${providerId}/models/${mid}/test`, {
+      method: "POST",
     }),
 
   // transform library (for the per-model transform editor)

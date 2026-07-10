@@ -19,23 +19,27 @@
 import http from "http";
 import https from "https";
 import { URL } from "url";
-import { randomBytes } from "crypto";
-import { pipeline as streamPipeline } from "stream";
+import { pipeline as streamPipeline, PassThrough } from "stream";
 import type { IncomingMessage } from "http";
 import type { Request, Response } from "express";
 import type { Database as DB } from "better-sqlite3";
 import type { Logger } from "../logger";
-import type {
-  ApiKey,
-  Model,
-  Provider,
-  ModelTransformConfig,
-} from "../types";
+import type { Model, Provider } from "../types";
 import { agentFor } from "./proxy-agent";
 import { buildUpstreamUrl, hostFromUrl } from "./url";
-import { adapterForProvider } from "../providers";
+import {
+  adapterForProvider,
+  wireFmtOf,
+  endsWithKnownSuffix,
+  familyDefaultTransforms,
+  applyAuthHeaders,
+  type EndpointRoute,
+} from "../providers";
 import { getProviderModel } from "../repo/provider-models";
-import { modelTransformBags } from "../formats/transforms";
+import {
+  modelTransformBags,
+  dropOverriddenDefaults,
+} from "../formats/transforms";
 import {
   KeyHealthStore,
   parseRateLimit,
@@ -46,147 +50,44 @@ import { ThinkingConverter } from "../formats/thinking";
 import {
   buildTransformPlan,
   applyBodyTransforms,
-  applyThinking,
-  thinkingStream,
   type TransformCtx,
-  type RequestTransform,
-  type ResponseTransform,
-  type StreamTransform,
 } from "../formats/pipeline";
+import { collectDefaults } from "../formats/transforms/defaults";
 import { SsePingKeepAlive } from "./sse-ping";
 import { SseUsageObserver } from "./sse-usage";
 import { requestJson, type JsonResponse } from "./http";
 import { detectWebTools } from "../web-tools/tools";
 import { runWebToolLoop } from "../web-tools/loop";
 import { getWebProvider, DEFAULT_PROVIDER } from "../web-tools/backends";
+import { chatRequestToMessages } from "../formats/converters/chat-messages";
 import { stripInvisible } from "../utils";
 import { readResponseUsage, readMaxOutputTokens } from "../formats/tokens";
 import { listProviders } from "../repo/providers";
 import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
 import { insertRequestLog } from "../repo/request-logs";
-import { getSetting } from "../repo/settings";
+import { captureRequest, packResponseSummary } from "./debug-capture";
+import type {
+  ChainEntry,
+  Route,
+  AttemptResult,
+  StreamUsageLike,
+} from "./engine-support/types";
 import {
-  captureRequest,
-  captureResponse,
-  packResponseSummary,
-} from "./debug-capture";
+  HOP_BY_HOP,
+  RETRY_STATUS,
+  MAX_BUFFER_BYTES,
+  pathFmt,
+  makeResolve,
+  safeCaptureResponse,
+  shortId,
+  isEventStream,
+  isJson,
+  filteredHeaders,
+  sleep,
+} from "./engine-support/utils";
 
-const HOP_BY_HOP = new Set([
-  "connection",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "te",
-  "trailer",
-  "trailers",
-  "transfer-encoding",
-  "upgrade",
-]);
-
-const RETRY_STATUS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
-const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-
-// The three wire formats the gateway understands.
-type Fmt = "chat" | "messages" | "responses";
-
-function pathFmt(p: string | undefined | null): Fmt | null {
-  if (!p) return null;
-  const x = p.split("?")[0];
-  if (x.endsWith("/chat/completions")) return "chat";
-  if (x.endsWith("/messages")) return "messages";
-  if (x.endsWith("/responses")) return "responses";
-  return null;
-}
-
-// One resolved hop in a model's fallback chain: the provider to try, the
-// upstream model id, its endpoint, plus the effective per-hop context window
-// (link override ?? imported-model base) and the imported model's transforms.
-interface ChainEntry {
-  provider: Provider;
-  upstreamModel: string;
-  endpoint: string | null;
-  contextWindow: number | null;
-  transforms: ModelTransformConfig[];
-}
-
-// Per-attempt route plan: where to send + the ordered transform stages (format
-// conversion + any adapter-custom transforms) for request, response and stream.
-// Built by buildRoute from the provider adapter + formats/pipeline.
-interface Route {
-  forwardPath: string;
-  providerFmt: Fmt;
-  convert: boolean;
-  /** Ordered request-body stages (client -> provider), then custom. */
-  request: RequestTransform[];
-  /** Ordered buffered-response stages (provider -> client), then custom. */
-  response: ResponseTransform[];
-  /** Ordered SSE stages (format bridge, then custom). */
-  stream: StreamTransform[];
-  /** True when a format-level stream bridge is present (for the unsupported check). */
-  streamBridged: boolean;
-  /** Context passed to every transform. */
-  xctx: TransformCtx;
-  unsupported?: string;
-}
-
-export interface ForwardContext {
-  clientPath: string;
-  requestBody: Record<string, unknown>;
-  resolvedModel: Model | null;
-  alias: string;
-  apiKey: ApiKey | null;
-  inputTokens: number;
-  /** Tokens the pipeline optimistically debited from the key's daily counter
-   *  (input estimate + reserved max output). Settlement reverses exactly this,
-   *  then applies the actual usage — see settleUsage(). */
-  reservedTokens: number;
-  isStream: boolean;
-  client: string | null;
-  /** When true, capture distilled request/response payloads for the debug view.
-   *  Read once per request from settings.debugLogging. */
-  debug: boolean;
-  /** Short correlation id for this request, set only when debug logging is on.
-   *  When present it enables the per-transformation trace and ties the trace,
-   *  attempts, and the final summary line together. */
-  reqId?: string;
-  /** Distilled client request JSON, computed once when debug is on. */
-  debugRequest?: string | null;
-  /** Web-tools config; when enabled, requests carrying the hosted web_search /
-   *  web_fetch tools are handled by the gateway's loop against the selected
-   *  web provider (see ./web-providers). */
-  webTools?: {
-    enabled: boolean;
-    provider: string; // registry id, e.g. "firecrawl"
-    baseUrl: string;
-    apiKey: string;
-  };
-}
-
-interface AttemptResult {
-  committed: boolean;
-  /** True when a streaming attempt will settle usage + log itself once its
-   *  pipeline ends; the caller must not settle/log again. */
-  deferred?: boolean;
-  status?: number;
-  inputTokens?: number;
-  outputTokens?: number | null;
-  cachedTokens?: number | null;
-  /** Distilled response JSON (debug capture) from the buffered path. */
-  debugResponse?: string | null;
-  reason?: string;
-  error?: string | null;
-  /** Hash of the upstream key used, so forward() can record its health. */
-  keyHash?: string | null;
-  /** Cooldown (ms) parsed from a 429 response's Retry-After, for the key. */
-  rateLimitMs?: number;
-}
-
-// Upstream-reported usage shape (subset of readResponseUsage's return).
-interface StreamUsageLike {
-  input?: number;
-  output?: number;
-  cached?: number;
-}
+export type { ForwardContext } from "./engine-support/types";
+import type { ForwardContext } from "./engine-support/types";
 
 export class ForwardingEngine {
   private readonly keyHealth: KeyHealthStore;
@@ -204,6 +105,21 @@ export class ForwardingEngine {
   // web-tool loop, which writes a synthetic SSE response directly). 0 disables.
   get pingInterval(): number {
     return this.ssePingInterval;
+  }
+
+  // Health-aware key pick using the SAME live rotation/health state a real
+  // request would get (this.keyHealth is shared with the forward() path) —
+  // for the admin "Test connection" probe, so the reported key isn't a fake
+  // stand-in but the actual next-in-line pick (skips cooling-down/auth-failed
+  // keys, honors model affinity). Like a real select(), this DOES advance the
+  // round-robin cursor — a test click consumes a rotation slot exactly like a
+  // real request would, so back-to-back tests cycle through the pool instead
+  // of always reporting the same key. It does NOT call recordSuccess/
+  // recordFailure/markAuthFailed — the probe itself does its own HTTP call and
+  // reports its own status, not through the key-health feedback loop. Returns
+  // null only when the provider has no keys at all.
+  pickKeyForTest(provider: Provider, model: string | null): KeyPick | null {
+    return this.keyHealth.select(provider, model, new Set());
   }
 
   // --- chain + route --------------------------------------------------------
@@ -229,9 +145,22 @@ export class ForwardingEngine {
         provider,
         upstreamModel: link.upstreamModel,
         endpoint: link.endpoint ?? null,
-        contextWindow:
-          link.contextWindow ?? imported?.contextWindow ?? null,
-        transforms: imported?.transforms ?? [],
+        contextWindow: link.contextWindow ?? imported?.contextWindow ?? null,
+        maxOutputTokens:
+          link.maxOutputTokens ??
+          imported?.maxOutputTokens ??
+          model.maxOutputTokens ??
+          null,
+        // Family default transforms form an always-on BASE layer; the imported
+        // model's own transforms override by (id, phase). Even a model with no
+        // configured transforms gets its family's sensible defaults. Kept
+        // separate from ownTransforms so buildRoute can place family defaults
+        // BEFORE the adapter's own transform stack and own transforms AFTER.
+        familyTransforms: dropOverriddenDefaults(
+          familyDefaultTransforms(provider),
+          imported?.transforms ?? [],
+        ),
+        ownTransforms: imported?.transforms ?? [],
       });
     }
     if (chain.length === 0) {
@@ -241,7 +170,9 @@ export class ForwardingEngine {
           upstreamModel: model.alias,
           endpoint: null,
           contextWindow: null,
-          transforms: [],
+          maxOutputTokens: model.maxOutputTokens ?? null,
+          familyTransforms: familyDefaultTransforms(provider),
+          ownTransforms: [],
         });
     }
     return chain;
@@ -261,11 +192,24 @@ export class ForwardingEngine {
     const clientFmt = pathFmt(clientPath) ?? "chat";
     const adapter = adapterForProvider(provider);
 
-    // nativeConversion: provider accepts the client's format/endpoint directly,
-    // no built-in conversion — but adapter-custom transforms still apply.
-    const endpointPlan = provider.nativeConversion
-      ? { forwardPath: clientPath.split("?")[0], providerFmt: clientFmt }
-      : adapter.planFor(clientFmt, provider, endpoint);
+    // nativeConversion: the provider accepts all three wire formats and converts
+    // to its model internally. The per-hop endpoint chooses WHICH format the
+    // gateway hands it — the gateway still converts client -> picked format, then
+    // the provider does the rest. "Auto" (no per-link endpoint) forwards the
+    // client's own format + path unchanged (no gateway conversion).
+    const endpointPlan: EndpointRoute = provider.nativeConversion
+      ? endpoint && endsWithKnownSuffix(endpoint)
+        ? {
+            forwardPath: endpoint,
+            endpointKind: wireFmtOf(endpoint, clientFmt),
+            providerFmt: wireFmtOf(endpoint, clientFmt),
+          }
+        : {
+            forwardPath: clientPath.split("?")[0],
+            endpointKind: clientFmt,
+            providerFmt: clientFmt,
+          }
+      : adapter.routeFor(clientFmt, provider, endpoint, entry.upstreamModel);
 
     const xctx: TransformCtx = {
       provider,
@@ -273,6 +217,7 @@ export class ForwardingEngine {
       providerFmt: endpointPlan.providerFmt,
       alias,
       upstreamModel: entry.upstreamModel,
+      maxOutputTokens: entry.maxOutputTokens,
     };
 
     // reqId is supplied only when debug logging is on, so its presence gates the
@@ -286,21 +231,52 @@ export class ForwardingEngine {
           })
       : undefined;
 
-    // Merge adapter (provider-scoped) + model (imported-model-scoped) transforms.
-    // Model stages run after adapter stages within each phase.
+    // Compose the pipeline's custom stages. Every stage is either format-tagged
+    // (placed by buildTransformPlan relative to the wire conversion) or untagged
+    // (placed post, historical). Sources, in order:
+    //   1. default transforms: the all-provider registry (anthropic hooks,
+    //      thinking) — declared in formats/transforms/defaults, each format-
+    //      tagged so it lands in the right slot for this hop.
+    //   2. family transforms: the provider family's library-backed defaults
+    //      (e.g. anthropic-cache), minus anything the model overrides — runs
+    //      BEFORE the adapter's own stack so e.g. prompt-caching breakpoints
+    //      are in place before an adapter-specific stage (like the
+    //      anthropic-subscription hooks) inspects/rewrites the body.
+    //   3. adapter transforms: the provider adapter's own tagged/untagged
+    //      stages (e.g. anthropic-subscription's no-op framework).
+    //   4. model transforms: the model's own overrides/additions — last, so an
+    //      operator's explicit per-model customization always has the final
+    //      say over both the family default and the adapter's stack.
+    const defaults = collectDefaults({
+      thinking: this.thinking,
+      providerFmt: endpointPlan.providerFmt,
+    });
+    const familyBag = modelTransformBags(entry.familyTransforms);
     const adapterBag = adapter.transforms(provider);
-    const modelBag = modelTransformBags(entry.transforms);
+    const ownBag = modelTransformBags(entry.ownTransforms);
     const extra = {
-      request: [...(adapterBag.request ?? []), ...modelBag.request],
-      response: [...(adapterBag.response ?? []), ...modelBag.response],
-      stream: adapterBag.stream ?? [],
+      request: [
+        ...defaults.request,
+        ...familyBag.request,
+        ...(adapterBag.request ?? []),
+        ...ownBag.request,
+      ],
+      response: [
+        ...defaults.response,
+        ...familyBag.response,
+        ...(adapterBag.response ?? []),
+        ...ownBag.response,
+      ],
+      stream: [...defaults.stream, ...(adapterBag.stream ?? [])],
     };
 
     const plan = buildTransformPlan(clientFmt, endpointPlan, extra, onStage);
 
     return {
       forwardPath: plan.forwardPath,
+      endpointKind: endpointPlan.endpointKind,
       providerFmt: plan.providerFmt,
+      clientFmt,
       convert: clientFmt !== plan.providerFmt,
       request: plan.request,
       response: plan.response,
@@ -308,6 +284,8 @@ export class ForwardingEngine {
       streamBridged: plan.stream.some((s) => s.name.startsWith("stream:")),
       xctx,
       unsupported: plan.unsupported,
+      // Phase-2 builder: assembles the outbound request after conversion.
+      adapter,
     };
   }
 
@@ -331,14 +309,17 @@ export class ForwardingEngine {
       }
     }
 
-    // Firecrawl-backed web tools: if enabled and this Messages request asks for
-    // the hosted web_search / web_fetch tools, hand the whole request to the
-    // agent loop (which the gateway runs itself) instead of a single proxied
-    // turn. Only Messages-format clients (e.g. Claude Code) use these tools;
-    // other paths fall through to the normal proxy untouched.
+    // Firecrawl-backed web tools: if enabled and this request asks for the hosted
+    // web_search / web_fetch tools, hand the whole request to the agent loop (which
+    // the gateway runs itself) instead of a single proxied turn. Detection is
+    // format-agnostic (tool defs in Messages OR Chat shape — a Claude model behind
+    // an OpenAI-type client), so both Messages and Chat clients qualify; the loop
+    // works in Messages shape internally and emits back in the client's format.
+    // Responses clients (`input`, not `messages`) fall through to the normal proxy.
+    const clientFmt = pathFmt(ctx.clientPath);
     if (
       ctx.webTools?.enabled &&
-      pathFmt(ctx.clientPath) === "messages" &&
+      (clientFmt === "messages" || clientFmt === "chat") &&
       this.hasWebTools(ctx.requestBody)
     ) {
       await this.forwardWebToolLoop(req, res, ctx, startedAt);
@@ -577,42 +558,84 @@ export class ForwardingEngine {
     const { provider, upstreamModel } = entry;
     const keyHash = pick?.keyHash ?? null;
 
-    // Run the request through its ordered transform stages (format conversion
-    // then any adapter-custom stages), then stamp the upstream model id. Falls
-    // back to the original body on conversion error.
+    // Fresh per-attempt ctx so a request hook's URL/header rewrites can't leak
+    // across retries/hops (route.xctx is shared for the whole request).
+    const attemptCtx: TransformCtx = {
+      ...route.xctx,
+      headerOverrides: undefined,
+      urlOverride: undefined,
+    };
+
+    // Phase 1 — run the request through its ordered transform stages (format
+    // conversion then any adapter-custom stages) and stamp the upstream model id.
+    // A request hook may also set attemptCtx.headerOverrides / .urlOverride to
+    // rewrite the outbound request; those are the defaults handed to the builder.
+    const key = pick?.key ?? null;
     let serialized: Buffer;
+    let upstreamUrl: URL;
+    let headers: Record<string, string>;
     try {
-      const body = applyBodyTransforms(
+      const converted = applyBodyTransforms(
         route.request,
         { ...ctx.requestBody },
-        route.xctx,
+        attemptCtx,
         this.stageApplyLogger(ctx, "req"),
       );
-      body.model = upstreamModel;
-      // JSON.stringify can throw on a BigInt / circular structure a transform
-      // produced — keep it inside the guard so the attempt fails over cleanly.
-      serialized = Buffer.from(JSON.stringify(body), "utf8");
+      converted.model = upstreamModel;
+
+      // Default composed URL: a request hook's urlOverride wins, else the
+      // origin+basePath+forwardPath composition (string concat, not
+      // `new URL(path, base)`, which drops path prefixes — so Gemini-style
+      // layouts and OpenRouter's `/api` both work).
+      const defaultUrl =
+        attemptCtx.urlOverride ??
+        buildUpstreamUrl(provider, route.forwardPath).toString();
+      // Default header set (client passthrough + auth + extraHeaders), with the
+      // request hook's per-attempt overrides merged (string sets, null deletes).
+      const defaultHeaders = this.buildHeaders(
+        req,
+        provider,
+        key,
+        attemptCtx.headerOverrides,
+      );
+
+      // Phase 2 — the adapter builds the final outbound request from the
+      // converted body, the selected key, and the composed URL + headers. The
+      // default builder forwards them verbatim; a bespoke provider may rewrite
+      // url/headers/body via the URL parts + resolve() (no `new URL()` needed).
+      // Runs LAST, so it wins over the request-hook overrides.
+      const resolve = makeResolve(provider, route.forwardPath);
+      const built = route.adapter.buildFor(route.providerFmt, {
+        provider,
+        model: upstreamModel,
+        body: converted,
+        apiKey: key,
+        clientFmt: route.clientFmt,
+        providerFmt: route.providerFmt,
+        endpointKind: route.endpointKind,
+        forwardPath: route.forwardPath,
+        baseUrl: provider.baseUrl,
+        basePath: provider.basePath,
+        resolve,
+        url: defaultUrl,
+        headers: defaultHeaders,
+      });
+
+      // JSON.stringify can throw on a BigInt / circular structure a transform or
+      // builder produced — keep it (and the URL parse) inside the guard so the
+      // attempt fails over cleanly.
+      serialized = Buffer.from(JSON.stringify(built.body), "utf8");
+      upstreamUrl = new URL(built.url);
+      headers = {
+        ...built.headers,
+        "content-length": String(serialized.length),
+      };
     } catch (err) {
       return Promise.resolve({
         committed: false,
-        reason: `request conversion failed: ${(err as Error).message}`,
+        reason: `request build failed: ${(err as Error).message}`,
       });
     }
-
-    let upstreamUrl: URL;
-    try {
-      // Join base + path by concatenation (not `new URL(path, base)`, which
-      // discards any path prefix in baseUrl). Composes origin + basePath +
-      // forwardPath so Gemini-style layouts and OpenRouter's `/api` both work.
-      upstreamUrl = buildUpstreamUrl(provider, route.forwardPath);
-    } catch {
-      return Promise.resolve({
-        committed: false,
-        reason: `bad provider baseUrl: ${provider.baseUrl}`,
-      });
-    }
-    const key = pick?.key ?? null;
-    const headers = this.buildHeaders(req, provider, key, serialized.length);
     const isHttps = upstreamUrl.protocol === "https:";
     const transport = isHttps ? https : http;
     let proxyAgent: ReturnType<typeof agentFor>;
@@ -731,9 +754,13 @@ export class ForwardingEngine {
       upRes.resume();
       // Parse the cooldown so forward() can rate-limit this key for the right
       // duration before failing over.
-      const rateLimitMs =
-        status === 429 ? parseRateLimit(headers) : undefined;
-      return { committed: false, status, reason: `status ${status}`, rateLimitMs };
+      const rateLimitMs = status === 429 ? parseRateLimit(headers) : undefined;
+      return {
+        committed: false,
+        status,
+        reason: `status ${status}`,
+        rateLimitMs,
+      };
     }
 
     if (status < 200 || status >= 300) {
@@ -826,10 +853,9 @@ export class ForwardingEngine {
     delete out["Content-Length"];
     if (route.convert) out["content-type"] = "text/event-stream";
 
-    const thinking = thinkingStream(route.providerFmt);
-    // Materialize the ordered SSE stages from the plan (format bridge, then any
-    // adapter-custom stream transforms). Log the assembled pipeline once here —
-    // never per event.
+    // Materialize the ordered SSE stages from the plan: thinking (a pre-bridge,
+    // provider-format-tagged default), the format bridge, then any adapter-custom
+    // stream transforms. Log the assembled pipeline once here — never per event.
     const streamStages = route.stream.map((s) => {
       if (ctx.reqId)
         this.logger.transform("stream", s.name, {
@@ -890,6 +916,46 @@ export class ForwardingEngine {
     );
     if (!res.headersSent) res.writeHead(status, out);
 
+    // Prime the stream: write a ping the instant the SSE response opens, before
+    // the upstream's first token. The longest idle gap on a streaming request is
+    // the model's time-to-first-token; a client/proxy idle timer that starts now
+    // would otherwise fire before any byte arrives. (The ping stage keeps pinging
+    // on the interval thereafter.) SSE comment lines are ignored by clients.
+    if (ping) {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        /* client already gone; the pipeline below will settle */
+      }
+    }
+
+    // Idle watchdog: if the upstream goes silent mid-stream for longer than the
+    // request timeout, tear it down so the failure SURFACES (a terminal error
+    // event, below) instead of the socket hanging open until a proxy kills it.
+    // A tiny head-tap timestamps each upstream chunk without altering bytes (so
+    // the usageObserver still sees identical provider-native SSE).
+    let lastActivity = Date.now();
+    const headTap = new PassThrough();
+    headTap.on("data", () => {
+      lastActivity = Date.now();
+    });
+    const idleMs = provider.requestTimeoutMs;
+    const idleTimer = setInterval(
+      () => {
+        if (Date.now() - lastActivity >= idleMs && !upRes.destroyed) {
+          this.logger.warn("stream_idle_timeout", {
+            provider: provider.id,
+            model: upstreamModel,
+            idleMs,
+          });
+          upRes.destroy(new Error(`upstream stream idle > ${idleMs}ms`));
+        }
+      },
+      Math.max(1000, Math.floor(idleMs / 4)),
+    );
+    if (typeof (idleTimer as { unref?: () => void }).unref === "function")
+      (idleTimer as { unref: () => void }).unref();
+
     // Settle usage + write the request log exactly once, when the stream ends
     // (whether it completed or the client aborted). The observer holds the best
     // usage numbers seen on the wire.
@@ -897,6 +963,7 @@ export class ForwardingEngine {
     const settle = (error: string | null) => {
       if (settled) return;
       settled = true;
+      clearInterval(idleTimer);
       const usage = usageObserver.usage(ctx.inputTokens);
       this.settleUsage(ctx, provider, usage);
       let debugResponse: string | null = null;
@@ -926,25 +993,73 @@ export class ForwardingEngine {
 
     // stream.pipeline propagates errors and destroy() across every stage, so a
     // client abort mid-stream tears down the upstream socket (and vice versa)
-    // instead of leaking it. Plain .pipe() does not do this.
-    const stages = [usageObserver, thinking, ...streamStages, ping].filter(
+    // instead of leaking it. Plain .pipe() does not do this. The usageObserver
+    // must stay first (it sniffs provider-native token usage before any stage
+    // rewrites field names); thinking + bridge + custom stages come from
+    // streamStages (thinking is the plan's first, pre-bridge stage).
+    // headTap (idle watchdog timestamps) runs first, then the usageObserver
+    // (must see provider-native bytes before any rewrite), then thinking + bridge
+    // + custom stages, then ping. The tap is a pure passthrough — zero byte change.
+    // The pipeline sink is a PassThrough (`clientSink`), NOT `res` directly —
+    // streamPipeline destroys its final stage on error, and we need `res` to stay
+    // writable so we can emit a terminal SSE error event after a mid-stream
+    // upstream failure. clientSink is piped to `res` with { end: false } so we
+    // control when `res` ends. A client disconnect is still propagated back to
+    // the upstream: res 'close' destroys clientSink, which errors the pipeline
+    // and tears down `upRes` (same teardown guarantee as piping to res directly).
+    const clientSink = new PassThrough();
+    clientSink.pipe(res, { end: false });
+    const onClientClose = () => {
+      if (!clientSink.destroyed)
+        clientSink.destroy(new Error("client disconnected"));
+    };
+    res.on("close", onClientClose);
+
+    const stages = [headTap, usageObserver, ...streamStages, ping].filter(
       Boolean,
     ) as NodeJS.ReadWriteStream[];
-    streamPipeline([upRes, ...stages, res], (err) => {
+    streamPipeline([upRes, ...stages, clientSink], (err) => {
+      res.off("close", onClientClose);
       if (!err) {
         settle(null);
+        try {
+          if (!res.writableEnded) res.end();
+        } catch {
+          /* noop */
+        }
         return;
       }
       const e = err as NodeJS.ErrnoException;
-      // Client disconnects surface as ERR_STREAM_PREMATURE_CLOSE — routine.
-      const aborted = e.code === "ERR_STREAM_PREMATURE_CLOSE";
-      if (!aborted) {
+      // ERR_STREAM_PREMATURE_CLOSE covers BOTH a client disconnect and an
+      // upstream that closed mid-stream — same code, opposite meaning. Use the
+      // CLIENT's writable state to tell them apart: if the client is still
+      // writable, the UPSTREAM died and the client is waiting, so surface a
+      // terminal SSE `event: error` (headers are already 200; we can't change the
+      // status, but the client learns the stream ended abnormally instead of
+      // hanging). If the client is gone, it's a routine abort — nothing to write.
+      const clientGone =
+        res.writableEnded ||
+        (res as { destroyed?: boolean }).destroyed === true;
+      const premature = e.code === "ERR_STREAM_PREMATURE_CLOSE";
+      const routineAbort = premature && clientGone;
+      if (!routineAbort) {
         this.logger.warn("stream_pipeline_error", { err: e.message });
       }
-      // Even on abort we still settle: the reservation must be reversed and the
-      // partial usage observed so far attributed. Bytes already streamed to the
-      // client are real usage.
-      settle(aborted ? "client disconnected" : e.message);
+      if (!clientGone) {
+        try {
+          res.write(
+            `event: error\ndata: ${JSON.stringify({
+              type: "error",
+              error: { type: "upstream_error", message: e.message },
+            })}\n\n`,
+          );
+        } catch {
+          /* client went away between the check and the write */
+        }
+      }
+      // Always settle: the reservation must be reversed and the partial usage
+      // observed so far attributed. Bytes already streamed are real usage.
+      settle(routineAbort ? "client disconnected" : e.message);
       try {
         if (!res.writableEnded) res.end();
       } catch {
@@ -1009,12 +1124,10 @@ export class ForwardingEngine {
     // from the PROVIDER-shape body before any bridging.
     const debugResponse = ctx.debug ? safeCaptureResponse(parsed) : undefined;
 
-    // 1) thinking extraction in PROVIDER format (reads provider-native fields,
-    //    so it runs before the format/custom response stages).
-    applyThinking(this.thinking, route.providerFmt, parsed);
-
-    // 2) run the response through its ordered transform stages (format bridge
-    //    provider->client, then adapter-custom stages).
+    // Run the response through its ordered transform stages. Thinking extraction
+    // is now the FIRST stage (a provider-format-tagged default, placed pre-bridge
+    // by buildTransformPlan), so it reads provider-native fields before the
+    // format bridge — then the bridge (provider->client) and any custom stages.
     let outBody: unknown = parsed;
     try {
       outBody = applyBodyTransforms(
@@ -1054,16 +1167,80 @@ export class ForwardingEngine {
     );
     if (!res.headersSent) res.writeHead(status, out);
     const ct = String(out["content-type"] || "").toLowerCase();
+    const isSse = ct.includes("text/event-stream");
     const ping =
-      ct.includes("text/event-stream") && this.ssePingInterval > 0
+      isSse && this.ssePingInterval > 0
         ? new SsePingKeepAlive({ interval: this.ssePingInterval })
         : null;
+
+    // For an SSE passthrough (a native event-stream provider we forward without
+    // conversion), mirror streamConvert's robustness: prime a ping on connect and
+    // surface a mid-stream upstream failure as a terminal `event: error` instead
+    // of a silent truncation. To emit after the pipeline tears down we keep `res`
+    // OUT of the destroy chain via a PassThrough sink piped with { end: false };
+    // a res 'close' propagates a client abort back to the upstream. Non-SSE bodies
+    // (plain proxied responses) keep the simple direct pipe — there's no SSE error
+    // frame to send, and a raw truncation is the correct passthrough behavior.
+    if (!isSse) {
+      streamPipeline([upRes, res], (err) => {
+        if (!err) return;
+        const e = err as NodeJS.ErrnoException;
+        if (e.code !== "ERR_STREAM_PREMATURE_CLOSE")
+          this.logger.warn("pipe_stream_error", { err: e.message });
+        try {
+          if (!res.writableEnded) res.end();
+        } catch {
+          /* noop */
+        }
+      });
+      return;
+    }
+
+    if (ping) {
+      try {
+        res.write(": ping\n\n");
+      } catch {
+        /* client already gone */
+      }
+    }
+    const clientSink = new PassThrough();
+    clientSink.pipe(res, { end: false });
+    const onClientClose = () => {
+      if (!clientSink.destroyed)
+        clientSink.destroy(new Error("client disconnected"));
+    };
+    res.on("close", onClientClose);
+
     const stages = (ping ? [ping] : []) as NodeJS.ReadWriteStream[];
-    streamPipeline([upRes, ...stages, res], (err) => {
-      if (!err) return;
+    streamPipeline([upRes, ...stages, clientSink], (err) => {
+      res.off("close", onClientClose);
+      if (!err) {
+        try {
+          if (!res.writableEnded) res.end();
+        } catch {
+          /* noop */
+        }
+        return;
+      }
       const e = err as NodeJS.ErrnoException;
-      if (e.code !== "ERR_STREAM_PREMATURE_CLOSE") {
+      const clientGone =
+        res.writableEnded ||
+        (res as { destroyed?: boolean }).destroyed === true;
+      const routineAbort =
+        e.code === "ERR_STREAM_PREMATURE_CLOSE" && clientGone;
+      if (!routineAbort)
         this.logger.warn("pipe_stream_error", { err: e.message });
+      if (!clientGone) {
+        try {
+          res.write(
+            `event: error\ndata: ${JSON.stringify({
+              type: "error",
+              error: { type: "upstream_error", message: e.message },
+            })}\n\n`,
+          );
+        } catch {
+          /* client went away between the check and the write */
+        }
       }
       try {
         if (!res.writableEnded) res.end();
@@ -1166,6 +1343,7 @@ export class ForwardingEngine {
       for (let attempt = 1; attempt <= attempts; attempt++) {
         const r = await this.runOneTurnAttempt(
           req,
+          ctx,
           entry.provider,
           entry.upstreamModel,
           route,
@@ -1184,6 +1362,7 @@ export class ForwardingEngine {
 
   private async runOneTurnAttempt(
     req: Request,
+    ctx: ForwardContext,
     provider: Provider,
     upstreamModel: string,
     route: Route,
@@ -1192,43 +1371,72 @@ export class ForwardingEngine {
     | { ok: true; body: Record<string, unknown>; usage: StreamUsageLike }
     | { ok: false; status: number; reason: string; retryable: boolean }
   > {
-    // Convert Messages -> provider format (via the ordered request stages),
-    // force non-streaming, stamp model.
-    let body: Record<string, unknown>;
+    // Health-aware key pick for the (non-streaming) web-tool turn. Each turn is
+    // a fresh selection so a rate-limited/auth-failed key is skipped. Picked up
+    // front so the builder sees the selected key.
+    const pick = this.keyHealth.select(provider, upstreamModel, new Set());
+    const key = pick?.key ?? null;
+
+    // Convert Messages -> provider format (via the ordered request stages), force
+    // non-streaming, stamp model, then let the adapter build the final request.
+    // Fresh per-attempt ctx so a request hook's URL/header rewrites don't leak.
+    const attemptCtx: TransformCtx = {
+      ...route.xctx,
+      headerOverrides: undefined,
+      urlOverride: undefined,
+    };
+    let serialized: string;
+    let upstreamUrl: URL;
+    let headers: Record<string, string>;
     try {
-      body = applyBodyTransforms(route.request, { ...messagesBody }, route.xctx);
+      const converted = applyBodyTransforms(
+        route.request,
+        { ...messagesBody },
+        attemptCtx,
+        this.stageApplyLogger(ctx, "req"),
+      );
+      converted.model = upstreamModel;
+      delete converted.stream;
+
+      const defaultUrl =
+        attemptCtx.urlOverride ??
+        buildUpstreamUrl(provider, route.forwardPath).toString();
+      const defaultHeaders = this.buildHeaders(
+        req,
+        provider,
+        key,
+        attemptCtx.headerOverrides,
+      );
+      const built = route.adapter.buildFor(route.providerFmt, {
+        provider,
+        model: upstreamModel,
+        body: converted,
+        apiKey: key,
+        clientFmt: route.clientFmt,
+        providerFmt: route.providerFmt,
+        endpointKind: route.endpointKind,
+        forwardPath: route.forwardPath,
+        baseUrl: provider.baseUrl,
+        basePath: provider.basePath,
+        resolve: makeResolve(provider, route.forwardPath),
+        url: defaultUrl,
+        headers: defaultHeaders,
+      });
+      delete built.body.stream;
+      serialized = JSON.stringify(built.body);
+      upstreamUrl = new URL(built.url);
+      headers = {
+        ...built.headers,
+        "content-length": String(Buffer.byteLength(serialized)),
+      };
     } catch (err) {
       return {
         ok: false,
         status: 500,
-        reason: `request conversion failed: ${(err as Error).message}`,
+        reason: `request build failed: ${(err as Error).message}`,
         retryable: false,
       };
     }
-    body.model = upstreamModel;
-    delete body.stream;
-    const serialized = JSON.stringify(body);
-
-    let upstreamUrl: URL;
-    try {
-      upstreamUrl = buildUpstreamUrl(provider, route.forwardPath);
-    } catch {
-      return {
-        ok: false,
-        status: 500,
-        reason: `bad provider baseUrl: ${provider.baseUrl}`,
-        retryable: false,
-      };
-    }
-    // Health-aware key pick for the (non-streaming) web-tool turn. Each turn is
-    // a fresh selection so a rate-limited/auth-failed key is skipped.
-    const pick = this.keyHealth.select(provider, upstreamModel, new Set());
-    const headers = this.buildHeaders(
-      req,
-      provider,
-      pick?.key ?? null,
-      Buffer.byteLength(serialized),
-    );
 
     let res: JsonResponse;
     try {
@@ -1283,10 +1491,16 @@ export class ForwardingEngine {
     }
 
     // Bridge provider-shape -> Messages shape so the loop always sees Messages.
-    applyThinking(this.thinking, route.providerFmt, parsed);
+    // Thinking extraction is the first response stage (a pre-bridge, provider-
+    // format-tagged default), so route.response handles it before the bridge.
     let messages: Record<string, unknown> = parsed;
     try {
-      messages = applyBodyTransforms(route.response, parsed, route.xctx);
+      messages = applyBodyTransforms(
+        route.response,
+        parsed,
+        route.xctx,
+        this.stageApplyLogger(ctx, "resp"),
+      );
     } catch {
       messages = parsed;
     }
@@ -1311,6 +1525,21 @@ export class ForwardingEngine {
     ctx: ForwardContext,
     startedAt: number,
   ): Promise<void> {
+    // The loop works in Anthropic Messages shape internally (it inspects
+    // tool_use blocks). A Chat-format client sends a chat-shaped body, so convert
+    // it here — the seam the loop's contract expects ("if the client spoke
+    // chat/responses, the body is handed to us in Messages shape"). The loop
+    // still emits back in the client's own format (it keys off the client path).
+    if (pathFmt(ctx.clientPath) === "chat") {
+      try {
+        ctx = { ...ctx, requestBody: chatRequestToMessages(ctx.requestBody) };
+      } catch (err) {
+        this.logger.warn("web_tool_normalize_failed", {
+          err: (err as Error).message,
+        });
+        // Fall through with the original body; detectWebTools still works on it.
+      }
+    }
     const present = detectWebTools(ctx.requestBody);
     const cfg = ctx.webTools!;
     // Upstream provider for logging attribution only (the loop selects the
@@ -1429,11 +1658,16 @@ export class ForwardingEngine {
   // --- headers --------------------------------------------------------------
   // Key selection + round-robin rotation now live in KeyHealthStore (this.keyHealth).
 
+  // Compose the DEFAULT header set handed to the adapter's build phase: client
+  // header passthrough + host + auth (from the selected key) + extraHeaders. The
+  // body isn't final until the builder runs, so content-length is set by the
+  // caller after serialization, not here. `overrides` are the request hook's
+  // per-attempt header edits (string sets/replaces, null deletes).
   private buildHeaders(
     req: Request,
     provider: Provider,
     key: string | null,
-    bodyLen: number,
+    overrides?: Record<string, string | null>,
   ): Record<string, string> {
     const out: Record<string, string> = {};
     const clientHeaders = (req.headers || {}) as Record<string, unknown>;
@@ -1451,72 +1685,22 @@ export class ForwardingEngine {
       out[k] = Array.isArray(v) ? (v[0] as string) : (v as string);
     }
     out["host"] = provider.host || hostFromUrl(provider.baseUrl);
-    if (key) {
-      if (provider.authScheme === "bearer" || provider.authScheme === "both")
-        out["authorization"] = `Bearer ${key}`;
-      if (provider.authScheme === "xapikey" || provider.authScheme === "both")
-        out["x-api-key"] = key;
-    }
+    applyAuthHeaders(out, provider.authScheme, key);
     for (const [k, v] of Object.entries(provider.extraHeaders || {}))
       out[k] = v;
-    out["content-length"] = String(bodyLen);
     if (!out["content-type"]) out["content-type"] = "application/json";
     if (!out["accept"]) out["accept"] = "application/json";
+    // Request-hook per-attempt overrides last: a string sets/replaces, null deletes.
+    if (overrides) {
+      for (const [k, v] of Object.entries(overrides)) {
+        if (v === null) delete out[k];
+        else out[k] = v;
+      }
+    }
     return out;
   }
 }
 
-// Format conversion tables + thinking helpers now live in formats/pipeline.ts
-// (imported above). Only response-path helpers specific to the engine remain.
-
-// Debug capture must never break the response path — swallow any error.
-function safeCaptureResponse(
-  parsed: Record<string, unknown>,
-): string | undefined {
-  try {
-    return captureResponse(parsed);
-  } catch {
-    return undefined;
-  }
-}
-
-// Short correlation id for a request's transform trace (8 hex chars).
-function shortId(): string {
-  return randomBytes(4).toString("hex");
-}
-
-// --- header helpers --------------------------------------------------------
-
-function isEventStream(headers: IncomingMessage["headers"]): boolean {
-  return String(headers?.["content-type"] || "")
-    .toLowerCase()
-    .includes("text/event-stream");
-}
-function isJson(headers: IncomingMessage["headers"]): boolean {
-  if (
-    String(headers?.["content-type"] || "")
-      .toLowerCase()
-      .includes("application/json")
-  ) {
-    const enc = String(headers?.["content-encoding"] || "").toLowerCase();
-    return !enc || enc === "identity";
-  }
-  return false;
-}
-
-function filteredHeaders(
-  raw: IncomingMessage["headers"] | undefined,
-): Record<string, string | string[]> {
-  const out: Record<string, string | string[]> = {};
-  if (!raw) return out;
-  for (const [k, v] of Object.entries(raw)) {
-    if (v === undefined) continue;
-    if (HOP_BY_HOP.has(k.toLowerCase())) continue;
-    out[k] = v as string | string[];
-  }
-  return out;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
+// Format conversion tables + thinking helpers live in formats/pipeline.ts;
+// pure response-path helpers (safeCaptureResponse, shortId, header filters,
+// sleep) live in ./engine-support/utils (imported above).

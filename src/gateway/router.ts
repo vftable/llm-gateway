@@ -8,15 +8,14 @@
 //   model guard -> context-window + usage enforcement -> prefill fix ->
 //   forwarding engine (which applies the transform pipeline)
 
-import express, { type Express, type Request, type Response } from "express";
+import express, { type Express, type Request } from "express";
 import type { Database as DB } from "better-sqlite3";
 import type { Logger } from "../logger";
-import type { ApiKey, Model } from "../types";
+import type { ApiKey, Model, Provider } from "../types";
 import { ModelRegistry } from "./registry";
 import { ForwardingEngine, type ForwardContext } from "./engine";
 import { detectClient } from "./client-detect";
 import { ThinkingConverter } from "../formats/thinking";
-import { applyPrefillFix } from "../formats/anthropic/prefill";
 import { countInputTokens, readMaxOutputTokens } from "../formats/tokens";
 import { sha256 } from "../config";
 import {
@@ -25,6 +24,7 @@ import {
   touchLastUsed,
 } from "../repo/api-keys";
 import { addUsage, getUsage, nextUtcMidnight } from "../repo/usage";
+import type { KeyPick } from "./key-health";
 
 export interface GatewayRequest extends Request {
   __apiKey?: ApiKey | null;
@@ -46,7 +46,7 @@ export class GatewayRouter {
   constructor(
     private readonly db: DB,
     private readonly logger: Logger,
-    private readonly ssePingInterval: number,
+    ssePingInterval: number,
   ) {
     this.registry = new ModelRegistry(db);
     this.engine = new ForwardingEngine(
@@ -59,6 +59,14 @@ export class GatewayRouter {
 
   reload(): void {
     this.registry.reload();
+  }
+
+  // Health-aware key pick for the admin "Test connection" probe — see
+  // ForwardingEngine.pickKeyForTest. Exposes just this one capability rather
+  // than the whole engine, so the admin routes get the live rotation/health
+  // state without reaching into forwarding internals.
+  pickKeyForTest(provider: Provider, model: string | null): KeyPick | null {
+    return this.engine.pickKeyForTest(provider, model);
   }
 
   register(app: Express): void {
@@ -209,39 +217,39 @@ export class GatewayRouter {
         // error here must not 500 the request via Express's default handler —
         // let the request proceed (the engine settles usage when it completes).
         try {
-        // Enforce the daily quota only when the key has one.
-        if (apiKey.tokensPerDay && apiKey.tokensPerDay > 0) {
-          const used = getUsage(this.db, apiKey.id).tokens;
-          if (used + projected > apiKey.tokensPerDay) {
-            const resetsAt = nextUtcMidnight();
-            this.logger.warn("usage_limit", {
-              key: apiKey.id,
-              used,
-              projected,
-              limit: apiKey.tokensPerDay,
-            });
-            return res.status(429).json({
-              error: {
-                type: "usage_limit_reached",
-                message: `Daily token quota for this key would be exceeded (used ${used}/${apiKey.tokensPerDay}, request needs ~${projected}). Resets at ${resetsAt.toISOString()}.`,
-                source: "gateway",
+          // Enforce the daily quota only when the key has one.
+          if (apiKey.tokensPerDay && apiKey.tokensPerDay > 0) {
+            const used = getUsage(this.db, apiKey.id).tokens;
+            if (used + projected > apiKey.tokensPerDay) {
+              const resetsAt = nextUtcMidnight();
+              this.logger.warn("usage_limit", {
+                key: apiKey.id,
                 used,
-                limit: apiKey.tokensPerDay,
                 projected,
-                resets_at: resetsAt.toISOString(),
-              },
-            });
+                limit: apiKey.tokensPerDay,
+              });
+              return res.status(429).json({
+                error: {
+                  type: "usage_limit_reached",
+                  message: `Daily token quota for this key would be exceeded (used ${used}/${apiKey.tokensPerDay}, request needs ~${projected}). Resets at ${resetsAt.toISOString()}.`,
+                  source: "gateway",
+                  used,
+                  limit: apiKey.tokensPerDay,
+                  projected,
+                  resets_at: resetsAt.toISOString(),
+                },
+              });
+            }
           }
-        }
 
-        // Optimistic reservation. Always applied (even for unlimited keys) so
-        // the live counter reflects in-flight requests; the engine reverses
-        // exactly __reservedTokens once the real usage is known. Stash the
-        // amount so the reversal can't drift from what was debited here.
-        if (projected > 0) {
-          addUsage(this.db, apiKey.id, projected);
-          gw.__reservedTokens = projected;
-        }
+          // Optimistic reservation. Always applied (even for unlimited keys) so
+          // the live counter reflects in-flight requests; the engine reverses
+          // exactly __reservedTokens once the real usage is known. Stash the
+          // amount so the reversal can't drift from what was debited here.
+          if (projected > 0) {
+            addUsage(this.db, apiKey.id, projected);
+            gw.__reservedTokens = projected;
+          }
         } catch (err) {
           this.logger.warn("quota_check_failed", {
             err: (err as Error).message,
@@ -252,26 +260,13 @@ export class GatewayRouter {
       next();
     });
 
-    // --- Claude 4.6+ prefill auto-fix ---
-    app.use("/v1", (req, res, next) => {
-      const body = req.body as
-        { messages?: unknown; model?: unknown } | undefined;
-      if (!body || typeof body !== "object") return next();
-      const gw = req as GatewayRequest;
-      const model =
-        typeof body.model === "string"
-          ? body.model
-          : gw.__resolved?.alias || "";
-      if (!model) return next();
-      const result = applyPrefillFix(body, model);
-      if (result.appended) {
-        this.logger.info("prefill_fix", {
-          model,
-          count: `${result.before}->${result.after}`,
-        });
-      }
-      next();
-    });
+    // NOTE: the Claude 4.6+ prefill fix used to live here as middleware, but it
+    // ran on the CLIENT body before format conversion and was keyed on the alias.
+    // It now runs as an Anthropic provider-adapter request hook
+    // (formats/anthropic/hooks/stack.ts), on the final Messages body keyed on the
+    // upstream model — so it fires correctly for native /v1/messages, converted
+    // chat->messages, and the web-tool loop, and never mis-fires on a
+    // messages->chat hop (OpenAI needs no prefill).
 
     // --- forwarding engine (everything under /v1, incl. /v1/responses) ---
     // The engine decides per-provider-endpoint whether to convert wire formats

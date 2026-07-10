@@ -1,11 +1,17 @@
-// Path-layout tests: the adapter's resolveSuffix + a URL composition check that
-// mirrors the engine's buildUpstreamUrl, proving Gemini-style basePath layouts
-// compose correctly and legacy full-path providers are byte-identical.
+// Path-layout tests: endpointPathFor / resolveKind / composeUrl (the kind-based
+// routing helpers) + adapter.routeFor, proving Gemini-style basePath layouts
+// compose correctly, per-kind overrides win, and the model-aware endpoint
+// preference (OpenAI GPT-5 -> responses) steers the default.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveSuffix, adapterForProvider } from ".";
-import type { Provider } from "../types";
+import {
+  endpointPathFor,
+  resolveKind,
+  composeUrl,
+  adapterForProvider,
+} from ".";
+import { WireKind, type Provider } from "../types";
 
 function prov(over: Partial<Provider>): Provider {
   return {
@@ -14,6 +20,7 @@ function prov(over: Partial<Provider>): Provider {
     baseUrl: "https://api.example.com",
     host: null,
     apiKeys: [],
+    disabledApiKeys: [],
     authScheme: "bearer",
     extraHeaders: {},
     retryAttempts: 1,
@@ -23,6 +30,7 @@ function prov(over: Partial<Provider>): Provider {
     enabled: true,
     format: "openai",
     endpoints: [],
+    endpointPaths: {},
     nativeConversion: false,
     catalogId: null,
     basePath: "",
@@ -35,68 +43,146 @@ function prov(over: Partial<Provider>): Provider {
   };
 }
 
-// Mirror of engine.buildUpstreamUrl (kept in sync; the engine version is the
-// one that actually runs, this asserts the composition contract).
-function compose(p: Provider, suffix: string): string {
-  return p.baseUrl.replace(/\/+$/, "") + (p.basePath || "") + suffix;
-}
+// --- endpointPathFor: kind -> path -----------------------------------------
 
-test("legacy provider (no basePath) composes full /v1 path unchanged", () => {
-  const p = prov({ format: "openai", basePath: "", endpoints: [] });
-  const suffix = resolveSuffix(p, "chat", null);
-  assert.equal(suffix, "/v1/chat/completions");
-  assert.equal(compose(p, suffix), "https://api.example.com/v1/chat/completions");
+test("legacy provider (no basePath) yields full /v1 paths", () => {
+  const p = prov({ basePath: "" });
+  assert.equal(endpointPathFor(p, WireKind.Chat), "/v1/chat/completions");
+  assert.equal(endpointPathFor(p, WireKind.Messages), "/v1/messages");
+  assert.equal(endpointPathFor(p, WireKind.Responses), "/v1/responses");
 });
 
-test("anthropic legacy default is /v1/messages", () => {
-  const p = prov({ format: "anthropic", basePath: "", endpoints: [] });
-  assert.equal(resolveSuffix(p, "messages", null), "/v1/messages");
-});
-
-test("basePath provider composes origin + basePath + bare suffix (Gemini)", () => {
+test("basePath provider yields bare suffixes (Gemini/GLM layout)", () => {
   const p = prov({
     baseUrl: "https://generativelanguage.googleapis.com",
     basePath: "/v1beta/openai",
-    endpoints: ["/chat/completions"],
   });
-  const suffix = resolveSuffix(p, "chat", null);
-  assert.equal(suffix, "/chat/completions");
+  assert.equal(endpointPathFor(p, WireKind.Chat), "/chat/completions");
   assert.equal(
-    compose(p, suffix),
+    composeUrl(p.baseUrl, p.basePath, endpointPathFor(p, WireKind.Chat)),
     "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
   );
 });
 
-test("explicit per-link endpoint wins over defaults", () => {
-  const p = prov({ basePath: "/v1beta/openai", endpoints: ["/chat/completions"] });
-  assert.equal(resolveSuffix(p, "chat", "/responses"), "/responses");
+test("endpointPaths override wins over the standard path", () => {
+  const p = prov({ endpointPaths: { chat: "/api/v2/chat" } });
+  assert.equal(endpointPathFor(p, WireKind.Chat), "/api/v2/chat");
+  // Other kinds still use the standard path.
+  assert.equal(endpointPathFor(p, WireKind.Responses), "/v1/responses");
 });
 
-test("provider.endpoints[0] used when no link endpoint", () => {
-  const p = prov({ endpoints: ["/v1/responses"] });
-  assert.equal(resolveSuffix(p, "chat", null), "/v1/responses");
+// --- resolveKind: which wire kind a hop routes through ----------------------
+
+test("per-link endpoint (kind or legacy path) wins", () => {
+  const p = prov({ endpoints: [WireKind.Chat] });
+  assert.equal(resolveKind(p, "chat", "responses"), "responses");
+  assert.equal(resolveKind(p, "chat", "/v1/messages"), "messages");
 });
 
-test("adapterForProvider picks native format + plan path", () => {
-  // OpenAI-compatible: messages inbound bridges to the chat path.
-  const oai = prov({ catalogId: "openai", format: "openai" });
-  const plan = adapterForProvider(oai).planFor("messages", oai, null);
+test("preferred kind is honored only when the provider accepts it", () => {
+  const both = prov({ endpoints: [WireKind.Chat, WireKind.Responses] });
+  assert.equal(resolveKind(both, "chat", null, "responses"), "responses");
+  // Preferred not accepted -> falls through to endpoints[0].
+  const chatOnly = prov({ endpoints: [WireKind.Chat] });
+  assert.equal(resolveKind(chatOnly, "chat", null, "responses"), "chat");
+});
+
+test("endpoints[0] then native kind are the fallbacks", () => {
+  assert.equal(
+    resolveKind(prov({ endpoints: [WireKind.Responses] }), "chat", null),
+    "responses",
+  );
+  assert.equal(
+    resolveKind(prov({ endpoints: [] }), "messages", null),
+    "messages",
+  );
+});
+
+// --- adapter.routeFor -------------------------------------------------------
+
+test("adapterForProvider picks native kind + assembled path", () => {
+  const oai = prov({ catalogId: "openai" });
+  const plan = adapterForProvider(oai).routeFor("messages", oai, null);
   assert.equal(plan.providerFmt, "chat");
   assert.ok(plan.forwardPath.endsWith("/chat/completions"));
 
-  // Gemini: chat inbound stays chat, path is the bare suffix (basePath applied
-  // at URL-compose time).
   const gem = prov({
     catalogId: "google-gemini",
-    format: "openai",
     basePath: "/v1beta/openai",
-    endpoints: ["/chat/completions"],
+    endpoints: [WireKind.Chat],
   });
-  const gplan = adapterForProvider(gem).planFor("chat", gem, null);
+  const gplan = adapterForProvider(gem).routeFor("chat", gem, null);
   assert.equal(gplan.forwardPath, "/chat/completions");
 
-  // Unknown catalogId falls back to a generic adapter by format.
-  const custom = prov({ catalogId: null, format: "anthropic" });
-  const cplan = adapterForProvider(custom).planFor("messages", custom, null);
+  // Unknown catalogId falls back to generic anthropic/openai by which endpoint
+  // kinds the provider accepts (messages => anthropic).
+  const custom = prov({ catalogId: null, endpoints: [WireKind.Messages] });
+  const cplan = adapterForProvider(custom).routeFor("messages", custom, null);
   assert.equal(cplan.providerFmt, "messages");
+});
+
+test("providerFmt follows the resolved endpoint, not the adapter class", () => {
+  const oai = prov({ catalogId: "openai" });
+  const asMessages = adapterForProvider(oai).routeFor(
+    "chat",
+    oai,
+    "/v1/messages",
+  );
+  assert.equal(asMessages.providerFmt, "messages");
+  assert.equal(asMessages.forwardPath, "/v1/messages");
+
+  const resp = prov({ catalogId: "openai", endpoints: [WireKind.Responses] });
+  const rplan = adapterForProvider(resp).routeFor("chat", resp, null);
+  assert.equal(rplan.providerFmt, "responses");
+  assert.equal(rplan.forwardPath, "/v1/responses");
+});
+
+// --- OpenAI model-aware endpoint preference ---------------------------------
+
+test("OpenAI routes GPT-5 / codex to responses when accepted", () => {
+  const oai = prov({
+    catalogId: "openai",
+    endpoints: [WireKind.Chat, WireKind.Responses],
+  });
+  const adapter = adapterForProvider(oai);
+  // Newer families prefer responses...
+  for (const model of ["gpt-5.5", "gpt-5-codex", "o3-mini", "gpt-image-2"]) {
+    assert.equal(
+      adapter.routeFor("chat", oai, null, model).providerFmt,
+      "responses",
+    );
+  }
+  // ...older/dual models stay on chat (the safe default).
+  for (const model of ["gpt-4o", "gpt-4.1", "o1"]) {
+    assert.equal(
+      adapter.routeFor("chat", oai, null, model).providerFmt,
+      "chat",
+    );
+  }
+});
+
+test("OpenAI preference is ignored when the provider only accepts chat", () => {
+  const chatOnly = prov({ catalogId: "openai", endpoints: [WireKind.Chat] });
+  assert.equal(
+    adapterForProvider(chatOnly).routeFor("chat", chatOnly, null, "gpt-5.5")
+      .providerFmt,
+    "chat",
+  );
+});
+
+test("a per-link endpoint pin overrides the model preference", () => {
+  const oai = prov({
+    catalogId: "openai",
+    endpoints: [WireKind.Chat, WireKind.Responses],
+  });
+  // GPT-5 would prefer responses, but the hop pins chat.
+  assert.equal(
+    adapterForProvider(oai).routeFor(
+      "chat",
+      oai,
+      "/v1/chat/completions",
+      "gpt-5.5",
+    ).providerFmt,
+    "chat",
+  );
 });

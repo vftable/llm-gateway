@@ -9,6 +9,7 @@ import {
   getProvider,
   updateProvider,
   listProviders,
+  normBasePath,
 } from "./providers";
 
 function freshDb() {
@@ -74,6 +75,34 @@ test("updateProvider preserves catalogId when omitted, updates when set", () => 
   }
 });
 
+test("disabledApiKeys round-trip: default empty, persists, merges on update", () => {
+  const db = freshDb();
+  try {
+    // Default: no disabled keys.
+    const p = createProvider(db, {
+      name: "p",
+      baseUrl: "https://a.example.com",
+      apiKeys: ["k1", "k2"],
+    });
+    assert.deepEqual(p.disabledApiKeys, []);
+
+    // Toggle k2 off: it leaves apiKeys and lands in disabledApiKeys.
+    const u1 = updateProvider(db, p.id, {
+      apiKeys: ["k1"],
+      disabledApiKeys: ["k2"],
+    })!;
+    assert.deepEqual(u1.apiKeys, ["k1"]);
+    assert.deepEqual(u1.disabledApiKeys, ["k2"]);
+    assert.deepEqual(getProvider(db, p.id)!.disabledApiKeys, ["k2"]);
+
+    // Omitting disabledApiKeys on a later update preserves it.
+    const u2 = updateProvider(db, p.id, { name: "p2" })!;
+    assert.deepEqual(u2.disabledApiKeys, ["k2"]);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test("listProviders returns created rows", () => {
   const db = freshDb();
   try {
@@ -81,6 +110,156 @@ test("listProviders returns created rows", () => {
     createProvider(db, { name: "two", baseUrl: "https://two.example.com" });
     const all = listProviders(db);
     assert.equal(all.length, 2);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("id is decoupled from name — two same-named providers both persist", () => {
+  const db = freshDb();
+  try {
+    const a = createProvider(db, {
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com",
+      catalogId: "openai",
+    });
+    const b = createProvider(db, {
+      name: "OpenAI",
+      baseUrl: "https://api.openai.com",
+      catalogId: "openai",
+    });
+    assert.notEqual(a.id, b.id); // distinct ids despite same name + catalog
+    assert.equal(a.name, "OpenAI");
+    assert.equal(b.name, "OpenAI");
+    assert.equal(listProviders(db).length, 2);
+    // Both keep their own row.
+    assert.equal(getProvider(db, a.id)!.catalogId, "openai");
+    assert.equal(getProvider(db, b.id)!.catalogId, "openai");
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("format is nullable — omitted stores null, not 'openai'", () => {
+  const db = freshDb();
+  try {
+    const p = createProvider(db, {
+      name: "Adapter-backed",
+      baseUrl: "https://x.example.com",
+      catalogId: "openai",
+    });
+    assert.equal(p.format, null);
+    assert.equal(getProvider(db, p.id)!.format, null);
+    // Explicitly set + then cleared.
+    const withFmt = createProvider(db, {
+      name: "Generic",
+      baseUrl: "https://y.example.com",
+      format: "anthropic",
+    });
+    assert.equal(withFmt.format, "anthropic");
+    const cleared = updateProvider(db, withFmt.id, { format: null })!;
+    assert.equal(cleared.format, null);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("endpoints round-trip as wire KINDS; endpointPaths override persists", () => {
+  const db = freshDb();
+  try {
+    const p = createProvider(db, {
+      name: "Kinds",
+      baseUrl: "https://x.example.com",
+      endpoints: ["chat", "responses"],
+      endpointPaths: { chat: "/api/v2/chat" },
+    });
+    assert.deepEqual(p.endpoints, ["chat", "responses"]);
+    assert.deepEqual(p.endpointPaths, { chat: "/api/v2/chat" });
+    const read = getProvider(db, p.id)!;
+    assert.deepEqual(read.endpoints, ["chat", "responses"]);
+    assert.deepEqual(read.endpointPaths, { chat: "/api/v2/chat" });
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("legacy path-string endpoints are read back as kinds (migration-tolerant map)", () => {
+  const db = freshDb();
+  try {
+    // Simulate a pre-migration row by writing path strings directly.
+    const p = createProvider(db, {
+      name: "Legacy",
+      baseUrl: "https://x.example.com",
+    });
+    db.prepare("UPDATE providers SET endpoints=? WHERE id=?").run(
+      JSON.stringify(["/v1/chat/completions", "/v1/responses"]),
+      p.id,
+    );
+    const read = getProvider(db, p.id)!;
+    assert.deepEqual(read.endpoints, ["chat", "responses"]);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+// --- normBasePath ------------------------------------------------------------
+// basePath REPLACES the implicit "/v1" prefix (see standardPath in
+// providers/base.ts) — it must compose cleanly as `origin + basePath + suffix`,
+// so normBasePath's job is: trim, force a leading slash, strip trailing
+// slashes, and treat a bare "/" the same as unset (empty = "use the implicit
+// /v1 default", not "route to the bare origin with a dangling slash").
+
+test("normBasePath: empty/undefined/null all normalize to empty (implicit /v1 default)", () => {
+  assert.equal(normBasePath(""), "");
+  assert.equal(normBasePath(undefined), "");
+  assert.equal(normBasePath(null), "");
+  assert.equal(normBasePath("   "), "");
+});
+
+test("normBasePath: a bare '/' is treated as unset, not a one-char path", () => {
+  assert.equal(normBasePath("/"), "");
+});
+
+test("normBasePath: a value with no leading slash gets one added", () => {
+  assert.equal(normBasePath("v1beta/openai"), "/v1beta/openai");
+});
+
+test("normBasePath: trailing slash(es) are stripped so composeUrl never double-slashes", () => {
+  assert.equal(normBasePath("/api/coding/paas/v4/"), "/api/coding/paas/v4");
+  assert.equal(normBasePath("/api//"), "/api");
+});
+
+test("normBasePath: surrounding whitespace is trimmed", () => {
+  assert.equal(normBasePath("  /v1beta/openai  "), "/v1beta/openai");
+});
+
+test("normBasePath: an already-clean value passes through unchanged", () => {
+  assert.equal(normBasePath("/v1beta/openai"), "/v1beta/openai");
+});
+
+test("createProvider normalizes basePath on write (trailing slash stripped)", () => {
+  const db = freshDb();
+  try {
+    const p = createProvider(db, {
+      name: "GLM",
+      baseUrl: "https://api.z.ai",
+      basePath: "/api/coding/paas/v4/",
+    });
+    assert.equal(p.basePath, "/api/coding/paas/v4");
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("updateProvider normalizes basePath on write (missing leading slash added)", () => {
+  const db = freshDb();
+  try {
+    const p = createProvider(db, {
+      name: "Custom",
+      baseUrl: "https://api.example.com",
+    });
+    const updated = updateProvider(db, p.id, { basePath: "v1beta/openai" });
+    assert.equal(updated!.basePath, "/v1beta/openai");
   } finally {
     closeDatabase(db);
   }

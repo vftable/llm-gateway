@@ -3,7 +3,12 @@ import { Check } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import type { Settings as SettingsT } from "@/lib/types";
-import { Spinner, Field } from "@/components/shared";
+import {
+  PageSkeleton,
+  Field,
+  FormSection,
+  SettingRow,
+} from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -78,7 +83,7 @@ export default function Settings() {
       .catch(toast.error);
   }, []);
 
-  if (!s) return <Spinner />;
+  if (!s) return <PageSkeleton tabs={SECTIONS.length} />;
 
   const set = <K extends keyof SettingsT>(k: K, v: SettingsT[K]) =>
     setS((prev) => (prev ? { ...prev, [k]: v } : prev));
@@ -158,12 +163,12 @@ export default function Settings() {
         </div>
 
         {active === "models" && (
-          <div className="rounded-lg border border-border bg-card p-5">
-            <h2 className="font-heading text-lg font-medium text-foreground mb-4">
-              Model Exposure
-            </h2>
-            <div className="grid gap-4">
-              <Field
+          <div className="max-w-3xl">
+            <FormSection
+              title="Model Exposure"
+              desc="Controls what alias clients see and which models are allowed through."
+            >
+              <SettingRow
                 label="Global model prefix"
                 hint="Prepended to every exposed ID"
               >
@@ -171,8 +176,8 @@ export default function Settings() {
                   value={s.modelPrefix}
                   onChange={(e) => set("modelPrefix", e.target.value)}
                 />
-              </Field>
-              <Field
+              </SettingRow>
+              <SettingRow
                 label="Expose prefix"
                 hint="Prepended unless alias starts with an exempt prefix"
               >
@@ -180,8 +185,8 @@ export default function Settings() {
                   value={s.exposePrefix}
                   onChange={(e) => set("exposePrefix", e.target.value)}
                 />
-              </Field>
-              <Field
+              </SettingRow>
+              <SettingRow
                 label="Expose-exempt prefixes"
                 hint="Comma-separated, e.g. claude"
               >
@@ -189,27 +194,29 @@ export default function Settings() {
                   value={exempt}
                   onChange={(e) => setExempt(e.target.value)}
                 />
-              </Field>
-              <label className="flex items-center gap-2">
-                <Switch
-                  checked={s.allowUnknown}
-                  onCheckedChange={(v) => set("allowUnknown", v)}
-                />
-                <span className="text-sm text-foreground">
-                  Allow unknown models (passthrough)
-                </span>
-              </label>
-            </div>
+              </SettingRow>
+              <SettingRow
+                label="Allow unknown models"
+                hint="Let requests for un-configured aliases pass through as-is."
+              >
+                <div className="sm:flex sm:justify-end">
+                  <Switch
+                    checked={s.allowUnknown}
+                    onCheckedChange={(v) => set("allowUnknown", v)}
+                  />
+                </div>
+              </SettingRow>
+            </FormSection>
           </div>
         )}
 
         {active === "limits" && (
-          <div className="rounded-lg border border-border bg-card p-5">
-            <h2 className="font-heading text-lg font-medium text-foreground mb-4">
-              Limits & Timeouts
-            </h2>
-            <div className="grid gap-4">
-              <Field label="Default max output tokens">
+          <div className="max-w-3xl">
+            <FormSection
+              title="Limits & Timeouts"
+              desc="Defaults applied across every model and provider unless overridden."
+            >
+              <SettingRow label="Default max output tokens">
                 <Input
                   type="number"
                   value={s.defaultMaxOutputTokens}
@@ -217,8 +224,8 @@ export default function Settings() {
                     set("defaultMaxOutputTokens", Number(e.target.value))
                   }
                 />
-              </Field>
-              <Field
+              </SettingRow>
+              <SettingRow
                 label="SSE ping interval (ms)"
                 hint="0 = disabled; prevents idle proxy timeouts"
               >
@@ -229,8 +236,8 @@ export default function Settings() {
                     set("ssePingInterval", Number(e.target.value))
                   }
                 />
-              </Field>
-              <Field label="Request log retention (days)">
+              </SettingRow>
+              <SettingRow label="Request log retention (days)">
                 <Input
                   type="number"
                   value={s.requestLogRetentionDays}
@@ -238,45 +245,29 @@ export default function Settings() {
                     set("requestLogRetentionDays", Number(e.target.value))
                   }
                 />
-              </Field>
-              <label className="flex items-start gap-3">
-                <Switch
-                  checked={s.debugLogging}
-                  onCheckedChange={(v) => set("debugLogging", v)}
-                  className="mt-0.5"
-                />
-                <span>
-                  <span className="block text-sm text-foreground">
-                    Debug request logging
-                  </span>
-                  <span className="block text-[0.65rem] text-muted-foreground">
-                    Capture the distilled request (messages, tools) and response
-                    (text, tool calls) into each log row for debugging. Adds
-                    storage per request; leave off in normal operation.
-                  </span>
-                </span>
-              </label>
-            </div>
+              </SettingRow>
+              <SettingRow
+                label="Debug request logging"
+                hint="Capture the distilled request (messages, tools) and response (text, tool calls) into each log row, and print every transform stage (builtin/family/adapter/model, request+response+stream) to the backend console as it runs — for both live traffic and the Imported Models 'Test' probe. Adds storage per request and console noise; leave off in normal operation."
+              >
+                <div className="sm:flex sm:justify-end">
+                  <Switch
+                    checked={s.debugLogging}
+                    onCheckedChange={(v) => set("debugLogging", v)}
+                  />
+                </div>
+              </SettingRow>
+            </FormSection>
           </div>
         )}
 
         {active === "webtools" && (
-          <div className="rounded-lg border border-border bg-card p-5">
-            <h2 className="font-heading text-lg font-medium text-foreground mb-4">
-              Web Tools
-            </h2>
-            <div className="grid gap-4">
-              <label className="flex items-start gap-3">
-                <Switch
-                  checked={s.webToolsEnabled}
-                  onCheckedChange={(v) => set("webToolsEnabled", v)}
-                  className="mt-0.5"
-                />
-                <span>
-                  <span className="block text-sm text-foreground">
-                    Back web_search / web_fetch with a web provider
-                  </span>
-                  <span className="block text-[0.65rem] text-muted-foreground">
+          <div className="max-w-3xl">
+            <FormSection title="Web Tools">
+              <SettingRow
+                label="Back web_search / web_fetch with a web provider"
+                hint={
+                  <>
                     When a client requests Anthropic&apos;s hosted{" "}
                     <code className="text-primary">web_search</code> /{" "}
                     <code className="text-primary">web_fetch</code> tools, the
@@ -285,15 +276,25 @@ export default function Settings() {
                     Anthropic dependency. Requests that search are answered
                     non-streaming while tools run, then delivered (streamed if
                     requested).
-                  </span>
-                </span>
-              </label>
-              <Field label="Provider" hint="which backend runs the searches">
+                  </>
+                }
+              >
+                <div className="sm:flex sm:justify-end">
+                  <Switch
+                    checked={s.webToolsEnabled}
+                    onCheckedChange={(v) => set("webToolsEnabled", v)}
+                  />
+                </div>
+              </SettingRow>
+              <SettingRow
+                label="Provider"
+                hint="Which backend runs the searches."
+              >
                 <Select
                   value={s.webToolsProvider}
                   onValueChange={(v) => set("webToolsProvider", v)}
                 >
-                  <SelectTrigger className="max-w-xs">
+                  <SelectTrigger>
                     <SelectValue placeholder="Select a provider" />
                   </SelectTrigger>
                   <SelectContent>
@@ -304,8 +305,8 @@ export default function Settings() {
                     ))}
                   </SelectContent>
                 </Select>
-              </Field>
-              <Field
+              </SettingRow>
+              <SettingRow
                 label="Provider base URL"
                 hint="blank = the provider's default endpoint"
               >
@@ -314,8 +315,8 @@ export default function Settings() {
                   onChange={(e) => set("webProviderBaseUrl", e.target.value)}
                   placeholder="(default)"
                 />
-              </Field>
-              <Field
+              </SettingRow>
+              <SettingRow
                 label="Provider API key"
                 hint="blank = keyless where the provider supports it"
               >
@@ -324,8 +325,8 @@ export default function Settings() {
                   onChange={(e) => set("webProviderApiKey", e.target.value)}
                   placeholder="(optional)"
                 />
-              </Field>
-            </div>
+              </SettingRow>
+            </FormSection>
           </div>
         )}
 

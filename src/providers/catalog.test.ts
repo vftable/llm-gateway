@@ -8,19 +8,9 @@ import {
   isProviderTemplate,
   applyTemplateDefaults,
   capabilitiesForTemplate,
+  getAdapter,
 } from ".";
-import { AUTH_SCHEMES, PROVIDER_FORMATS } from "../types";
-
-// A composed path (basePath + endpoint) is valid when it ends in one of the
-// gateway's three known wire-format suffixes.
-function endsWithKnownSuffix(p: string): boolean {
-  const x = p.split("?")[0];
-  return (
-    x.endsWith("/chat/completions") ||
-    x.endsWith("/messages") ||
-    x.endsWith("/responses")
-  );
-}
+import { AUTH_SCHEMES, PROVIDER_FORMATS, WIRE_KINDS } from "../types";
 
 test("catalog is non-empty and includes the requested providers", () => {
   const ids = listProviderTemplates().map((t) => t.id);
@@ -59,13 +49,11 @@ test("every template has coherent defaults", () => {
         AUTH_SCHEMES.includes(t.defaults.authScheme),
         `${t.id} bad authScheme`,
       );
-    // endpoints compose to a real endpoint suffix. With a basePath the stored
-    // endpoint is a bare suffix (e.g. "/chat/completions"); without one it's a
-    // full "/v1/…" path. Either way basePath+endpoint must end in a known suffix.
+    // endpoints are wire KINDS (chat/messages/responses).
     for (const ep of t.defaults.endpoints ?? [])
       assert.ok(
-        endsWithKnownSuffix((t.defaults.basePath ?? "") + ep),
-        `${t.id} bad endpoint ${ep}`,
+        (WIRE_KINDS as string[]).includes(ep),
+        `${t.id} bad endpoint kind ${ep}`,
       );
     // at least one field, all keys valid
     assert.ok(t.fields.length > 0, `${t.id} has no fields`);
@@ -77,20 +65,19 @@ test("every template has coherent defaults", () => {
   }
 });
 
-test("format matches its default endpoint", () => {
+test("adapter native format matches its declared endpoint kinds", () => {
   for (const t of listProviderTemplates()) {
-    const full = (t.defaults.endpoints ?? []).map(
-      (e) => (t.defaults.basePath ?? "") + e,
-    );
-    if (t.defaults.format === "anthropic")
+    const adapter = getAdapter(t.id)!;
+    const kinds = t.defaults.endpoints ?? [];
+    if (adapter.nativeFormat === "anthropic" && !t.defaults.nativeConversion)
       assert.ok(
-        full.some((e) => e.endsWith("/messages")),
-        `${t.id} anthropic without a messages endpoint`,
+        kinds.includes("messages"),
+        `${t.id} anthropic without a messages kind`,
       );
-    if (t.defaults.format === "openai" && !t.defaults.nativeConversion)
+    if (adapter.nativeFormat === "openai" && !t.defaults.nativeConversion)
       assert.ok(
-        full.some((e) => e.endsWith("/chat/completions") || e.endsWith("/responses")),
-        `${t.id} openai without a chat/responses endpoint`,
+        kinds.includes("chat") || kinds.includes("responses"),
+        `${t.id} openai without a chat/responses kind`,
       );
   }
 });

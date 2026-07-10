@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import type { RequestLog, RequestLogDetail } from "@/lib/types";
 import {
   PageHeader,
-  Spinner,
+  TableSkeleton,
   EmptyState,
   Pagination,
 } from "@/components/shared";
@@ -22,7 +22,11 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { fmtTime, fmtNum } from "@/lib/utils";
 import { ModelIcon, useModelTypes } from "@/components/model-icon";
-import { JsonTree } from "@/components/json-tree";
+import {
+  DebugPanel,
+  StatusBadge,
+  fmtLatency,
+} from "@/components/request-log-debug";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
@@ -81,7 +85,21 @@ export default function RequestLogs() {
       <Card>
         <CardContent className="p-0">
           {!items ? (
-            <Spinner />
+            <TableSkeleton
+              rows={8}
+              cols={9}
+              widths={[
+                "60%",
+                "40%",
+                "45%",
+                "70%",
+                "60%",
+                "30%",
+                "35%",
+                "30%",
+                "50%",
+              ]}
+            />
           ) : items.length === 0 && page === 0 ? (
             <EmptyState msg="No matching requests" />
           ) : (
@@ -166,7 +184,7 @@ const LogRow = memo(function LogRow({
             {fmtTime(l.ts)}
           </span>
         </TableCell>
-        <TableCell className="text-muted-foreground">
+        <TableCell className="max-w-[10rem] truncate text-muted-foreground">
           {l.apiKeyName ? (
             l.apiKeyName
           ) : l.keyPrefix ? (
@@ -175,27 +193,31 @@ const LogRow = memo(function LogRow({
             "anon"
           )}
         </TableCell>
-        <TableCell>
+        <TableCell className="max-w-[10rem]">
           {l.client ? (
-            <Badge variant="secondary">{l.client}</Badge>
+            <Badge variant="secondary" className="block max-w-full truncate">
+              {l.client}
+            </Badge>
           ) : (
             <span className="text-muted-foreground">—</span>
           )}
         </TableCell>
-        <TableCell className="font-mono text-primary">
+        <TableCell className="max-w-[14rem] font-mono text-primary">
           {l.model ? (
-            <span className="flex items-center gap-2">
+            <span className="flex min-w-0 items-center gap-2">
               <ModelIcon alias={l.model} type={type} />
-              {l.model}
+              <span className="truncate">{l.model}</span>
             </span>
           ) : (
             "—"
           )}
         </TableCell>
-        <TableCell className="text-muted-foreground">
-          {l.providerName ?? l.providerId ?? "—"}
+        <TableCell className="max-w-[12rem] text-muted-foreground">
+          <span className="block truncate">
+            {l.providerName ?? l.providerId ?? "—"}
+          </span>
           {l.upstreamModel ? (
-            <span className="block text-[0.6rem] text-muted-foreground/70">
+            <span className="block truncate text-[0.6rem] text-muted-foreground/70">
               {l.upstreamModel}
             </span>
           ) : null}
@@ -249,92 +271,3 @@ const LogRow = memo(function LogRow({
     </>
   );
 });
-
-// Show a captured JSON blob as an interactive, syntax-highlighted tree (or a
-// fallback while loading / when nothing was captured). The blob is already
-// truncated server-side; the tree parses it and lets you open/close nodes.
-function DebugPanel({
-  title,
-  subtitle,
-  json,
-  loading,
-}: {
-  title: string;
-  subtitle: string;
-  json: string | null | undefined;
-  loading: boolean;
-}) {
-  const copy = () => {
-    if (!json) return;
-    let text = json;
-    try {
-      text = JSON.stringify(JSON.parse(json), null, 2);
-    } catch {
-      /* copy raw on parse failure */
-    }
-    navigator.clipboard.writeText(text);
-  };
-
-  return (
-    <div className="min-w-0">
-      <div className="mb-1.5 flex items-baseline justify-between gap-2">
-        <div className="flex items-baseline gap-2">
-          <span className="text-xs font-semibold text-foreground">{title}</span>
-          <span className="text-[0.6rem] text-muted-foreground">
-            {subtitle}
-          </span>
-        </div>
-        {json && (
-          <button
-            type="button"
-            onClick={copy}
-            className="text-[0.6rem] text-muted-foreground transition-colors hover:text-foreground"
-          >
-            copy
-          </button>
-        )}
-      </div>
-      <div className="max-h-96 overflow-auto rounded-md border border-border bg-background p-3">
-        {loading ? (
-          <span className="font-mono text-[0.7rem] text-muted-foreground">
-            loading…
-          </span>
-        ) : !json ? (
-          <span className="font-mono text-[0.7rem] text-muted-foreground">
-            — not captured —
-          </span>
-        ) : (
-          <JsonTree json={json} />
-        )}
-      </div>
-    </div>
-  );
-}
-
-function fmtLatency(ms: number | null): string {
-  if (ms == null) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
-}
-
-function StatusBadge({ status }: { status: number | null }) {
-  if (status == null)
-    return (
-      <Badge variant="secondary" className={cn("tabular-nums")}>
-        —
-      </Badge>
-    );
-  const variant =
-    status >= 500
-      ? "destructive"
-      : status >= 400
-        ? "warning"
-        : status >= 200
-          ? "success"
-          : "secondary";
-  return (
-    <Badge variant={variant} className="tabular-nums">
-      {status}
-    </Badge>
-  );
-}

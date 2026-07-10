@@ -5,4 +5,9 @@ export {
   listTransformDefs,
   type TransformDef,
 } from "./registry";
-export { buildModelTransforms, modelTransformBags } from "./apply";
+export {
+  buildModelTransforms,
+  modelTransformBags,
+  mergeTransforms,
+  dropOverriddenDefaults,
+} from "./apply";

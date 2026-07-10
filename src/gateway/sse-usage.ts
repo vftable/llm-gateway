@@ -145,19 +145,26 @@ export class SseUsageObserver extends Transform {
 
     // Anthropic Messages SSE.
     const type = obj.type;
-    if (type === "content_block_start") {
-      const block = (obj.content_block ?? {}) as Record<string, unknown>;
-      if (block.type === "tool_use")
-        addArg(Number(obj.index ?? this.tools.size), block.name, "");
-    } else if (type === "content_block_delta") {
-      const d = (obj.delta ?? {}) as Record<string, unknown>;
-      if (typeof d.text === "string") addText(d.text);
-      if (typeof d.thinking === "string") addText(d.thinking);
-      if (typeof d.partial_json === "string")
-        addArg(Number(obj.index ?? 0), undefined, d.partial_json);
-    } else if (type === "message_delta") {
-      const d = (obj.delta ?? {}) as Record<string, unknown>;
-      if (d.stop_reason !== undefined) this.stopReason = d.stop_reason;
+    switch (type) {
+      case "content_block_start": {
+        const block = (obj.content_block ?? {}) as Record<string, unknown>;
+        if (block.type === "tool_use")
+          addArg(Number(obj.index ?? this.tools.size), block.name, "");
+        break;
+      }
+      case "content_block_delta": {
+        const d = (obj.delta ?? {}) as Record<string, unknown>;
+        if (typeof d.text === "string") addText(d.text);
+        if (typeof d.thinking === "string") addText(d.thinking);
+        if (typeof d.partial_json === "string")
+          addArg(Number(obj.index ?? 0), undefined, d.partial_json);
+        break;
+      }
+      case "message_delta": {
+        const d = (obj.delta ?? {}) as Record<string, unknown>;
+        if (d.stop_reason !== undefined) this.stopReason = d.stop_reason;
+        break;
+      }
     }
 
     // OpenAI Chat SSE: choices[].delta.{content, tool_calls[]}.

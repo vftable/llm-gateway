@@ -10,17 +10,12 @@
 //   - https://platform.claude.com/docs/en/about-claude/models/migration-guide
 //   - https://github.com/BerriAI/litellm/issues/22930
 
-// Matches Claude models WITHOUT assistant prefill support:
-//   - the 4.x line at 4.6 and above (claude-sonnet-4-6, claude-opus-4-8, ...)
-//   - any major version >= 5 (claude-sonnet-5-..., claude-opus-5-..., ...)
-//   - the Fable / Mythos lines (claude-fable-5, claude-mythos, ...)
-const NO_PREFILL_RE =
-  /claude-(?:sonnet|opus|haiku)-4-([6-9]|\d{2,})(?:-|$)|claude-(?:sonnet|opus|haiku)-([5-9]|\d{2,})(?:-|$)|claude-(?:fable|mythos)/i;
+import { isModelPost45 } from "./model-version";
 
-export function modelNeedsPrefillFix(model: string): boolean {
-  if (typeof model !== "string" || model === "") return false;
-  return NO_PREFILL_RE.test(model.toLowerCase());
-}
+// The set of Claude models WITHOUT assistant-prefill support is exactly the
+// post-4.5 set (4.6+, any major >= 5, and the Fable/Mythos lines) — so we reuse
+// the single shared version check instead of duplicating its regex here.
+export const modelNeedsPrefillFix = (model: string) => isModelPost45(model);
 
 // Extract `id`s from any `tool_use` blocks in an Anthropic-shaped content
 // array. Returns [] for plain-string content or unrecognized shapes.

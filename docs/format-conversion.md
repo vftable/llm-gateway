@@ -5,12 +5,27 @@ This document is the reference for how the gateway converts between the
 `chat`) and the **Anthropic Messages** wire format (`/v1/messages`, internally
 `messages`). It records the non-obvious *quirks* — the small correctness rules
 that a naive field-mapping misses and that cause upstream 400s or lost content
-if omitted.
+if omitted. See [`docs/provider-adapters.md`](./provider-adapters.md) for how
+a provider adapter routes/builds requests around this conversion, and
+[`docs/transforms-api.md`](./transforms-api.md) for how the tagged transform
+stages referenced throughout this file (the Anthropic request hooks, thinking
+extraction, the default provider transform stack, the opt-in library) are
+authored and placed in the pipeline.
 
-The converters live in [`src/formats/anthropic/bridge.ts`](../src/formats/anthropic/bridge.ts).
-They run as stages in the transform pipeline (`src/formats/pipeline.ts`); the
-engine selects them whenever the client's wire format differs from the serving
-provider's. Conversion is symmetric and covers four bodies:
+The converters live in
+[`src/formats/converters/chat-messages/`](../src/formats/converters/chat-messages)
+(pure cross-format converters — `formats/converters/` holds format translation
+for every wire-format pair the gateway bridges; `formats/anthropic/` holds
+Anthropic-native hooks, i.e. behavior that applies to a Messages-shaped body
+regardless of which client format produced it). The sibling pair,
+[`formats/converters/chat-responses/`](../src/formats/converters/chat-responses),
+bridges OpenAI Chat Completions and the Responses API — see its own module doc
+comment for that pair's coverage; a `responses<->messages` hop composes both
+pairs through Chat as a pivot (`src/formats/pipeline.ts`) rather than a bespoke
+third converter. They run as stages in the transform pipeline
+(`src/formats/pipeline.ts`); the engine selects them whenever the client's wire
+format differs from the serving provider's. Conversion is symmetric and covers
+four bodies:
 
 | Direction | Request | Response (buffered) | Response (streaming) |
 |---|---|---|---|
@@ -21,12 +36,17 @@ provider's. Conversion is symmetric and covers four bodies:
 direction), because a response comes back in the provider's shape and must be
 handed to the client in the client's shape.
 
-> Scope note: this is a **pure wire-format conversion + API-routing** layer. It
-> deliberately contains **no provider-specific behavior** — no injected system
-> prompts, no `cache_control` insertion, no OAuth tool-name cloaking, no billing
-> headers. Those belong to individual provider adapters, not the shared bridge.
-> (9router folds several of those into its translator; we intentionally left
-> them out.)
+> Scope note: this file is a **pure wire-format converter**. Provider-specific
+> behavior lives elsewhere and composes *after* conversion (see **Anthropic
+> request hooks** below): the Anthropic-native normalizations run as provider
+> adapter request transforms. Prompt caching and tool-arg sanitization are
+> library transforms **defaulted on for every Anthropic-native provider
+> family** (`ANTHROPIC_DEFAULT_TRANSFORMS`, applied automatically — see
+> [transforms-api.md § The default provider transform
+> stack](./transforms-api.md#the-default-provider-transform-stack)); system
+> injection remains fully opt-in, picked per model in the UI. The OAuth
+> first-party *impersonation* stack is intentionally **not** implemented (see
+> the boundary note at the end).
 
 ---
 
@@ -163,10 +183,47 @@ that understands them still sees them. We never *fabricate* a thinking config.
 `reasoning_content` | `reasoning` | `reasoning_details[]`), and the thinking
 branches in both response translators.
 
-> Note: The existing `ThinkingConverter` (`src/formats/thinking.ts`) handles the
+> Note: `ThinkingConverter` (`src/formats/thinking/converter.ts`) handles the
 > *textual* `<thinking>…</thinking>` tag form on provider-native bodies before
 > the format stage. S1 is the complementary **structured** form (native thinking
 > blocks / `reasoning_content` fields).
+
+#### Synthetic thinking-block signatures
+
+A real Anthropic `thinking` block always carries a cryptographic `signature` —
+Anthropic verifies it if a client echoes the block back on a later turn (e.g. a
+tool-use continuation) and 400s if it's missing or invalid. Every place the
+gateway itself **builds** a `thinking` block — the Chat→Claude response/stream
+conversion above, and `ThinkingConverter` splitting an inline `<thinking>` tag
+out of a provider-native text block — has no real signature to attach, because
+the text never came from an actual Anthropic extended-thinking turn. Omitting
+`signature` entirely causes some clients/SDKs (including Anthropic's own) to
+reject the block on echo-back, so every block the gateway synthesizes carries
+[`SYNTHETIC_THINKING_SIGNATURE`](../src/formats/wire/anthropic.ts)
+(`"llmapi-synthetic-thinking"`) instead — buffered as the block's `signature`
+field, streaming as a `signature_delta` event emitted immediately before the
+block's `content_block_stop`. This matches the confirmed live-API event
+sequence for a thinking block:
+`content_block_start {thinking:"",signature:""}` → one or more
+`thinking_delta` → **one `signature_delta`** → `content_block_stop` (verified
+against [platform.claude.com/docs/.../extended-thinking](https://platform.claude.com/docs/en/build-with-claude/extended-thinking)
+and [.../streaming](https://platform.claude.com/docs/en/build-with-claude/streaming)
+— the docs also confirm a *real* thinking block always carries `signature`,
+even when `display:"omitted"` leaves `thinking` itself empty, and that
+Anthropic 400s with `invalid_request_error` ("`thinking` or
+`redacted_thinking` blocks in the latest assistant message cannot be
+modified") if a client rearranges, drops, or alters one on echo-back — which
+is exactly the failure this synthesis avoids). The synthetic value is **not**
+a valid Anthropic signature; it exists purely so the block's *shape* matches
+a real one. See **Anthropic request hooks** below for why this placeholder is
+never actually round-tripped anywhere that would need it to be genuine —
+every outbound request strips it right back out.
+
+A `thinking`/`reasoning` block that is empty or whitespace-only after
+extraction (`<thinking></thinking>`, or a chunk that opens and immediately
+closes the tag) is **dropped**, never emitted as an empty block — real
+providers never send one, and an empty block on the wire serves no purpose
+other than confusing a client that renders it.
 
 ### S2 — Cache-token accounting
 Token fields do not map 1:1:
@@ -218,22 +275,80 @@ both the request image conversion and any inline data URIs.
 
 ---
 
-## Explicitly out of scope (provider-specific, not conversion)
+## Anthropic request hooks (run on every path)
 
-These 9router behaviors were reviewed and **intentionally not ported** into the
-shared bridge, per the "conversion + routing only" boundary:
+The Anthropic-native request normalizations are **not** in the converter, and
+**not** per-adapter `requestTransforms()` either — they're an ALL-PROVIDER
+request default (`src/formats/anthropic/hooks/`, registered in
+`formats/transforms/defaults.ts`'s `DEFAULT_TRANSFORMS`), format-tagged
+`"messages"` and internally gated on `ctx.providerFmt === "messages"`. The
+engine adds them to every route; `buildTransformPlan` places a
+`"messages"`-tagged request stage exactly where the body is in Messages
+shape (post-conversion for a hop that converts *into* Messages, pre-conversion
+— i.e. a no-op, since the gate fails — for a hop that doesn't), so these fire
+identically for:
 
-- Injecting a "You are Claude Code" system prompt (`CLAUDE_SYSTEM_PROMPT`).
-- Adding `cache_control: { type:"ephemeral" }` breakpoints to messages/tools.
-- OAuth tool-name prefixing / cloaking (`_cc` suffix, `sk-ant-oat` detection).
-- Stripping `x-anthropic-billing-header:` from system text.
-- Tool-argument sanitization for specific client tools (e.g. clamping the `Read`
-  tool's `limit`/`offset`) — that is tool-policy, not format.
-- Model-ceiling `max_tokens` clamping and the 32k tool-calling floor.
+- native `/v1/messages` (messages → messages, no convert),
+- converted `/v1/chat/completions` (chat → messages) or a `responses` client
+  routed through the chat↔messages pivot,
+- the Firecrawl web-tool loop (`runOneTurnAttempt` builds the same route).
 
-If any of these are wanted, they belong in a provider adapter's
-`requestTransforms()` / `responseTransforms()`, where they compose *after* the
-format stage without polluting the shared converter.
+The stack (`hooks/stack.ts`), in order:
+
+| Hook | File | What it does |
+|---|---|---|
+| `anthropic:thinking-signature` | `hooks/thinking-signature.ts` | convert every `thinking` content block — synthetic or genuine — to a signature-free `text` block carrying the same reasoning prose; always drop `redacted_thinking` blocks. See **Synthetic thinking-block signatures** above for why even a genuine signature can't be trusted here. |
+| `anthropic:thinking-config` | `hooks/thinking-config.ts` | adaptive→`{type:"enabled",budget_tokens:10000}` on Haiku; floor `budget_tokens` to 1024 and keep it `< max_tokens` (raise `max_tokens` to `budget+1024`); hoist mid-conversation `role:"system"` turns into top-level `system` |
+| `anthropic:max-tokens` | `hooks/max-tokens.ts` | clamp `max_tokens` to the hop's effective ceiling (`TransformCtx.maxOutputTokens` = link ?? imported ?? model), re-shrinking `budget_tokens` if the clamp would breach `budget < max` |
+| `anthropic:prefill` | `hooks/prefill.ts` | Claude 4.6+ prefill fix — append a trailing `user` turn when the convo ends `assistant` (with `tool_result` blocks when the last turn had `tool_use`) |
+
+`thinking-signature` runs first so every hook after it sees a body with no
+`thinking`-typed content blocks at all — a deliberate structural
+normalization before anything else inspects the message shape. These moved
+off the router middleware (which ran pre-conversion on the client body, keyed
+on the alias, and missed the web-tool loop). Verified against the live
+Anthropic Messages docs. Covered by
+`src/formats/anthropic/hooks/hooks.test.ts`,
+`src/formats/anthropic/hooks/thinking-signature.test.ts`, and
+`src/providers/anthropic-hooks.test.ts`.
+
+## Library transforms — defaulted vs. opt-in
+
+Provider-feature behaviors beyond the request hooks above are offered as
+transforms in the library (`src/formats/transforms/`, catalog via
+`GET /api/transforms`) — but they're **not all opt-in**. Two apply
+automatically to every Anthropic-native provider (the **default provider
+transform stack** — see
+[transforms-api.md](./transforms-api.md#the-default-provider-transform-stack)
+for the full mechanics); one remains fully opt-in, configured per imported
+model in the UI:
+
+| Transform | Phase | Default for Anthropic-native providers? | What it does |
+|---|---|---|---|
+| `anthropic-cache` | request | **Yes** — `ANTHROPIC_DEFAULT_TRANSFORMS`, `ttl:"5m"` | Add `cache_control:{type:"ephemeral", ttl}` breakpoints to the stable prefix (last `system` block, last tool, last message content block) for Anthropic prompt caching. `ttl` = `5m`\|`1h`. Stays within the 4-breakpoint limit; skips thinking blocks. No-ops on a body that looks OpenAI-shaped (`role:"tool"`, `tool_calls`, or `{type:"function"}` tools) — a defensive guard now that this runs unconditionally as a family default, not just when a user opted in. |
+| `sanitize-tool-args` | response | **Yes** — `ANTHROPIC_DEFAULT_TRANSFORMS` | Coerce/clamp malformed tool-call args from non-Claude models (numeric strings→numbers, `Read.limit` ≤ 2000, drop negative offsets / invalid pdf `pages`) in both the Anthropic `tool_use.input` and chat `tool_calls[].arguments` shapes. |
+| `system-prepend` | request | No — opt-in only | Prepend a **user-supplied** system string (Anthropic `system` or chat system message). Generic — the text is yours. |
+
+A model can still override the family's `anthropic-cache`/`sanitize-tool-args`
+default (e.g. to change the TTL, or disable by pointing the same `id+phase`
+at different params) by adding an entry with the matching `id`/`phase` in
+its own transform config — the model's entry wins by `(id, phase)` (see
+`mergeTransforms` in transforms-api.md). Use
+`GET /providers/:id/transforms/resolved` (or the "Default transforms" panel
+in the admin UI) to see exactly what applies to a given provider/model —
+never guess from this table alone, since it only says what's true for the
+*catalog default*, not any provider-specific override.
+
+## Hosted / custom tools
+
+- **Native `messages → messages`:** hosted Anthropic tools
+  (`web_search_20250305`, `computer_*`, `bash_*`, `text_editor_*`) pass through
+  untouched — the request hooks never mangle them (asserted in the hook tests).
+- **Firecrawl web-tool loop:** runs *before* the request hooks (unchanged); the
+  gateway drives the search/fetch loop itself for Messages clients.
+- **`chat → messages`:** the converter drops non-portable hosted tools
+  (`anthropicToolsToChat` skips `computer_*`/`web_search`) since Chat can't
+  express them — documented, unchanged.
 
 ---
 

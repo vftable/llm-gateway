@@ -113,6 +113,61 @@ export function fmtDate(iso: string | null | undefined): string {
   });
 }
 
+// Client-side mirror of the backend's standardPath()/endpointPathFor()
+// (src/providers/base.ts) — same rule, so the wizard's and the detail page's
+// "resolved URL" preview always agrees with what the server will actually
+// compose: an explicit per-kind override wins; otherwise a bare basePath set
+// means only the kind's suffix is appended ("/chat/completions"), and an EMPTY
+// basePath means the implicit "/v1" prefix is added ("/v1/chat/completions").
+// basePath REPLACES "/v1" — it is not layered on top of it. If you need /v1 in
+// the final path, include it in basePath yourself (e.g. "/v1beta/openai").
+export function endpointPathPreview(
+  kind: "chat" | "messages" | "responses",
+  basePath: string | null | undefined,
+  endpointPaths?: Partial<Record<"chat" | "messages" | "responses", string>>,
+): string {
+  const override = endpointPaths?.[kind];
+  if (override) return override;
+  const bare =
+    kind === "messages"
+      ? "/messages"
+      : kind === "responses"
+        ? "/responses"
+        : "/chat/completions";
+  return basePath ? bare : "/v1" + bare;
+}
+
+// The full resolved upstream URL for a hop: origin + basePath + endpoint path.
+// Mirrors composeUrl() (base.ts) — string concatenation, not `new URL()`,
+// which would drop basePath as a path prefix. Returns "" when there's not
+// enough to compose yet (no origin or no kind to preview).
+export function resolvedUrlPreview(
+  baseUrl: string | null | undefined,
+  basePath: string | null | undefined,
+  kind: "chat" | "messages" | "responses" | undefined,
+  endpointPaths?: Partial<Record<"chat" | "messages" | "responses", string>>,
+): string {
+  const origin = (baseUrl ?? "").replace(/\/+$/, "");
+  if (!origin || !kind) return "";
+  return (
+    origin +
+    (basePath ?? "") +
+    endpointPathPreview(kind, basePath, endpointPaths)
+  );
+}
+
+// The Host header the gateway would derive from a base URL when no override is
+// set (mirrors hostFromUrl() in src/gateway/url.ts) — used as the Host header
+// override field's placeholder so the blank/default value is visible, not just
+// described in a hint. "" when baseUrl isn't a parseable absolute URL yet.
+export function hostFromUrl(baseUrl: string | null | undefined): string {
+  try {
+    return new URL(baseUrl ?? "").host;
+  } catch {
+    return "";
+  }
+}
+
 export function relTime(iso: string | null | undefined): string {
   if (!iso) return "never";
   const d = new Date(iso).getTime();

@@ -4,8 +4,11 @@ import { ProtectedRoute } from "@/components/protected-route";
 import Login from "@/pages/login";
 import Dashboard from "@/pages/dashboard";
 import Providers from "@/pages/providers";
+import ProviderDetail from "@/pages/providers/detail";
+import ProviderUsage from "@/pages/providers/usage";
 import ImportedModels from "@/pages/providers/imported-models";
 import Models from "@/pages/models";
+import ModelEditor from "@/pages/models/editor";
 import ApiKeys from "@/pages/api-keys";
 import Users from "@/pages/users";
 import Usage from "@/pages/usage";
@@ -25,13 +28,16 @@ export default function App() {
       >
         <Route path="/" element={<Dashboard />} />
         <Route path="/providers" element={<Providers />} />
-        <Route
-          path="/providers/:id/models"
-          element={<ImportedModels />}
-        />
+        {/* Provider key-usage dashboard (branded cards, adapter-fed limits). */}
+        <Route path="/providers/usage" element={<ProviderUsage />} />
+        {/* Imported-model catalog for a provider (its own page). */}
+        <Route path="/providers/:id/imported" element={<ImportedModels />} />
+        {/* Provider detail page; :tab = overview|config|keys|models|advanced. */}
+        <Route path="/providers/:id" element={<ProviderDetail />} />
+        <Route path="/providers/:id/:tab" element={<ProviderDetail />} />
         <Route path="/models" element={<Models />} />
-        <Route path="/models/new" element={<Models />} />
-        <Route path="/models/:id" element={<Models />} />
+        <Route path="/models/new" element={<ModelEditor />} />
+        <Route path="/models/:id" element={<ModelEditor />} />
         <Route path="/keys" element={<ApiKeys />} />
         <Route path="/users" element={<Users />} />
         <Route path="/usage" element={<Usage />} />

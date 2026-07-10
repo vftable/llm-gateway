@@ -45,10 +45,7 @@ export function TransformEditor({
   const add = (id: string) => {
     const def = defOf(id);
     if (!def) return;
-    onChange([
-      ...value,
-      { id, phase: def.phases[0] ?? "request", params: {} },
-    ]);
+    onChange([...value, { id, phase: def.phases[0] ?? "request", params: {} }]);
     setAdding(false);
   };
 
@@ -67,8 +64,8 @@ export function TransformEditor({
     <div className="space-y-2">
       {value.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          No transforms. Add one to rewrite the request or response body for this
-          model.
+          No transforms. Add one to rewrite the request or response body for
+          this model.
         </p>
       )}
 
@@ -96,6 +93,8 @@ export function TransformEditor({
                   size="icon-xs"
                   onClick={() => move(i, -1)}
                   disabled={i === 0}
+                  title="Move up"
+                  aria-label="Move transform up"
                 >
                   <ArrowUp className="h-3 w-3" />
                 </Button>
@@ -104,6 +103,8 @@ export function TransformEditor({
                   size="icon-xs"
                   onClick={() => move(i, 1)}
                   disabled={i === value.length - 1}
+                  title="Move down"
+                  aria-label="Move transform down"
                 >
                   <ArrowDown className="h-3 w-3" />
                 </Button>
@@ -111,13 +112,17 @@ export function TransformEditor({
                   variant="ghost"
                   size="icon-xs"
                   onClick={() => onChange(value.filter((_, j) => j !== i))}
+                  title="Remove transform"
+                  aria-label="Remove transform"
                 >
                   <Trash2 className="h-3 w-3 text-destructive" />
                 </Button>
               </div>
             </div>
             {def?.blurb && (
-              <p className="text-[0.65rem] text-muted-foreground">{def.blurb}</p>
+              <p className="text-[0.65rem] text-muted-foreground">
+                {def.blurb}
+              </p>
             )}
             {def && def.params.length > 0 && (
               <div className="grid grid-cols-2 gap-2">
@@ -125,7 +130,9 @@ export function TransformEditor({
                   <label key={p.key} className="block">
                     <span className="mb-1 block text-[0.65rem] font-medium text-muted-foreground">
                       {p.label}
-                      {p.required && <span className="text-destructive"> *</span>}
+                      {p.required && (
+                        <span className="text-destructive"> *</span>
+                      )}
                     </span>
                     <Input
                       value={String(t.params[p.key] ?? "")}

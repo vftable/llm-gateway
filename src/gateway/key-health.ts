@@ -181,7 +181,8 @@ export class KeyHealthStore {
         const proven = fresh.filter((i) =>
           this.affinity.get(this.hk(provider.id, hashes[i]))?.has(model),
         );
-        if (proven.length) return this.rrPick(provider.id, proven, keys, hashes);
+        if (proven.length)
+          return this.rrPick(provider.id, proven, keys, hashes);
       }
       return this.rrPick(provider.id, fresh, keys, hashes);
     }
@@ -235,7 +236,11 @@ export class KeyHealthStore {
 
   // A key served this model: clear any auth-fail flag, reset the failure
   // counter, and learn the (key,model) affinity.
-  recordSuccess(providerId: string, keyHash: string, model: string | null): void {
+  recordSuccess(
+    providerId: string,
+    keyHash: string,
+    model: string | null,
+  ): void {
     const h = this.getHealth(providerId, keyHash);
     if (h.authFailed || h.rateLimitedUntil) {
       h.authFailed = false;
@@ -255,7 +260,11 @@ export class KeyHealthStore {
 
   // A proven (key,model) pair failed: bump its counter and evict once it
   // crosses the threshold. Unproven pairs are ignored (nothing to demote).
-  recordFailure(providerId: string, keyHash: string, model: string | null): void {
+  recordFailure(
+    providerId: string,
+    keyHash: string,
+    model: string | null,
+  ): void {
     if (!model) return;
     const k = this.hk(providerId, keyHash);
     if (!this.affinity.get(k)?.has(model)) return;

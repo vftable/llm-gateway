@@ -10,31 +10,43 @@ export const AUTH_SCHEMES: AuthScheme[] = [
   "passthrough",
 ];
 
-// What wire format a provider speaks natively. Drives the default endpoint
-// and how the gateway converts when the client speaks the other format.
+// What wire format a provider speaks natively. Drives the generic-adapter
+// selection and how the gateway converts when the client speaks the other format.
 export type ProviderFormat = "anthropic" | "openai";
 
 export const PROVIDER_FORMATS: ProviderFormat[] = ["anthropic", "openai"];
 
-// The three LLM request endpoints the gateway understands. Providers declare
-// which subset they support; each model->provider link picks one to route
-// through.
-export const ENDPOINT_MESSAGES = "/v1/messages";
-export const ENDPOINT_CHAT = "/v1/chat/completions";
-export const ENDPOINT_RESPONSES = "/v1/responses";
-export const ALL_ENDPOINTS = [
-  ENDPOINT_MESSAGES,
-  ENDPOINT_CHAT,
-  ENDPOINT_RESPONSES,
-] as const;
-export type EndpointPath = (typeof ALL_ENDPOINTS)[number];
+// The three LLM request endpoints the gateway understands, named by KIND (not
+// path). A provider declares which kinds it accepts (`endpoints`); the adapter
+// assembles the actual URL path for each kind from the origin + basePath, with an
+// optional per-kind override for non-standard layouts (`endpointPaths`). This is
+// the single endpoint vocabulary — identical to the engine's WireFmt.
+export type WireKind = "chat" | "messages" | "responses";
+
+// Named members so code reads `WireKind.Chat` instead of the bare "chat" string
+// (the type and this value-companion intentionally share a name). Prefer these in
+// adapter templates and anywhere a kind is written by hand.
+export const WireKind = {
+  Chat: "chat",
+  Messages: "messages",
+  Responses: "responses",
+} as const;
+
+export const WIRE_KINDS: WireKind[] = [
+  WireKind.Chat,
+  WireKind.Messages,
+  WireKind.Responses,
+];
 
 export interface Provider {
   id: string;
   name: string;
   baseUrl: string;
   host: string | null;
+  /** Active keys — rotated round-robin across requests. */
   apiKeys: string[];
+  /** Keys toggled off by the operator: retained but skipped in selection. */
+  disabledApiKeys: string[];
   authScheme: AuthScheme;
   extraHeaders: Record<string, string>;
   retryAttempts: number;
@@ -42,13 +54,19 @@ export interface Provider {
   requestTimeoutMs: number;
   tlsVerify: boolean;
   enabled: boolean;
-  /** Native wire format. anthropic -> /v1/messages, openai -> /v1/chat/completions(+responses). */
-  format: ProviderFormat;
   /**
-   * Path prefix inserted between the origin and each endpoint suffix, e.g.
+   * Generic-adapter selector for providers with NO catalogId: "anthropic" picks
+   * the generic Anthropic adapter, "openai" (or null) the generic OpenAI one.
+   * null when the provider is adapter-backed (catalogId set) or `nativeConversion`
+   * is on — in both cases the format is derived/irrelevant, not stored. Never the
+   * source of truth for an adapter's own format (that's the adapter's nativeFmt).
+   */
+  format: ProviderFormat | null;
+  /**
+   * Path prefix inserted between the origin and each endpoint path, e.g.
    * "/v1beta/openai" for Google Gemini's OpenAI-compat surface. Empty string
-   * (the default) means endpoints are full paths appended to the origin as-is,
-   * preserving legacy behavior. The upstream URL is `origin + basePath + suffix`.
+   * (the default) means the standard "/v1/…" paths are appended to the origin.
+   * The upstream URL is `origin + basePath + endpointPath(kind)`.
    */
   basePath: string;
   /**
@@ -63,8 +81,18 @@ export interface Provider {
   proxy: string | null;
   /** ISO-3166 alpha-2 country tag for this provider (UI flag only; never routes). */
   country: string | null;
-  /** Endpoints this provider accepts. With basePath set these are suffixes. */
-  endpoints: string[];
+  /**
+   * Which endpoint KINDS this provider accepts (chat/messages/responses). The
+   * adapter turns each kind into a URL path from origin+basePath; a non-standard
+   * layout can override the path per kind via `endpointPaths`.
+   */
+  endpoints: WireKind[];
+  /**
+   * Optional per-kind path override for a non-standard layout that doesn't
+   * warrant a full custom adapter (e.g. an upstream whose chat lives at
+   * "/api/v2/chat"). Missing kinds use the standard assembled path. Rarely set.
+   */
+  endpointPaths: Partial<Record<WireKind, string>>;
   /**
    * When true, the provider accepts EITHER format and converts internally
    * (e.g. LiteLLM/9router). The gateway then forwards the client's request

@@ -1,68 +1,60 @@
-// Schema-conformance: assert our catalog targets endpoints the official SDKs
+// Schema-conformance: assert our catalog targets endpoint KINDS the official SDKs
 // actually speak. We can't exercise the network here, so we assert coherence
 // against the installed @anthropic-ai/sdk and openai packages: the client
-// surfaces the resource each wire format maps to (messages / chat / responses),
-// and every template's endpoints are a subset of what the gateway supports.
+// surfaces the resource each wire kind maps to (messages / chat / responses),
+// and every template's endpoints are valid kinds backed by an SDK resource.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { listProviderTemplates } from ".";
-import {
-  ENDPOINT_MESSAGES,
-  ENDPOINT_CHAT,
-  ENDPOINT_RESPONSES,
-} from "../types";
+import { listProviderTemplates, getAdapter } from ".";
+import { WIRE_KINDS, type WireKind } from "../types";
 
-test("official SDK clients expose the resources our formats map to", () => {
+test("official SDK clients expose the resources our kinds map to", () => {
   const anthropic = new Anthropic({ apiKey: "test" });
-  // Anthropic format -> /v1/messages
   assert.ok(anthropic.messages, "anthropic SDK missing .messages");
   assert.equal(typeof anthropic.messages.create, "function");
 
   const openai = new OpenAI({ apiKey: "test" });
-  // OpenAI format -> /v1/chat/completions (+ /v1/responses)
   assert.ok(openai.chat?.completions, "openai SDK missing .chat.completions");
   assert.equal(typeof openai.chat.completions.create, "function");
   assert.ok(openai.responses, "openai SDK missing .responses");
 });
 
-test("each template's endpoints are valid + match its wire format's SDK", () => {
+test("each template's endpoint kinds are valid + backed by an SDK resource", () => {
   const anthropic = new Anthropic({ apiKey: "test" });
   const openai = new OpenAI({ apiKey: "test" });
-  // The composed path (basePath + endpoint) must end in the suffix of one of
-  // the three canonical endpoints.
-  const suffixes = [ENDPOINT_MESSAGES, ENDPOINT_CHAT, ENDPOINT_RESPONSES].map(
-    (e) => e.replace(/^\/v1/, ""),
-  );
-  const composedOk = (t: (typeof list)[number], ep: string) => {
-    const full = (t.defaults.basePath ?? "") + ep;
-    return suffixes.some((s) => full.endsWith(s));
+  const sdkFor: Record<WireKind, boolean> = {
+    chat: !!openai.chat?.completions,
+    responses: !!openai.responses,
+    messages: !!anthropic.messages,
   };
-  const list = listProviderTemplates();
 
-  for (const t of list) {
-    for (const ep of t.defaults.endpoints ?? [])
-      assert.ok(composedOk(t, ep), `${t.id} targets unknown endpoint ${ep}`);
-
-    // The template's declared native format must be backed by that SDK's resource.
-    if (t.defaults.format === "anthropic") {
+  for (const t of listProviderTemplates()) {
+    for (const kind of t.defaults.endpoints ?? []) {
       assert.ok(
-        anthropic.messages,
-        `${t.id} is anthropic but SDK lacks messages`,
+        (WIRE_KINDS as string[]).includes(kind),
+        `${t.id} targets unknown endpoint kind ${kind}`,
       );
-      // A non-native anthropic provider should route to a messages endpoint.
+      assert.ok(sdkFor[kind], `${t.id} kind ${kind} has no SDK resource`);
+    }
+
+    // The adapter identifies its own native format (no stored format field).
+    const adapter = getAdapter(t.id);
+    assert.ok(adapter, `${t.id} has no adapter`);
+    if (adapter!.nativeFormat === "anthropic") {
+      assert.ok(anthropic.messages, `${t.id} anthropic but SDK lacks messages`);
+      // A non-native-conversion anthropic provider must accept the messages kind.
       if (!t.defaults.nativeConversion)
         assert.ok(
-          (t.defaults.endpoints ?? []).some((e) => e.endsWith("/messages")),
-          `${t.id} anthropic must target a messages endpoint`,
+          (t.defaults.endpoints ?? []).includes("messages"),
+          `${t.id} anthropic must accept the messages kind`,
         );
-    }
-    if (t.defaults.format === "openai") {
+    } else {
       assert.ok(
         openai.chat?.completions,
-        `${t.id} is openai but SDK lacks chat.completions`,
+        `${t.id} openai but SDK lacks chat.completions`,
       );
     }
   }
