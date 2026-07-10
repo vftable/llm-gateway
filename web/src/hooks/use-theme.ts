@@ -1,7 +1,10 @@
 import { useCallback, useSyncExternalStore } from "react";
 
 const THEME_KEY = "theme";
-const TRANSITION_MS = 150;
+// Matches .theme-transition's 200ms CSS duration (index.css) + a small buffer
+// so the class is never removed mid-transition — that would cancel the
+// animation and snap the last few ms instead of easing out smoothly.
+const TRANSITION_MS = 220;
 
 type Theme = "dark" | "light";
 

@@ -27,7 +27,8 @@ function Switch({
     >
       <span
         className={cn(
-          "pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transform-gpu will-change-transform transition-transform duration-200 ease-in-out",
+          // Positional slide — same snappy S-curve as the sidebar's own motion.
+          "pointer-events-none block size-4 rounded-full bg-background shadow-lg ring-0 transform-gpu will-change-transform transition-transform duration-200 ease-sidebar",
           checked ? "translate-x-4" : "translate-x-0",
         )}
       />

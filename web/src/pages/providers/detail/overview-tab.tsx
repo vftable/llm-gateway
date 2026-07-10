@@ -113,7 +113,7 @@ export function OverviewTab({
           Test connection
         </Button>
         {result && (
-          <div className="flex animate-in items-center gap-2 fade-in-0 slide-in-from-left-1 duration-200">
+          <div className="flex animate-in items-center gap-2 fade-in-0 slide-in-from-left-1 duration-200 ease-sidebar">
             <Badge
               variant={result.ok ? "success" : "destructive"}
               // On failure, always show a status code or transport error — never

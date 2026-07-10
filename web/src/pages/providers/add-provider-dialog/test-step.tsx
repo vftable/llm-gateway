@@ -69,12 +69,12 @@ export function TestStep({
         </p>
       )}
       {testing && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in-0 duration-200">
+        <div className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in-0 duration-200 ease-sidebar">
           <Loader2 className="h-4 w-4 animate-spin" /> Testing…
         </div>
       )}
       {probe && (
-        <div className="space-y-2 animate-in fade-in-0 slide-in-from-top-1 duration-200">
+        <div className="space-y-2 animate-in fade-in-0 slide-in-from-top-1 duration-200 ease-sidebar">
           <div
             className={cn(
               "flex items-center gap-2 rounded-lg border p-3 text-sm",

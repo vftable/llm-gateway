@@ -53,9 +53,11 @@ const PHASE_LABEL: Record<"request" | "response" | "stream", string> = {
 // Smooth height animation for every <CollapsibleContent> in this file —
 // tw-animate-css's collapsible-down/up keyframes key off the
 // --radix-collapsible-content-height custom property Radix sets automatically,
-// so this is a drop-in className, not a hand-rolled transition.
+// so this is a drop-in className, not a hand-rolled transition. Same
+// duration + S-curve as the sidebar's own nav-group collapse (layout.tsx) —
+// it's the identical grid-height motion, just Radix-driven here.
 const COLLAPSIBLE_CONTENT =
-  "overflow-hidden data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up";
+  "overflow-hidden duration-250 ease-sidebar data-[state=open]:animate-collapsible-down data-[state=closed]:animate-collapsible-up";
 
 // Builtin/adapter stages carry only a raw stage name when no `label` was set
 // at the declaration site (e.g. "anthropic:thinking-signature") — humanize

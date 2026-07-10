@@ -14,9 +14,19 @@
      width animation. */
   --default-transition-duration: 200ms;
   --default-transition-timing-function: cubic-bezier(0.45, 0, 0.55, 1);
+  /* Override Tailwind's stock `ease-in-out` (cubic-bezier(0.4,0,0.2,1)) with
+     the same curve as the default above, so any explicit `ease-in-out` class
+     (Switch, Sheet, …) matches the app-wide default instead of silently
+     drifting to Tailwind's own — one curve, one feel, everywhere. */
+  --ease-in-out: cubic-bezier(0.45, 0, 0.55, 1);
   /* Sidebar collapse/expand: a stronger symmetric S-curve (easeInOutCubic)
      shared by the width, label fades and group-header collapse so they all
-     move as one. */
+     move as one. Reused (via explicit `ease-sidebar` + `duration-200/250`)
+     by every other panel-like open/close in the app — dialogs, popovers,
+     selects, tooltips, sheets, collapsibles, the switch thumb — so anything
+     that moves, slides, resizes, or zooms shares the sidebar's snap instead
+     of Tailwind's default `animate-in`/`animate-out` timing (150ms, plain
+     ease). See docs on each component for which bucket it's in. */
   --ease-sidebar: cubic-bezier(0.65, 0, 0.35, 1);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
