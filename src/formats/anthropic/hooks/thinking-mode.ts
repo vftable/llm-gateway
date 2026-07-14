@@ -126,7 +126,9 @@ function ensureThinkingWhenEffort(body: AnthropicMessagesRequest): void {
 
 // Force adaptive — used for models where thinking is always on.
 // Converts any thinking config to adaptive; strips budget_tokens.
-function forceAdaptive(body: AnthropicMessagesRequest): AnthropicMessagesRequest {
+function forceAdaptive(
+  body: AnthropicMessagesRequest,
+): AnthropicMessagesRequest {
   const t = body.thinking as ThinkingConfig | undefined;
   if (!t || typeof t !== "object") {
     body.thinking = { type: "adaptive" };
@@ -147,7 +149,9 @@ function forceAdaptive(body: AnthropicMessagesRequest): AnthropicMessagesRequest
 
 // Convert disabled to adaptive — for models where disabled is not supported
 // but enabled+budget is still accepted.
-function disabledToAdaptive(body: AnthropicMessagesRequest): AnthropicMessagesRequest {
+function disabledToAdaptive(
+  body: AnthropicMessagesRequest,
+): AnthropicMessagesRequest {
   const t = body.thinking as ThinkingConfig | undefined;
   if (!t || typeof t !== "object") return body;
   if (t.type === "disabled") {
@@ -158,7 +162,9 @@ function disabledToAdaptive(body: AnthropicMessagesRequest): AnthropicMessagesRe
 
 // Convert enabled to adaptive — for models that reject enabled but accept
 // adaptive. Preserves disabled (turning thinking off is valid on these models).
-function enabledToAdaptive(body: AnthropicMessagesRequest): AnthropicMessagesRequest {
+function enabledToAdaptive(
+  body: AnthropicMessagesRequest,
+): AnthropicMessagesRequest {
   const t = body.thinking as ThinkingConfig | undefined;
   if (!t || typeof t !== "object") return body;
   if (t.type === "enabled") {
@@ -170,7 +176,9 @@ function enabledToAdaptive(body: AnthropicMessagesRequest): AnthropicMessagesReq
 
 // Convert adaptive to enabled — for older models that don't support adaptive.
 // Strips output_config.effort which these models also reject.
-function adaptiveToEnabled(body: AnthropicMessagesRequest): AnthropicMessagesRequest {
+function adaptiveToEnabled(
+  body: AnthropicMessagesRequest,
+): AnthropicMessagesRequest {
   const t = body.thinking as ThinkingConfig | undefined;
   if (!t || typeof t !== "object") return body;
   if (t.type === "adaptive") {

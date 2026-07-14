@@ -103,7 +103,8 @@ function methodColor(m: string): string {
 function sizeStr(bytes: number | undefined): string {
   if (bytes === undefined || bytes === 0) return c("gray", padL("-", 8));
   if (bytes < 1024) return c("dim", padL(`${bytes}B`, 8));
-  if (bytes < 1024 * 1024) return c("dim", padL(`${(bytes / 1024).toFixed(1)}kB`, 8));
+  if (bytes < 1024 * 1024)
+    return c("dim", padL(`${(bytes / 1024).toFixed(1)}kB`, 8));
   return c("dim", padL(`${(bytes / (1024 * 1024)).toFixed(1)}MB`, 8));
 }
 
@@ -171,7 +172,10 @@ export class Logger {
   ): void {
     const m = methodColor(method);
     const tag = routeTag(url);
-    const u = c("bold", pad(url.length > 50 ? url.slice(0, 47) + "..." : url, 50));
+    const u = c(
+      "bold",
+      pad(url.length > 50 ? url.slice(0, 47) + "..." : url, 50),
+    );
     const st = statusColor(status);
     const rt = c("gray", padL(fmtMs(rtMs), 8));
     const sz = sizeStr(resBytes);
@@ -199,7 +203,13 @@ export class Logger {
 
       res.on("finish", () => {
         const ms = Number(process.hrtime.bigint() - start) / 1e6;
-        this.httpLog(req.method, req.originalUrl || req.url, res.statusCode, ms, bytes || undefined);
+        this.httpLog(
+          req.method,
+          req.originalUrl || req.url,
+          res.statusCode,
+          ms,
+          bytes || undefined,
+        );
       });
       next();
     };

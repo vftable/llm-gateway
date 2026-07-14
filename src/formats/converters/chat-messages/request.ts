@@ -27,7 +27,13 @@ function toOpenAIEffort(value: unknown): "low" | "medium" | "high" | undefined {
   if (v === "low" || v === "min" || v === "minimal" || v === "lowest")
     return "low";
   if (v === "medium") return "medium";
-  if (v === "high" || v === "xhigh" || v === "max" || v === "maximum" || v === "highest")
+  if (
+    v === "high" ||
+    v === "xhigh" ||
+    v === "max" ||
+    v === "maximum" ||
+    v === "highest"
+  )
     return "high";
   return undefined;
 }
@@ -124,8 +130,7 @@ export function messagesRequestToChat(
   // Chat/OpenAI uses the flat reasoning_effort (low | medium | high only).
   const oc = body.output_config as { effort?: unknown } | undefined;
   const reasoning = body.reasoning as { effort?: unknown } | undefined;
-  const rawEffort =
-    oc?.effort ?? body.reasoning_effort ?? reasoning?.effort;
+  const rawEffort = oc?.effort ?? body.reasoning_effort ?? reasoning?.effort;
   if (rawEffort !== undefined) {
     out.reasoning_effort = toOpenAIEffort(rawEffort) ?? rawEffort;
   }
@@ -326,7 +331,8 @@ export function chatRequestToMessages(
   // R8: pass an OpenAI reasoning_effort hint through as Anthropic's
   // output_config.effort (the real Anthropic API field).
   if (body.reasoning_effort !== undefined) {
-    const effort = toAnthropicEffort(body.reasoning_effort) ?? body.reasoning_effort;
+    const effort =
+      toAnthropicEffort(body.reasoning_effort) ?? body.reasoning_effort;
     out.output_config = { effort };
   }
 

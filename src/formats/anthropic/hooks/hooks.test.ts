@@ -166,7 +166,10 @@ test("hooks run on a chat->messages converted body (thinking reconcile, Opus 4.6
   for (const h of defaultAnthropicRequestHooks())
     body = h.apply(
       body,
-      ctx({ upstreamModel: "claude-opus-4-6-20250715", maxOutputTokens: 128000 }),
+      ctx({
+        upstreamModel: "claude-opus-4-6-20250715",
+        maxOutputTokens: 128000,
+      }),
     );
   // max_tokens raised above budget so Anthropic won't 400.
   assert.ok(
@@ -217,7 +220,11 @@ test("thinking-mode injects display:summarized on models that default to omitted
     for (const h of defaultAnthropicRequestHooks())
       body = h.apply(body, ctx({ upstreamModel: m }));
     const thinking = body.thinking as { display?: string };
-    assert.equal(thinking.display, "summarized", `expected display:summarized on ${m}`);
+    assert.equal(
+      thinking.display,
+      "summarized",
+      `expected display:summarized on ${m}`,
+    );
   }
 });
 
