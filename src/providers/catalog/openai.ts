@@ -1,7 +1,12 @@
-import { OpenAICompatibleAdapter } from "../base";
+import { OpenAICompatibleAdapter, isGPT5Family } from "../base";
+import type { BuildCtx, BuiltRequest } from "../base";
 import { WireKind } from "../../types";
 import type { TestModelCtx, TestModelResult } from "../base/types";
-import type { ResponsesResponse } from "../../formats/wire";
+import type {
+  ChatCompletionRequest,
+  ResponsesRequest,
+  ResponsesResponse,
+} from "../../formats/wire";
 
 // OpenAI official API. Bearer auth, chat + responses endpoints.
 //
@@ -17,6 +22,25 @@ class OpenAIAdapter extends OpenAICompatibleAdapter {
     if (accepted.includes(WireKind.Responses) && prefersResponses(model))
       return WireKind.Responses;
     return undefined;
+  }
+
+  chatCompletions(ctx: BuildCtx): BuiltRequest {
+    if (isGPT5Family(ctx.model)) {
+      const body = ctx.body as ChatCompletionRequest;
+      delete body.temperature;
+      delete body.top_p;
+      delete body.top_k;
+    }
+    return super.chatCompletions(ctx);
+  }
+
+  responses(ctx: BuildCtx): BuiltRequest {
+    if (isGPT5Family(ctx.model)) {
+      const body = ctx.body as ResponsesRequest;
+      delete body.temperature;
+      delete body.top_p;
+    }
+    return super.responses(ctx);
   }
 
   async testModel(ctx: TestModelCtx): Promise<TestModelResult> {

@@ -32,6 +32,7 @@ import {
 import { ThinkingConverter } from "../../formats/thinking";
 import type { UpstreamModel } from "../../formats/wire/models";
 import type {
+  AnthropicMessagesRequest,
   ChatCompletionRequest,
   ChatCompletionResponse,
   WireRequest,
@@ -572,7 +573,7 @@ export type { ProviderKeyUsage };
 // o3+, and Codex families so newly released models are covered without edits.
 const GPT5_FAMILY = /^(gpt-([5-9]|\d{2,})|o[3-9]\d*|codex)/i;
 
-function isGPT5Family(model: string): boolean {
+export function isGPT5Family(model: string): boolean {
   return GPT5_FAMILY.test(model);
 }
 
@@ -616,16 +617,17 @@ export class OpenAICompatibleAdapter extends ProviderAdapter {
 }
 
 function orderAnthropicKeys(
-  body: Record<string, unknown>,
-): Record<string, unknown> {
+  body: AnthropicMessagesRequest,
+): AnthropicMessagesRequest {
   const ordered: Record<string, unknown> = {};
   for (const key of ORDERED_KEYS) {
-    if (key in body) ordered[key] = body[key];
+    if (key in body) ordered[key] = body[key as keyof AnthropicMessagesRequest];
   }
   for (const key of Object.keys(body)) {
-    if (!(key in ordered)) ordered[key] = body[key];
+    if (!(key in ordered))
+      ordered[key] = body[key as keyof AnthropicMessagesRequest];
   }
-  return ordered;
+  return ordered as AnthropicMessagesRequest;
 }
 
 // Native messages provider (Anthropic-compatible). All inbound formats route to
@@ -643,7 +645,7 @@ export class AnthropicCompatibleAdapter extends ProviderAdapter {
     return {
       url: ctx.url,
       headers: ctx.headers,
-      body: orderAnthropicKeys(ctx.body),
+      body: orderAnthropicKeys(ctx.body as AnthropicMessagesRequest),
     };
   }
 }
