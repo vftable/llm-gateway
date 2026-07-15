@@ -261,9 +261,14 @@ export function responsesRequestToChat(
     out.max_completion_tokens = body.max_output_tokens as number;
 
   // reasoning.effort -> reasoning_effort (Chat's flat form)
-  const reasoning = body.reasoning as { effort?: string } | undefined;
+  // reasoning.summary -> _reasoning_summary (gateway-internal, no Chat equivalent)
+  const reasoning = body.reasoning as
+    { effort?: string; summary?: string } | undefined;
   if (reasoning && reasoning.effort != null) {
     out.reasoning_effort = reasoning.effort;
+  }
+  if (reasoning && reasoning.summary != null) {
+    (out as Record<string, unknown>)._reasoning_summary = reasoning.summary;
   }
 
   // text.format -> response_format
@@ -475,8 +480,14 @@ export function chatRequestToResponses(
   if (maxTokens != null) out.max_output_tokens = maxTokens;
 
   // reasoning_effort (Chat's flat form) -> reasoning.effort
-  if (body.reasoning_effort != null) {
-    out.reasoning = { effort: body.reasoning_effort };
+  // _reasoning_summary (gateway-internal) -> reasoning.summary
+  const chatBody = body as Record<string, unknown>;
+  const reasoningSummary = chatBody._reasoning_summary as string | undefined;
+  if (body.reasoning_effort != null || reasoningSummary != null) {
+    const r: Record<string, unknown> = {};
+    if (body.reasoning_effort != null) r.effort = body.reasoning_effort;
+    if (reasoningSummary != null) r.summary = reasoningSummary;
+    out.reasoning = r;
   }
 
   // response_format -> text.format

@@ -1,4 +1,4 @@
-import { OpenAICompatibleAdapter } from "../base";
+import { BuildCtx, BuiltRequest, OpenAICompatibleAdapter } from "../base";
 import { WireKind } from "../../types";
 
 // Z.ai GLM Coding Plan — OpenAI-compatible, but the chat/models paths sit under
@@ -7,7 +7,12 @@ import { WireKind } from "../../types";
 // so the upstream URL builds as:
 //   https://api.z.ai + /api/coding/paas/v4 + /chat/completions
 //   => https://api.z.ai/api/coding/paas/v4/chat/completions
-class GlmAdapter extends OpenAICompatibleAdapter {}
+class GlmAdapter extends OpenAICompatibleAdapter {
+  chatCompletions(ctx: BuildCtx): BuiltRequest {
+    console.log("GLM chatCompletions", ctx);
+    return { url: ctx.url, headers: ctx.headers, body: ctx.body };
+  }
+}
 
 export const glm = new GlmAdapter({
   id: "glm-coding",

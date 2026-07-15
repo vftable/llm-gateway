@@ -331,6 +331,55 @@ test("R8: messages->chat falls back to legacy reasoning.effort for compat", () =
   assert.equal(out.reasoning_effort, "medium");
 });
 
+test("R8: messages->chat converts thinking.type:adaptive to reasoning_effort", () => {
+  const out = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+    thinking: { type: "adaptive" },
+  });
+  assert.equal(out.reasoning_effort, "high");
+});
+
+test("R8: messages->chat converts thinking budget_tokens to effort level", () => {
+  const out = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+    thinking: { type: "enabled", budget_tokens: 24576 },
+  });
+  assert.equal(out.reasoning_effort, "high");
+
+  const out2 = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+    thinking: { type: "enabled", budget_tokens: 2048 },
+  });
+  assert.equal(out2.reasoning_effort, "low");
+});
+
+test("R8: output_config.effort takes priority over thinking.type", () => {
+  const out = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+    output_config: { effort: "low" },
+    thinking: { type: "adaptive" },
+  });
+  assert.equal(out.reasoning_effort, "low");
+});
+
+test("R8: thinking.type:disabled does not produce reasoning_effort", () => {
+  const out = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+    thinking: { type: "disabled" },
+  });
+  assert.equal(out.reasoning_effort, undefined);
+});
+
 // ===========================================================================
 // S1 — thinking <-> reasoning_content (buffered)
 // ===========================================================================
@@ -816,7 +865,7 @@ test("C5b: a scalar stop string becomes a one-element stop_sequences", () => {
   assert.deepEqual(out.stop_sequences, ["DONE"]);
 });
 
-test("C6: messages->chat maps metadata.user_id back to user", () => {
+test("C6: messages->chat does NOT map metadata.user_id to user", () => {
   const out = messagesRequestToChat({
     model: "m",
     max_tokens: 10,
@@ -824,7 +873,7 @@ test("C6: messages->chat maps metadata.user_id back to user", () => {
     metadata: { user_id: "u-9" },
     top_k: 5,
   });
-  assert.equal(out.user, "u-9");
+  assert.equal(out.user, undefined);
   assert.equal(out.top_k, 5);
 });
 

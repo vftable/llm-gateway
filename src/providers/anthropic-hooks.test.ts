@@ -31,6 +31,7 @@ const BASE = [
   "anthropic:max-tokens",
   "anthropic:prefill",
   "anthropic:sanitize-request",
+  "anthropic:thinking-mode",
   "anthropic:thinking-config",
 ];
 

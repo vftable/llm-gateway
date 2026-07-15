@@ -36,6 +36,8 @@ import type {
   AnthropicMessagesResponse,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  ResponsesRequest,
+  ResponsesResponse,
   WireRequest,
 } from "../../formats/wire";
 import { ORDERED_KEYS } from "../../formats/anthropic/hooks/sanitize-request";
@@ -578,6 +580,24 @@ export function isGPT5Family(model: string): boolean {
   return GPT5_FAMILY.test(model);
 }
 
+// True for model ids that are Responses-API-first. Forward-looking: matches
+// families so newly released models are covered without edits.
+export function prefersResponses(model: string): boolean {
+  const m = model.toLowerCase();
+  if (m.includes("codex")) return true;
+
+  const gpt = m.match(/^gpt-(\d+)/);
+  if (gpt && Number(gpt[1]) >= 5) return true;
+
+  const gptImage = m.match(/^gpt-image-(\d+)/);
+  if (gptImage && Number(gptImage[1]) >= 2) return true;
+
+  const oSeries = m.match(/^o(\d+)/);
+  if (oSeries && Number(oSeries[1]) >= 3) return true;
+
+  return false;
+}
+
 // Native chat provider (OpenAI-compatible). All inbound formats route to the
 // provider's chat endpoint by default (the engine bridges messages/responses ->
 // chat) — but a per-link endpoint wins: pointing a hop at /v1/messages makes this
@@ -589,16 +609,58 @@ export class OpenAICompatibleAdapter extends ProviderAdapter {
     return WireKind.Chat;
   }
 
+  preferredEndpoint(model: string, accepted: WireKind[]): WireKind | undefined {
+    if (accepted.includes(WireKind.Responses) && prefersResponses(model))
+      return WireKind.Responses;
+
+    return undefined;
+  }
+
+  chatCompletions(ctx: BuildCtx): BuiltRequest {
+    if (isGPT5Family(ctx.model)) {
+      const body = ctx.body as ChatCompletionRequest;
+      delete body.temperature;
+      delete body.top_p;
+      delete body.top_k;
+    }
+
+    return super.chatCompletions(ctx);
+  }
+
+  responses(ctx: BuildCtx): BuiltRequest {
+    if (isGPT5Family(ctx.model)) {
+      const body = ctx.body as ResponsesRequest;
+      delete body.temperature;
+      delete body.top_p;
+    }
+
+    return super.responses(ctx);
+  }
+
   async testModel(ctx: TestModelCtx): Promise<TestModelResult> {
+    if (ctx.provider.endpoints?.includes(WireKind.Responses)) {
+      return this.probeEndpoint(ctx, WireKind.Responses, {
+        body: {
+          model: ctx.model,
+          input: "Reply with exactly: hi",
+          max_output_tokens: 16,
+        },
+        summarize: (json) => {
+          const r = json as ResponsesResponse;
+          const msg = r.output?.find((o) => o.type === "message");
+          const part = (
+            msg?.content as Array<{ type?: string; text?: string }> | undefined
+          )?.find((c) => c.type === "output_text");
+          return { reply: part?.text ?? null };
+        },
+      });
+    }
+
     const body: ChatCompletionRequest = {
       model: ctx.model,
-      messages: [
-        {
-          role: "user",
-          content: "Reply with exactly: hi",
-        },
-      ],
+      messages: [{ role: "user", content: "Reply with exactly: hi" }],
     };
+
     if (isGPT5Family(ctx.model)) {
       body.max_completion_tokens = 16;
     } else {
@@ -624,10 +686,12 @@ function orderAnthropicKeys(
   for (const key of ORDERED_KEYS) {
     if (key in body) ordered[key] = body[key as keyof AnthropicMessagesRequest];
   }
+
   for (const key of Object.keys(body)) {
     if (!(key in ordered))
       ordered[key] = body[key as keyof AnthropicMessagesRequest];
   }
+
   return ordered as AnthropicMessagesRequest;
 }
 

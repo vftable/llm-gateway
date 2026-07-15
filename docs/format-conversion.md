@@ -196,6 +196,27 @@ The two APIs use different effort scales:
 
 We never *fabricate* a thinking config from an effort hint.
 
+### R11 — `reasoning.summary` passthrough  (→ `chat` and `→ messages`)
+The Responses API's `reasoning.summary` (`"auto"` | `"concise"` | `"detailed"`)
+controls whether the model includes reasoning summaries in the response. Chat
+Completions has no equivalent field, so the gateway carries it as a gateway-
+internal `_reasoning_summary` field through the Chat pivot.
+
+- **Responses → Chat:** `reasoning.summary` → `_reasoning_summary` (opaque
+  passthrough — Chat clients don't see it, but it survives a round-trip
+  through Chat to a Responses-native provider).
+- **Chat → Responses:** `_reasoning_summary` → `reasoning.summary`.
+- **Chat → Messages:** `_reasoning_summary` → `thinking.display: "summarized"`
+  (any summary mode maps to Anthropic's summarized thinking display).
+- **Messages → Chat:** `thinking.display: "summarized"` → `_reasoning_summary: "auto"`.
+
+### R12 — `encrypted_content` on reasoning items  (round-trip)
+Reasoning output items carry an opaque `encrypted_content` blob for multi-turn
+continuity. The gateway preserves this through the Chat pivot as a
+`_encrypted_content` field on each `reasoning_details` entry, and restores it
+when converting back to Responses output items. Each reasoning item is preserved
+as a separate output item (not collapsed into one).
+
 ---
 
 ## Response quirks

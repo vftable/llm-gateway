@@ -629,7 +629,7 @@ test("streaming (forward): content deltas -> response.output_text.delta events, 
   assert.equal(response.usage?.output_tokens, 2);
 });
 
-test("streaming (forward): reasoning deltas -> response.reasoning_text.delta events, closed before text starts", async () => {
+test("streaming (forward): reasoning deltas -> response.reasoning_summary_text.delta events, closed before text starts", async () => {
   const raw = await runTransform(new StreamingResponsesBridgeTransform(), [
     chatSseFrame({
       id: "cc2",
@@ -649,7 +649,7 @@ test("streaming (forward): reasoning deltas -> response.reasoning_text.delta eve
   ]);
   const events = parseResponsesSse(raw);
   const reasoningDeltas = events
-    .filter((e) => e.type === "response.reasoning_text.delta")
+    .filter((e) => e.type === "response.reasoning_summary_text.delta")
     .map((e) => e.delta);
   assert.deepEqual(reasoningDeltas, ["thinking..."]);
   // The reasoning content_part must be closed (content_part.done) before the
@@ -657,7 +657,7 @@ test("streaming (forward): reasoning deltas -> response.reasoning_text.delta eve
   const reasoningDoneIdx = events.findIndex(
     (e) =>
       e.type === "response.content_part.done" &&
-      (e.part as { type?: string })?.type === "reasoning_text",
+      (e.part as { type?: string })?.type === "summary_text",
   );
   const textDeltaIdx = events.findIndex(
     (e) => e.type === "response.output_text.delta",

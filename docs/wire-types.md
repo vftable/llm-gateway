@@ -320,7 +320,7 @@ inline tool-call fields.
 | `ResponsesMessageItem` | `"message"` | `role: string`, `content?: unknown` |
 | `ResponsesFunctionCallItem` | `"function_call"` | `call_id?: string`, `name?: string`, `arguments?: unknown` |
 | `ResponsesFunctionCallOutputItem` | `"function_call_output"` | `call_id?: string`, `output?: unknown` |
-| `ResponsesReasoningItem` | `"reasoning"` | `id?: string`, `summary?: Array<{ type: string; text: string }>`, `status?: string` |
+| `ResponsesReasoningItem` | `"reasoning"` | `id?: string`, `summary?: Array<{ type: string; text: string }>`, `encrypted_content?: string`, `content?: unknown[]`, `status?: string` — `encrypted_content` is an opaque base64 blob for multi-turn continuity; `content` is usually `[]`; `summary` carries the human-readable reasoning text |
 | `ResponsesInputItem` | *(union of the four above)* | `\| ({ type?: string } & Record<string, unknown>)` — open union, an unrecognized item type still type-checks |
 
 ### Usage
@@ -340,7 +340,7 @@ inline tool-call fields.
 | `max_output_tokens` | `number` | Responses' name for Chat's `max_tokens` |
 | `stream` | `boolean` | |
 | `parallel_tool_calls` | `boolean` | |
-| `reasoning` | `{ effort?: unknown }` | See [Reasoning fields](#reasoning-fields-chatmessagereasoning_details--anthropic-thinking-blocks) |
+| `reasoning` | `{ effort?: unknown; summary?: string }` | `effort`: reasoning intensity (`low`/`medium`/`high`/…); `summary`: whether to include reasoning summaries in the response (`"auto"` / `"concise"` / `"detailed"`). See [Reasoning fields](#reasoning-fields-chatmessagereasoning_details--anthropic-thinking-blocks) |
 | `text` | `{ format?: unknown }` | Responses' structured-output configuration |
 | `tools` | `Array<Record<string, unknown>>` | Untyped per-entry — Responses' tool schema differs enough from Chat's that this file doesn't model individual fields |
 | `tool_choice` | `unknown` | |
@@ -412,6 +412,13 @@ interface ResponsesReasoningTextEvent extends ResponsesStreamEventBase {
   item_id?: string; output_index?: number;
   delta?: string; text?: string;
 }
+interface ResponsesReasoningSummaryTextEvent extends ResponsesStreamEventBase {
+  type: "response.reasoning_summary_text.delta"
+      | "response.reasoning_summary_text.done";
+  item_id?: string; output_index?: number;
+  summary_index?: number; content_index?: number;
+  delta?: string; text?: string;
+}
 interface ResponsesFunctionArgsEvent extends ResponsesStreamEventBase {
   type: "response.function_call_arguments.delta"
       | "response.function_call_arguments.done";
@@ -422,7 +429,8 @@ interface ResponsesFunctionArgsEvent extends ResponsesStreamEventBase {
 type ResponsesStreamEvent =
   | ResponsesCreatedEvent | ResponsesOutputItemEvent
   | ResponsesContentPartEvent | ResponsesTextDeltaEvent
-  | ResponsesReasoningTextEvent | ResponsesFunctionArgsEvent
+  | ResponsesReasoningTextEvent | ResponsesReasoningSummaryTextEvent
+  | ResponsesFunctionArgsEvent
   | ResponsesStreamEventBase;   // fallback: any other event type still type-checks
 ```
 

@@ -50,25 +50,31 @@ function choiceToOutput(
   const textParts: string[] = [];
   const msg = choice && choice.message;
 
-  // 1) Reasoning — pull from reasoning_details or a plain `reasoning` string.
+  // 1) Reasoning — one output item per reasoning_details entry (preserving
+  //    the original per-item structure, including encrypted_content for
+  //    multi-turn continuity).
   if (msg) {
     const details = Array.isArray(msg.reasoning_details)
       ? msg.reasoning_details
       : [];
-    const summaries: Array<{ type: string; text: string }> = [];
     for (const d of details) {
-      if (d && d.type === "reasoning.text" && typeof d.text === "string") {
-        summaries.push({ type: "summary_text", text: d.text });
+      if (!d || typeof d !== "object") continue;
+      const dr = d as Record<string, unknown>;
+      if (dr.type === "reasoning.text") {
+        const item: Record<string, unknown> = {
+          type: "reasoning",
+          id: genId("rs_"),
+          content: [],
+        };
+        if (typeof dr.text === "string" && dr.text)
+          item.summary = [{ type: "summary_text", text: dr.text }];
+        else item.summary = [];
+        if (typeof dr._encrypted_content === "string")
+          item.encrypted_content = dr._encrypted_content;
+        output.push(item as ResponseOutputItem);
       }
     }
-    if (summaries.length) {
-      output.push({
-        type: "reasoning",
-        id: genId("rs_"),
-        summary: summaries,
-        content: [],
-      });
-    } else if (typeof msg.reasoning === "string" && msg.reasoning) {
+    if (!details.length && typeof msg.reasoning === "string" && msg.reasoning) {
       output.push({
         type: "reasoning",
         id: genId("rs_"),
@@ -194,7 +200,13 @@ function outputToMessage(output: ResponseOutputItem[]): {
     if (!item || typeof item !== "object") continue;
     if (item.type === "reasoning" && Array.isArray(item.summary)) {
       const text = item.summary.map((s) => s.text ?? "").join("");
-      if (text) reasoningDetails.push({ type: "reasoning.text", text });
+      const detail: ChatReasoningDetail & Record<string, unknown> = {
+        type: "reasoning.text",
+        text: text || "",
+      };
+      if (typeof item.encrypted_content === "string")
+        detail._encrypted_content = item.encrypted_content;
+      if (text || detail._encrypted_content) reasoningDetails.push(detail);
     } else if (item.type === "function_call") {
       toolCalls.push({
         id: item.call_id || genId("call_"),

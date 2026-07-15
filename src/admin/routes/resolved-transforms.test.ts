@@ -37,6 +37,7 @@ test("Anthropic-native provider: builtin hooks + thinking + family defaults, no 
       "anthropic:max-tokens",
       "anthropic:prefill",
       "anthropic:sanitize-request",
+      "anthropic:thinking-mode",
       "anthropic:thinking-config",
     ],
   );
@@ -79,13 +80,19 @@ test("builtin stages carry label/blurb/group display metadata", () => {
   assert.ok(thinkingResp!.blurb);
 });
 
-test("OpenAI-native provider: no Anthropic hooks, no family defaults", () => {
+test("OpenAI-native provider: OpenAI reasoning hooks, no Anthropic hooks, no family defaults", () => {
   const r = resolveProviderTransforms(
     provider({ catalogId: "openai", format: "openai" }),
   );
   assert.equal(r.nativeFormat, "openai");
   assert.equal(r.nativeWireKind, "chat");
-  assert.equal(r.request.filter((s) => s.source === "builtin").length, 0);
+  const builtinReq = r.request.filter((s) => s.source === "builtin");
+  assert.equal(builtinReq.length, 1);
+  assert.equal(builtinReq[0].name, "openai:reasoning");
+  assert.equal(
+    r.request.filter((s) => s.name.startsWith("anthropic:")).length,
+    0,
+  );
   assert.equal(
     [...r.request, ...r.response].filter((s) => s.source === "family").length,
     0,

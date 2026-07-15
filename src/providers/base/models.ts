@@ -35,7 +35,7 @@ export function minimalProbeBody<K extends WireFmt>(
     } as WireRequest<K>;
   }
   if (kind === WireKind.Responses) {
-    return { model, max_output_tokens: 8, input: probe } as WireRequest<K>;
+    return { model, max_output_tokens: 16, input: probe } as WireRequest<K>;
   }
   return {
     model,

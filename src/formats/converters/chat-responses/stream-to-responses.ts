@@ -189,16 +189,15 @@ export class StreamingResponsesBridgeTransform extends Transform {
         item_id: this.reasoningItemId,
         output_index: this.reasoningOutputIndex,
         content_index: 0,
-        part: { type: "reasoning_text", text: "" },
+        part: { type: "summary_text", text: "" },
       });
     }
 
-    // Emit reasoning delta using correct OpenAI event type
     this.pushSse({
-      type: "response.reasoning_text.delta",
+      type: "response.reasoning_summary_text.delta",
       item_id: this.reasoningItemId,
       output_index: this.reasoningOutputIndex,
-      content_index: 0,
+      summary_index: 0,
       delta: text,
     });
   }
@@ -207,11 +206,17 @@ export class StreamingResponsesBridgeTransform extends Transform {
     // Close reasoning block if open
     if (this.reasoningBlockIndex !== -1) {
       this.pushSse({
+        type: "response.reasoning_summary_text.done",
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningOutputIndex,
+        summary_index: 0,
+      });
+      this.pushSse({
         type: "response.content_part.done",
         item_id: this.reasoningItemId,
         output_index: this.reasoningOutputIndex,
         content_index: 0,
-        part: { type: "reasoning_text", text: "" },
+        part: { type: "summary_text", text: "" },
       });
       this.reasoningBlockIndex = -1;
       this.reasoningItemId = null;
@@ -331,17 +336,17 @@ export class StreamingResponsesBridgeTransform extends Transform {
     // Close any open reasoning block
     if (this.reasoningBlockIndex !== -1) {
       this.pushSse({
+        type: "response.reasoning_summary_text.done",
+        item_id: this.reasoningItemId,
+        output_index: this.reasoningOutputIndex,
+        summary_index: 0,
+      });
+      this.pushSse({
         type: "response.content_part.done",
         item_id: this.reasoningItemId,
         output_index: this.reasoningOutputIndex,
         content_index: 0,
-        part: { type: "reasoning_text", text: "" },
-      });
-      this.pushSse({
-        type: "response.reasoning_text.done",
-        item_id: this.reasoningItemId,
-        output_index: this.reasoningOutputIndex,
-        content_index: 0,
+        part: { type: "summary_text", text: "" },
       });
       this.reasoningBlockIndex = -1;
       this.reasoningItemId = null;

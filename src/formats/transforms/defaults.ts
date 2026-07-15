@@ -24,9 +24,10 @@ import {
   defaultAnthropicRequestHooks,
   defaultAnthropicResponseHooks,
 } from "../anthropic/hooks/stack";
-import { onResponse } from "../pipeline";
+import { onRequest, onResponse } from "../pipeline";
 import { sanitizeChatResponse } from "../hooks/sanitize-chat-response";
 import { sanitizeResponsesResponse } from "../hooks/sanitize-responses-response";
+import { normalizeOpenAIReasoning } from "../hooks/openai-reasoning";
 
 // What a default set may need to build its (per-route) stages. Kept minimal;
 // grows only when a new default genuinely needs more route context.
@@ -58,6 +59,41 @@ export const DEFAULT_TRANSFORMS: DefaultTransformSet[] = [
     id: "anthropic-hooks",
     request: () => defaultAnthropicRequestHooks(),
     response: () => defaultAnthropicResponseHooks(),
+  },
+  {
+    // OpenAI-compatible request hooks: normalize reasoning effort to the
+    // valid OpenAI set (low | medium | high) and default reasoning.summary
+    // to "detailed" when effort is present. Tagged "chat" and "responses",
+    // gated on providerFmt so they only fire for OpenAI-compatible hops.
+    id: "openai-hooks",
+    request: () => [
+      onRequest(
+        "chat",
+        "openai:reasoning",
+        (body, ctx) =>
+          ctx.providerFmt === "chat" ? normalizeOpenAIReasoning(body) : body,
+        {
+          label: "Reasoning normalization",
+          blurb:
+            "Normalizes reasoning_effort to valid OpenAI values (low/medium/high) and defaults reasoning summary to detailed.",
+          group: "openai-hooks",
+        },
+      ),
+      onRequest(
+        "responses",
+        "openai:reasoning-responses",
+        (body, ctx) =>
+          ctx.providerFmt === "responses"
+            ? normalizeOpenAIReasoning(body)
+            : body,
+        {
+          label: "Reasoning normalization (Responses)",
+          blurb:
+            "Normalizes reasoning.effort to valid OpenAI values and defaults reasoning.summary to detailed.",
+          group: "openai-hooks",
+        },
+      ),
+    ],
   },
   {
     id: "response-sanitize",

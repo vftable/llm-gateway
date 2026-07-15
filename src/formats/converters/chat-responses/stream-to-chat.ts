@@ -109,15 +109,11 @@ export class StreamingResponsesToChatBridgeTransform extends Transform {
         }
         break;
       }
-      case "response.reasoning_text.delta": {
+      case "response.reasoning_text.delta":
+      case "response.reasoning_summary_text.delta": {
         const e = event as { delta?: string };
         if (e.delta) {
           this.ensureHeader();
-          // reasoning_content is Chat's own established streaming-delta field
-          // for reasoning (same field the chat<->messages bridge reads/writes
-          // — see ChatToMessagesSseTransform's thinking handling), so a
-          // reasoning-emitting responses provider stays consistent with a
-          // reasoning-emitting chat provider from the client's point of view.
           this.pushChunk({ reasoning_content: e.delta });
         }
         break;

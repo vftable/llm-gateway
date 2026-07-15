@@ -401,10 +401,7 @@ test("minimalProbeBody returns a schema-typed, minimal one-token request per kin
   assert.equal(typeof responses.input, "string");
 });
 
-test("default testModel() is a dummy stub — no network call, always ok", async () => {
-  // OpenAICompatibleAdapter overrides testModel() with a real probeEndpoint()
-  // call (see below), so this exercises the base ProviderAdapter default via
-  // AnthropicCompatibleAdapter, which declares no override.
+test("AnthropicCompatibleAdapter testModel() sends a real messages probe", async () => {
   const anthropic = new AnthropicCompatibleAdapter({
     id: "plain-anthropic",
     label: "Plain",
@@ -413,11 +410,18 @@ test("default testModel() is a dummy stub — no network call, always ok", async
     defaults: { format: "anthropic", endpoints: ["messages"] },
     fields: [],
   });
-  const { ctx, calls } = fakeCtx({}, { json: () => ({}) });
+  const { ctx, calls } = fakeCtx(
+    {},
+    {
+      json: () => ({
+        content: [{ type: "text", text: "hi" }],
+      }),
+    },
+  );
   const result = await anthropic.testModel(ctx);
   assert.equal(result.ok, true);
-  assert.equal(calls.length, 0); // never touched ctx.request
-  assert.equal((result.data as { dummy: boolean }).dummy, true);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(result.data, { reply: "hi" });
 });
 
 test("OpenAICompatibleAdapter's own testModel() sends a real 1-token probe (not a stub)", async () => {

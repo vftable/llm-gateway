@@ -23,7 +23,8 @@ export class ChatToMessagesSseTransform extends Transform {
   private textBlockOpen = false;
   private thinkingBlockOpen = false;
   private toolBlocks = new Map<number, number>(); // chat tool index -> anthropic block index
-  private readonly model: string | null;
+  private model: string | null;
+  private lastUsage: Parameters<typeof chatUsageToAnthropic>[0] | undefined;
 
   constructor(model?: string | null) {
     super({ highWaterMark: 0 });
@@ -49,6 +50,7 @@ export class ChatToMessagesSseTransform extends Transform {
 
   private startMessage(): void {
     this.started = true;
+    const u = chatUsageToAnthropic(this.lastUsage);
     this.send({
       type: "message_start",
       message: {
@@ -59,7 +61,16 @@ export class ChatToMessagesSseTransform extends Transform {
         model: this.model,
         stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
+        usage: {
+          input_tokens: u.input_tokens,
+          output_tokens: 0,
+          ...(u.cache_read_input_tokens
+            ? { cache_read_input_tokens: u.cache_read_input_tokens }
+            : {}),
+          ...(u.cache_creation_input_tokens
+            ? { cache_creation_input_tokens: u.cache_creation_input_tokens }
+            : {}),
+        },
       },
     });
   }
@@ -132,7 +143,7 @@ export class ChatToMessagesSseTransform extends Transform {
       this.send({
         type: "message_delta",
         delta: { stop_reason: "end_turn", stop_sequence: null },
-        usage: { output_tokens: 0 },
+        usage: chatUsageToAnthropic(this.lastUsage),
       });
       this.send({ type: "message_stop" });
       this.finished = true;
@@ -144,6 +155,10 @@ export class ChatToMessagesSseTransform extends Transform {
     } catch {
       return;
     }
+    if (chunk.usage && typeof chunk.usage === "object")
+      this.lastUsage = chunk.usage as typeof this.lastUsage;
+    if (typeof chunk.model === "string" && chunk.model)
+      this.model = chunk.model;
     if (!this.started) this.startMessage();
 
     const choices = chunk.choices as Array<Record<string, unknown>> | undefined;
@@ -231,8 +246,11 @@ export class ChatToMessagesSseTransform extends Transform {
         this.send({ type: "content_block_stop", index: idx });
       this.toolBlocks.clear();
       // S2: fold OpenAI usage into Anthropic shape (cache split preserved).
+      // Use lastUsage as fallback — some providers send usage on a separate
+      // chunk before finish_reason, or on a usage-only chunk after it.
       const anthUsage = chatUsageToAnthropic(
-        chunk.usage as Parameters<typeof chatUsageToAnthropic>[0],
+        (chunk.usage as Parameters<typeof chatUsageToAnthropic>[0]) ??
+          this.lastUsage,
       );
       this.send({
         type: "message_delta",

@@ -20,23 +20,7 @@ import {
   type ChatContentPart,
 } from "./shared";
 import { toAnthropicEffort } from "../../anthropic/hooks/sanitize-request";
-
-function toOpenAIEffort(value: unknown): "low" | "medium" | "high" | undefined {
-  if (typeof value !== "string") return undefined;
-  const v = value.toLowerCase();
-  if (v === "low" || v === "min" || v === "minimal" || v === "lowest")
-    return "low";
-  if (v === "medium") return "medium";
-  if (
-    v === "high" ||
-    v === "xhigh" ||
-    v === "max" ||
-    v === "maximum" ||
-    v === "highest"
-  )
-    return "high";
-  return undefined;
-}
+import { toOpenAIEffort, budgetToLevel } from "../../hooks/openai-reasoning";
 
 // --- request: Anthropic Messages -> OpenAI Chat ----------------------------
 
@@ -119,20 +103,38 @@ export function messagesRequestToChat(
   if (body.top_k != null) out.top_k = body.top_k;
   if (Array.isArray(body.stop_sequences)) out.stop = body.stop_sequences;
   if (body.stream != null) out.stream = body.stream;
-  // Anthropic carries the end-user id under metadata.user_id; Chat uses `user`.
   if (typeof body.user === "string") out.user = body.user;
-  else {
-    const meta = body.metadata as { user_id?: unknown } | undefined;
-    if (meta && typeof meta.user_id === "string") out.user = meta.user_id;
-  }
 
-  // R8: carry an effort hint through. Anthropic uses output_config.effort;
-  // Chat/OpenAI uses the flat reasoning_effort (low | medium | high only).
+  // R8: carry an effort hint through. Priority order:
+  //   1. output_config.effort  — explicit Anthropic effort
+  //   2. reasoning_effort      — Chat-style flat field
+  //   3. reasoning.effort      — Responses-style nested field
+  //   4. thinking.type         — Anthropic thinking config (adaptive/enabled)
   const oc = body.output_config as { effort?: unknown } | undefined;
   const reasoning = body.reasoning as { effort?: unknown } | undefined;
-  const rawEffort = oc?.effort ?? body.reasoning_effort ?? reasoning?.effort;
+  const thinking = body.thinking as
+    { type?: string; budget_tokens?: number; display?: string } | undefined;
+  let rawEffort: unknown =
+    oc?.effort ?? body.reasoning_effort ?? reasoning?.effort;
+  if (rawEffort === undefined && thinking && typeof thinking === "object") {
+    if (thinking.type === "adaptive" || thinking.type === "enabled") {
+      if (
+        typeof thinking.budget_tokens === "number" &&
+        thinking.budget_tokens > 0
+      ) {
+        rawEffort = budgetToLevel(thinking.budget_tokens);
+      } else {
+        rawEffort = "high";
+      }
+    }
+  }
   if (rawEffort !== undefined) {
     out.reasoning_effort = toOpenAIEffort(rawEffort) ?? rawEffort;
+  }
+
+  // thinking.display -> _reasoning_summary (gateway-internal)
+  if (thinking?.display === "summarized") {
+    (out as Record<string, unknown>)._reasoning_summary = "auto";
   }
 
   const tools = anthropicToolsToChat(body.tools);
@@ -334,6 +336,15 @@ export function chatRequestToMessages(
     const effort =
       toAnthropicEffort(body.reasoning_effort) ?? body.reasoning_effort;
     out.output_config = { effort };
+  }
+
+  // _reasoning_summary (gateway-internal, from Responses reasoning.summary)
+  // maps to thinking.display on the Anthropic side.
+  const chatBody = body as Record<string, unknown>;
+  if (typeof chatBody._reasoning_summary === "string") {
+    const existing = (out.thinking as Record<string, unknown>) ?? {};
+    existing.display = "summarized";
+    out.thinking = existing;
   }
 
   const tools = chatToolsToAnthropic(body.tools);

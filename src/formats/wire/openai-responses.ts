@@ -30,6 +30,8 @@ export interface ResponsesReasoningItem {
   type: "reasoning";
   id?: string;
   summary?: Array<{ type: string; text: string }>;
+  encrypted_content?: string;
+  content?: unknown[];
   status?: string;
   [k: string]: unknown;
 }
@@ -62,7 +64,7 @@ export interface ResponsesRequest {
   max_output_tokens?: number;
   stream?: boolean;
   parallel_tool_calls?: boolean;
-  reasoning?: { effort?: unknown; [k: string]: unknown };
+  reasoning?: { effort?: unknown; summary?: string; [k: string]: unknown };
   text?: { format?: unknown; [k: string]: unknown };
   tools?: Array<Record<string, unknown>>;
   tool_choice?: unknown;
@@ -140,6 +142,17 @@ export interface ResponsesReasoningTextEvent extends ResponsesStreamEventBase {
   delta?: string;
   text?: string;
 }
+export interface ResponsesReasoningSummaryTextEvent extends ResponsesStreamEventBase {
+  type:
+    | "response.reasoning_summary_text.delta"
+    | "response.reasoning_summary_text.done";
+  item_id?: string;
+  output_index?: number;
+  summary_index?: number;
+  content_index?: number;
+  delta?: string;
+  text?: string;
+}
 export interface ResponsesFunctionArgsEvent extends ResponsesStreamEventBase {
   type:
     | "response.function_call_arguments.delta"
@@ -156,5 +169,6 @@ export type ResponsesStreamEvent =
   | ResponsesContentPartEvent
   | ResponsesTextDeltaEvent
   | ResponsesReasoningTextEvent
+  | ResponsesReasoningSummaryTextEvent
   | ResponsesFunctionArgsEvent
   | ResponsesStreamEventBase;
