@@ -36,16 +36,23 @@ export function PageHeader({
 }) {
   return (
     <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <div className="flex items-center gap-2.5">
+      {/* min-w-0 lets this shrink below its content's natural width — without
+          it, a flex row item defaults to min-width:auto, which locks the
+          block to the description text's unwrapped width and gets clipped by
+          an ancestor's overflow-hidden instead of wrapping on narrow/mobile
+          viewports. */}
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2.5">
           <h1 className="text-xl font-semibold tracking-tight text-foreground">
             {title}
           </h1>
           {meta}
         </div>
-        {desc && <p className="text-xs text-muted-foreground mt-1">{desc}</p>}
+        {desc && <p className="mt-1 text-xs text-muted-foreground">{desc}</p>}
       </div>
-      {actions && <div className="flex items-center gap-2">{actions}</div>}
+      {actions && (
+        <div className="flex flex-wrap items-center gap-2">{actions}</div>
+      )}
     </div>
   );
 }

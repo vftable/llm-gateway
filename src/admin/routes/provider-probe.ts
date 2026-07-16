@@ -83,11 +83,13 @@ function modelsRequestHeaders(
   return applyAuthHeaders(headers, p.authScheme, keyOverride ?? p.apiKeys[0]);
 }
 
-// Low-level HTTP request with the provider's outbound proxy + TLS-verify + a
-// 15s timeout. Returns the raw status/body (never throws — a transport error
-// resolves with status:null + error) so connectivity tests, model-list, and
-// model-test probes can all share one code path.
-function rawRequest(
+// One HTTP round-trip with the provider's outbound proxy + TLS-verify + a 15s
+// timeout. Returns the raw status/body (never throws — a transport error
+// resolves with status:null + error). No redirect handling — see rawRequest,
+// which wraps this with redirect-following; every other call site should use
+// that, not this, so a 301/302/307/308 from a reverse proxy or an http->https
+// canonicalization doesn't surface as a bare non-2xx failure.
+function rawRequestOnce(
   urlStr: string,
   opts: {
     method?: "GET" | "POST";
@@ -98,6 +100,7 @@ function rawRequest(
   },
 ): Promise<{
   status: number | null;
+  headers: Record<string, string | string[] | undefined>;
   body: string;
   ms: number;
   error?: string;
@@ -108,6 +111,7 @@ function rawRequest(
   } catch (err) {
     return Promise.resolve({
       status: null,
+      headers: {},
       body: "",
       ms: 0,
       error: `bad url: ${(err as Error).message}`,
@@ -121,6 +125,7 @@ function rawRequest(
   } catch (err) {
     return Promise.resolve({
       status: null,
+      headers: {},
       body: "",
       ms: 0,
       error: `bad proxy: ${(err as Error).message}`,
@@ -145,6 +150,7 @@ function rawRequest(
         upRes.on("end", () =>
           resolve({
             status: upRes.statusCode ?? null,
+            headers: upRes.headers,
             body: Buffer.concat(chunks).toString("utf8"),
             ms: Date.now() - start,
           }),
@@ -154,6 +160,7 @@ function rawRequest(
     req.on("error", (err) =>
       resolve({
         status: null,
+        headers: {},
         body: "",
         ms: Date.now() - start,
         error: err.message,
@@ -162,6 +169,103 @@ function rawRequest(
     req.setTimeout(15000, () => req.destroy(new Error("probe timeout")));
     req.end(opts.body);
   });
+}
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 5;
+
+// Low-level HTTP request with the provider's outbound proxy + TLS-verify, a
+// 15s per-hop timeout, AND redirect-following (up to MAX_REDIRECTS hops) —
+// the transport every connectivity test, model-list fetch, and adapter
+// keyUsage()/testModel() query goes through. A reverse proxy that 301s
+// http->https, or a usage endpoint that redirects a trailing-slash mismatch,
+// resolves transparently instead of surfacing as a bare "status 301" failure.
+//
+// Redirect semantics mirror a browser/fetch client:
+//   - 301/302/303 -> GET on the Location, body dropped (303 always does this
+//     per spec; 301/302 do it too since that's what virtually every server
+//     expects a client to do, even though the spec technically allows method
+//     preservation there).
+//   - 307/308 -> same method + body replayed against the Location (the whole
+//     point of these two codes is "don't change the request").
+// Relative Location headers resolve against the current URL. A malformed or
+// missing Location, or exceeding MAX_REDIRECTS, returns the redirect response
+// itself rather than throwing — the caller sees a real status to reason about.
+function rawRequest(
+  urlStr: string,
+  opts: {
+    method?: "GET" | "POST";
+    headers: Record<string, string>;
+    body?: string;
+    tlsVerify: boolean;
+    proxy?: string | null;
+  },
+): Promise<{
+  status: number | null;
+  body: string;
+  ms: number;
+  error?: string;
+}> {
+  return followRedirects(urlStr, opts, 0, Date.now());
+}
+
+async function followRedirects(
+  urlStr: string,
+  opts: {
+    method?: "GET" | "POST";
+    headers: Record<string, string>;
+    body?: string;
+    tlsVerify: boolean;
+    proxy?: string | null;
+  },
+  hop: number,
+  overallStart: number,
+): Promise<{
+  status: number | null;
+  body: string;
+  ms: number;
+  error?: string;
+}> {
+  const res = await rawRequestOnce(urlStr, opts);
+  if (res.error || res.status === null) {
+    return { status: res.status, body: res.body, ms: res.ms, error: res.error };
+  }
+  if (!REDIRECT_STATUSES.has(res.status) || hop >= MAX_REDIRECTS) {
+    return {
+      status: res.status,
+      body: res.body,
+      ms: Date.now() - overallStart,
+    };
+  }
+  const location = res.headers.location;
+  const target = Array.isArray(location) ? location[0] : location;
+  if (!target) {
+    // A redirect status with no (or an unusable) Location — nothing to
+    // follow; hand back the redirect response itself.
+    return {
+      status: res.status,
+      body: res.body,
+      ms: Date.now() - overallStart,
+    };
+  }
+  let nextUrl: string;
+  try {
+    nextUrl = new URL(target, urlStr).toString();
+  } catch {
+    return {
+      status: res.status,
+      body: res.body,
+      ms: Date.now() - overallStart,
+    };
+  }
+  // 303 always downgrades to GET; 301/302 downgrade a non-GET (matches every
+  // real client's behavior, even though the RFC nominally allows preserving
+  // the method there). 307/308 always preserve method + body.
+  const preserveMethod = res.status === 307 || res.status === 308;
+  const nextOpts = preserveMethod
+    ? opts
+    : { ...opts, method: "GET" as const, body: undefined };
+  return followRedirects(nextUrl, nextOpts, hop + 1, overallStart);
 }
 
 // GET-only convenience over rawRequest — the shape every existing GET call

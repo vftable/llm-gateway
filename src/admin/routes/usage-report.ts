@@ -55,21 +55,21 @@ export async function buildUsageReport(
     rows.map(async ({ key, enabled }) => {
       const mask = maskKey(key);
       try {
-        const { windows, dummy, unavailable, message } = await adapter.keyUsage(
-          {
+        const { windows, expiresAt, dummy, unavailable, message } =
+          await adapter.keyUsage({
             provider: p,
             apiKey: key,
             mask,
             enabled,
             seed: seedFromKey(key),
             ...makeUsageCtx(p),
-          },
-        );
+          });
         if (dummy) anyDummy = true;
         return {
           keyMask: mask,
           enabled,
           windows,
+          ...(expiresAt ? { expiresAt } : {}),
           ...(unavailable ? { unavailable: true } : {}),
           ...(message ? { message } : {}),
         };

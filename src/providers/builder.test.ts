@@ -158,10 +158,11 @@ test("familyDefaultTransforms reads the catalog adapter's quirks", () => {
   assert.ok(
     defs.some((d) => d.id === "sanitize-tool-args" && d.phase === "response"),
   );
-  // openai ships none.
-  assert.deepEqual(
-    familyDefaultTransforms(provider({ catalogId: "openai" })),
-    [],
+  // openai ships openai-cache.
+  assert.ok(
+    familyDefaultTransforms(provider({ catalogId: "openai" })).some(
+      (d) => d.id === "openai-cache" && d.phase === "request",
+    ),
   );
 });
 
@@ -202,9 +203,14 @@ test("every Anthropic-native catalog adapter inherits the SAME family default st
     );
   }
 
-  // OpenAI-native adapters are NOT part of this family — unaffected.
-  assert.deepEqual(defaultTransformsForCatalog("openai"), []);
-  assert.deepEqual(defaultTransformsForCatalog("openai-compatible"), []);
+  // OpenAI-native adapters have their OWN family defaults (openai-cache).
+  const oi = defaultTransformsForCatalog("openai");
+  const oiCompat = defaultTransformsForCatalog("openai-compatible");
+  assert.equal(oi, oiCompat);
+  assert.ok(
+    oi.some((d) => d.id === "openai-cache" && d.phase === "request"),
+    "expected openai-cache as a request default for OpenAI family",
+  );
 });
 
 test("mergeTransforms: defaults are the base, model entries override by id+phase", () => {

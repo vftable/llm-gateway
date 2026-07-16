@@ -55,30 +55,21 @@ function replaceBody(
   Object.assign(body, replacement);
 }
 
-const DEFAULT_USER_ID = {
-  device_id: "0dafd4a2414567a892d2ce1c9179965352ca53038d7e71c8201752e19257fa8d",
-  account_uuid: "",
-  session_id: "0bef5d67-6954-4877-a2c6-45fa14ce4b92",
-};
+import {
+  DEFAULT_USER_IDENTITY,
+  parseAnthropicUserId,
+  type UserIdentity,
+} from "../../session-id";
 
-function ensureMetadataUserId(body: AnthropicMessagesRequest): {
-  device_id: string;
-  account_uuid: string;
-  session_id: string;
-} {
+function ensureMetadataUserId(body: AnthropicMessagesRequest): UserIdentity {
   const meta = (body.metadata ?? {}) as Record<string, unknown>;
   body.metadata = meta;
 
-  if (typeof meta.user_id === "string" && meta.user_id) {
-    try {
-      return JSON.parse(meta.user_id);
-    } catch {
-      // Invalid JSON — fall through to default.
-    }
-  }
+  const parsed = parseAnthropicUserId(meta.user_id);
+  if (parsed) return parsed;
 
-  meta.user_id = JSON.stringify(DEFAULT_USER_ID);
-  return DEFAULT_USER_ID;
+  meta.user_id = JSON.stringify(DEFAULT_USER_IDENTITY);
+  return DEFAULT_USER_IDENTITY;
 }
 
 // ---------------------------------------------------------------------------

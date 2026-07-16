@@ -371,10 +371,15 @@ export function Layout() {
     <TooltipProvider>
       <div className="flex h-screen w-screen overflow-hidden">
         <Sidebar />
-        <div className="flex flex-1 flex-col overflow-hidden">
+        {/* min-w-0: this is a row-flex item next to Sidebar — without it, the
+            default min-width:auto lets any unshrinkable descendant (e.g. an
+            unwrapped PageHeader) push this column wider than the viewport,
+            which gets silently clipped by overflow-hidden above instead of
+            wrapping. */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <TopBar />
           <main
-            className="no-scrollbar flex-1 overflow-y-auto p-6"
+            className="no-scrollbar min-w-0 flex-1 overflow-y-auto p-6"
             style={{ contain: "layout style" }}
           >
             <Outlet />

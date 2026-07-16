@@ -105,6 +105,36 @@ function isInsideRange(pos: number, ranges: Array<[number, number]>): boolean {
   return false;
 }
 
+// Determine if a thinking-tag match looks like an EXAMPLE or documentation
+// reference rather than real model reasoning output. Returns true if the
+// match should be SKIPPED (not extracted).
+//
+// The code-block/inline-code check already ran before this, so if we reach
+// here the tag is outside any code fence or span. This catches the remaining
+// case: bare tags mentioned in flowing prose.
+function looksLikeExample(fullText: string, matchStart: number): boolean {
+  const lineStart = fullText.lastIndexOf("\n", matchStart - 1) + 1;
+  const textBeforeOnLine = fullText.slice(lineStart, matchStart).trimEnd();
+
+  // Strip thinking open/close tags — prior blocks' tags are not prose.
+  const cleaned = textBeforeOnLine
+    .replace(new RegExp(THINKING_RE.source, "gi"), "")
+    .replace(new RegExp(CLOSE_TAG_SRC, "gi"), "")
+    .replace(new RegExp(OPEN_TAG_SRC, "gi"), "")
+    .trim();
+
+  if (!cleaned) return false;
+
+  // Preceded by a colon, quote, or parenthesis → likely an example.
+  if (/[:'"(`]$/.test(cleaned)) return true;
+
+  // 4+ alpha characters of prose before the tag → mid-sentence.
+  const proseChars = cleaned.replace(/[^a-zA-Z]/g, "");
+  if (proseChars.length >= 4) return true;
+
+  return false;
+}
+
 // Fields the gateway attaches to a chat message after <thinking> extraction.
 interface ThinkingFields {
   reasoning?: string;
@@ -197,7 +227,9 @@ export class ThinkingConverter {
     let m: RegExpExecArray | null;
     while ((m = re.exec(text)) !== null) {
       if (isInsideRange(m.index, ranges)) continue;
-      blocks.push(m[1].replace(/^\s+/, "").replace(/\s+$/, ""));
+      if (looksLikeExample(text, m.index)) continue;
+      const inner = m[1].replace(/^\s+/, "").replace(/\s+$/, "");
+      blocks.push(inner);
     }
     return blocks;
   }
@@ -217,10 +249,12 @@ export class ThinkingConverter {
       if (isInsideRange(offset, ranges)) return match;
       return "";
     });
-    return stripped
-      .replace(UNCLOSED_OPEN_TAG_RE, "")
-      .replace(/^\n+/, "")
-      .replace(/\s+$/, "");
+    const strippedRanges = codeBlockRanges(stripped);
+    const cleaned = stripped.replace(UNCLOSED_OPEN_TAG_RE, (match, offset) => {
+      if (isInsideRange(offset, strippedRanges)) return match;
+      return "";
+    });
+    return cleaned.replace(/^\n+/, "").replace(/\s+$/, "");
   }
 
   // Build the OpenAI-shaped reasoning_details array: one entry per block,

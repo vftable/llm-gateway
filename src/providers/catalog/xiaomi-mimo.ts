@@ -1,5 +1,6 @@
 import { OpenAICompatibleAdapter } from "../base";
 import { WireKind } from "../../types";
+import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // Xiaomi MiMo — OpenAI-compatible endpoint for the MiMo model family.
 class XiaomiMimoAdapter extends OpenAICompatibleAdapter {}
@@ -26,4 +27,7 @@ export const xiaomiMimo = new XiaomiMimoAdapter({
       hint: "Adjust to the region/endpoint issued with your key.",
     },
   ],
+  quirks: {
+    defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
+  },
 });

@@ -46,6 +46,8 @@ export interface Provider {
   proxy: string | null;
   /** ISO-3166 alpha-2 country tag (UI flag only). */
   country: string | null;
+  /** Generic per-instance config bag for adapter-specific settings. */
+  providerConfig: Record<string, unknown>;
   /** Count of imported models in this provider's catalog (provider_models rows).
    *  Server-computed on the list endpoint; the card badge reads this. */
   importedModelCount?: number;
@@ -62,13 +64,18 @@ export interface ProviderKeyUsageWindow {
   used: number;
   limit: number;
   unit: UsageUnit;
-  resetsAt: string;
+  /** When this window's counter RESETS (refills) — absent for a one-shot
+   *  balance that doesn't roll over (e.g. a prepaid credit grant). */
+  resetsAt?: string;
 }
 
 export interface ProviderKeyUsage {
   keyMask: string;
   enabled: boolean;
   windows: ProviderKeyUsageWindow[];
+  /** When the KEY ITSELF becomes invalid — distinct from a window's
+   *  resetsAt, which refills rather than expiring. */
+  expiresAt?: string;
   /** Provider can't report usage for this key — UI shows "Unavailable". */
   unavailable?: boolean;
   /** Optional free-text note for the key (tier, rate-limit, error detail). */
@@ -469,6 +476,7 @@ export interface ProviderInput {
   modelsPath?: string;
   proxy?: string | null;
   country?: string | null;
+  providerConfig?: Record<string, unknown>;
 }
 
 export interface ModelInput {

@@ -1,5 +1,6 @@
 import { OpenAICompatibleAdapter } from "../base";
 import { WireKind } from "../../types";
+import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // NVIDIA NIM / build.nvidia.com — OpenAI-compatible chat endpoint, Bearer auth.
 class NvidiaNimAdapter extends OpenAICompatibleAdapter {}
@@ -31,4 +32,7 @@ export const nvidiaNim = new NvidiaNimAdapter({
       hint: "Change for a self-hosted NIM container (e.g. http://localhost:8000).",
     },
   ],
+  quirks: {
+    defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
+  },
 });

@@ -47,6 +47,26 @@ export class StreamingThinkingParser {
   private blockIndex = -1;
   private stripLeading = false;
   private inCodeBlock = false;
+  private inInlineCode = false;
+  private inlineBacktickRun = 0;
+
+  // Find the closing backtick run for an inline code span. Returns the index
+  // of the first backtick of a run matching `inlineBacktickRun`, or -1.
+  private findInlineClose(buffer: string): number {
+    const target = this.inlineBacktickRun;
+    let i = 0;
+    while (i < buffer.length) {
+      if (buffer[i] === "`") {
+        let run = 0;
+        while (i + run < buffer.length && buffer[i + run] === "`") run++;
+        if (run === target) return i;
+        i += run;
+      } else {
+        i++;
+      }
+    }
+    return -1;
+  }
 
   // Check if the buffer end could be the start of an opening tag.
   private partialOpenTag(buffer: string): number {
@@ -118,6 +138,21 @@ export class StreamingThinkingParser {
           continue;
         }
 
+        // Inside an inline code span: emit verbatim until closing backticks.
+        if (this.inInlineCode) {
+          const closeIdx = this.findInlineClose(buffer);
+          if (closeIdx >= 0) {
+            contentOut += buffer.slice(0, closeIdx + this.inlineBacktickRun);
+            buffer = buffer.slice(closeIdx + this.inlineBacktickRun);
+            this.inInlineCode = false;
+            this.inlineBacktickRun = 0;
+            continue;
+          }
+          contentOut += buffer;
+          buffer = "";
+          continue;
+        }
+
         // Outside code block: check for opening fence first.
         const fence = FENCE_RE.exec(buffer);
         if (fence && fence.index !== undefined) {
@@ -128,7 +163,29 @@ export class StreamingThinkingParser {
           continue;
         }
 
-        const m = OPEN_TAG_RE.exec(buffer);
+        // Check for inline code spans (backtick runs that aren't triple-fences).
+        const inlineStart = buffer.indexOf("`");
+        const openTagPos = OPEN_TAG_RE.exec(buffer);
+        if (
+          inlineStart >= 0 &&
+          (!openTagPos || inlineStart < openTagPos.index!)
+        ) {
+          let run = 1;
+          while (
+            inlineStart + run < buffer.length &&
+            buffer[inlineStart + run] === "`"
+          )
+            run++;
+          if (run < 3) {
+            contentOut += buffer.slice(0, inlineStart + run);
+            buffer = buffer.slice(inlineStart + run);
+            this.inInlineCode = true;
+            this.inlineBacktickRun = run;
+            continue;
+          }
+        }
+
+        const m = openTagPos;
         if (m && m.index !== undefined) {
           contentOut += buffer.slice(0, m.index);
           buffer = buffer.slice(m.index + m[0].length);

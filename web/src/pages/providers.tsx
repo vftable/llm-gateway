@@ -21,11 +21,93 @@ import { PageHeader, CardGridSkeleton } from "@/components/shared";
 import { ProviderIcon } from "@/components/model-icon";
 import { CountryFlag } from "@/components/country-flag";
 import { AddProviderDialog } from "./providers/add-provider-dialog";
-import { Card } from "@/components/ui/card";
+import { Card, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn, conversionLabel, conversionHelp, plural } from "@/lib/utils";
+
+// Provider family groupings — order here is display order.
+const FAMILY_RULES: Array<{
+  label: string;
+  brand: string;
+  match: (p: Provider) => boolean;
+}> = [
+  {
+    label: "Anthropic",
+    brand: "anthropic",
+    match: (p) => p.catalogId === "anthropic" || p.catalogId === "claude-code",
+  },
+  {
+    label: "OpenAI",
+    brand: "openai",
+    match: (p) => p.catalogId === "openai",
+  },
+  {
+    label: "DeepSeek",
+    brand: "deepseek",
+    match: (p) => p.catalogId === "deepseek",
+  },
+  {
+    label: "Google",
+    brand: "gemini",
+    match: (p) => p.catalogId === "google-gemini",
+  },
+  {
+    label: "NVIDIA",
+    brand: "nvidia",
+    match: (p) => p.catalogId === "nvidia-nim",
+  },
+  {
+    label: "OpenRouter",
+    brand: "openrouter",
+    match: (p) => p.catalogId === "openrouter",
+  },
+  {
+    label: "Z.ai",
+    brand: "zai",
+    match: (p) => p.catalogId === "glm-coding",
+  },
+  {
+    label: "NewAPI",
+    brand: "newapi",
+    match: (p) => p.catalogId === "newapi",
+  },
+  {
+    label: "OpenCode",
+    brand: "opencode",
+    match: (p) => p.catalogId === "opencode",
+  },
+  {
+    label: "Xiaomi",
+    brand: "mimo",
+    match: (p) => p.catalogId === "xiaomi-mimo",
+  },
+];
+
+function groupProviders(
+  providers: Provider[],
+): Array<{ label: string; brand: string | null; items: Provider[] }> {
+  const claimed = new Set<string>();
+  const groups: Array<{
+    label: string;
+    brand: string | null;
+    items: Provider[];
+  }> = [];
+
+  for (const rule of FAMILY_RULES) {
+    const items = providers.filter((p) => rule.match(p) && !claimed.has(p.id));
+    if (items.length) {
+      groups.push({ label: rule.label, brand: rule.brand, items });
+      items.forEach((p) => claimed.add(p.id));
+    }
+  }
+
+  const rest = providers.filter((p) => !claimed.has(p.id));
+  if (rest.length) groups.push({ label: "Custom", brand: null, items: rest });
+
+  return groups;
+}
 
 export default function Providers() {
   const navigate = useNavigate();
@@ -72,15 +154,38 @@ export default function Providers() {
       ) : items.length === 0 ? (
         <SetupCard onStart={() => setAdding(true)} />
       ) : (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {items.map((p) => (
-            <ProviderCard
-              key={p.id}
-              provider={p}
-              modelCount={modelCounts[p.id] ?? 0}
-              onOpen={() => navigate(`/providers/${p.id}`)}
-              onChanged={load}
-            />
+        <div className="space-y-6">
+          {groupProviders(items).map((g) => (
+            <section key={g.label}>
+              <div className="mb-3 flex items-center gap-2">
+                {g.brand && (
+                  <ProviderIcon
+                    brand={g.brand}
+                    className="size-4 text-muted-foreground"
+                  />
+                )}
+                <h2 className="text-sm font-medium text-muted-foreground">
+                  {g.label}
+                </h2>
+                <Badge
+                  variant="secondary"
+                  className="px-1.5 py-0 text-[0.65rem]"
+                >
+                  {g.items.length}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {g.items.map((p) => (
+                  <ProviderCard
+                    key={p.id}
+                    provider={p}
+                    modelCount={modelCounts[p.id] ?? 0}
+                    onOpen={() => navigate(`/providers/${p.id}`)}
+                    onChanged={load}
+                  />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
@@ -211,7 +316,7 @@ const ProviderCard = memo(function ProviderCard({
   return (
     <Card
       className={cn(
-        "cursor-pointer gap-3 transition-colors hover:border-primary/50",
+        "cursor-pointer gap-3 transition-all hover:border-primary/40 hover:shadow-sm",
         !provider.enabled && "opacity-60",
       )}
       onClick={onOpen}
@@ -219,7 +324,7 @@ const ProviderCard = memo(function ProviderCard({
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2.5">
           <ProviderIcon
-            brand={provider.catalogId}
+            brand={provider.catalogId ?? provider.format}
             name={provider.name}
             className="size-5"
           />
@@ -292,8 +397,8 @@ const ProviderCard = memo(function ProviderCard({
         )}
       </div>
 
-      <div
-        className="mt-auto flex items-center justify-end gap-1 pt-1"
+      <CardFooter
+        className="justify-end gap-1 mt-3"
         onClick={(e) => e.stopPropagation()}
         role="presentation"
       >
@@ -317,7 +422,7 @@ const ProviderCard = memo(function ProviderCard({
           <Pencil className="h-3.5 w-3.5" />
           Manage
         </Button>
-      </div>
+      </CardFooter>
     </Card>
   );
 });

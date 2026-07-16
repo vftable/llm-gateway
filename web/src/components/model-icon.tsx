@@ -32,6 +32,7 @@ import microsoftSvg from "@lobehub/icons-static-svg/icons/microsoft.svg?raw";
 import nvidiaSvg from "@lobehub/icons-static-svg/icons/nvidia.svg?raw";
 import openrouterSvg from "@lobehub/icons-static-svg/icons/openrouter.svg?raw";
 import opencodeSvg from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
+import newapiSvg from "@lobehub/icons-static-svg/icons/newapi.svg?raw";
 
 // Ordered: more specific patterns before broader ones (e.g. "gemini" before
 // a generic "google", "kimi" before "k2").
@@ -96,6 +97,13 @@ const PROVIDER_BRANDS: Record<string, { svg: string; label: string }> = {
   deepseek: { svg: deepseekSvg, label: "DeepSeek" },
   gemini: { svg: geminiSvg, label: "Gemini" },
   zai: { svg: zaiSvg, label: "Z.ai" },
+  newapi: { svg: newapiSvg, label: "NewAPI" },
+  // Generic-adapter catalog ids — ProviderCard passes provider.catalogId
+  // straight through as `brand`, so these need entries too (a custom-named
+  // "openai-compatible"/"anthropic-compatible" provider must still show its
+  // wire-format's logo, not fall through to the generic chip icon).
+  "openai-compatible": { svg: openaiSvg, label: "OpenAI-compatible" },
+  "anthropic-compatible": { svg: anthropicSvg, label: "Anthropic-compatible" },
 };
 
 // Resolve a provider's icon. Prefers an explicit catalog brand key; if absent

@@ -1,5 +1,6 @@
 import { OpenAICompatibleAdapter } from "../base";
 import { WireKind } from "../../types";
+import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // OpenRouter — aggregates many providers behind one OpenAI-compatible API.
 // Note the /api path prefix in the base URL.
@@ -26,4 +27,7 @@ export const openrouter = new OpenRouterAdapter({
       required: true,
     },
   ],
+  quirks: {
+    defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
+  },
 });

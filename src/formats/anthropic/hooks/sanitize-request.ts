@@ -13,6 +13,7 @@
 // (19 accepted top-level body fields as of 2026-07-13).
 
 import type { AnthropicMessagesRequest, Json } from "../../pipeline";
+import { isModelSamplingStripped } from "../model-version";
 
 // Canonical key order for the outbound JSON body. JSON.stringify serializes
 // in insertion order, so rebuilding the object in this sequence produces a
@@ -46,7 +47,7 @@ const SAMPLING_KEYS = new Set(["temperature", "top_p", "top_k"]);
 
 export function sanitizeAnthropicRequest(
   body: AnthropicMessagesRequest,
-  _model: string,
+  model: string,
 ): AnthropicMessagesRequest {
   if (!body || typeof body !== "object") return body;
 
@@ -55,16 +56,18 @@ export function sanitizeAnthropicRequest(
   if (typeof body.system === "string")
     body.system = [{ type: "text", text: body.system }];
 
+  const stripSampling = isModelSamplingStripped(model);
+
   // Rebuild in canonical key order (strip disallowed keys in the process).
   const ordered: Json = {};
   for (const key of ORDERED_KEYS) {
-    if (SAMPLING_KEYS.has(key)) continue;
+    if (stripSampling && SAMPLING_KEYS.has(key)) continue;
     if (key in body) ordered[key] = body[key];
   }
 
   for (const key of Object.keys(body)) {
     if (!ALLOWED.has(key)) continue;
-    if (SAMPLING_KEYS.has(key)) continue;
+    if (stripSampling && SAMPLING_KEYS.has(key)) continue;
     if (!(key in ordered)) ordered[key] = body[key];
   }
 

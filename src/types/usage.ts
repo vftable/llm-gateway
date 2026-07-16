@@ -17,8 +17,13 @@ export interface ProviderKeyUsageWindow {
   used: number;
   limit: number;
   unit: UsageUnit;
-  /** ISO timestamp when this window's counter resets. */
-  resetsAt: string;
+  /**
+   * ISO timestamp when this window's counter RESETS (rolls over to a fresh
+   * quota) — a rate-limit window, not the credential's own lifetime. Omitted
+   * for a one-shot balance that doesn't refill (e.g. a prepaid credit grant);
+   * see `ProviderKeyUsage.expiresAt` for when the KEY ITSELF stops working.
+   */
+  resetsAt?: string;
 }
 
 export interface ProviderKeyUsage {
@@ -27,6 +32,12 @@ export interface ProviderKeyUsage {
   /** Whether this key is currently active (false = operator-disabled). */
   enabled: boolean;
   windows: ProviderKeyUsageWindow[];
+  /**
+   * ISO timestamp when the KEY ITSELF becomes invalid (distinct from a
+   * window's `resetsAt`, which refills rather than expiring). Omitted when
+   * the provider doesn't report an expiry or the key never expires.
+   */
+  expiresAt?: string;
   /**
    * True when the provider cannot report usage for this key (no usage endpoint,
    * or a live query failed). The UI shows an "Unavailable" state instead of bars.

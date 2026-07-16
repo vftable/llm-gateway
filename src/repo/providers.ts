@@ -29,6 +29,7 @@ interface ProviderRow {
   models_path: string | null;
   proxy: string | null;
   country: string | null;
+  provider_config: string | null;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -77,6 +78,10 @@ export function mapProvider(r: ProviderRow): Provider {
     modelsPath: r.models_path || "/v1/models",
     proxy: r.proxy ?? null,
     country: r.country ?? null,
+    providerConfig: parseJsonObject<Record<string, unknown>>(
+      r.provider_config,
+      {},
+    ),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -119,6 +124,7 @@ export interface ProviderInput {
   modelsPath?: string;
   proxy?: string | null;
   country?: string | null;
+  providerConfig?: Record<string, unknown>;
 }
 
 // Generate a unique provider id DECOUPLED from name: a readable slug stem (when
@@ -153,11 +159,11 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
       (id, name, base_url, host, api_keys, disabled_api_keys, auth_scheme, extra_headers,
        retry_attempts, retry_interval_ms, request_timeout_ms, tls_verify,
        enabled, format, endpoints, endpoint_paths, native_conversion, catalog_id,
-       base_path, models_path, proxy, country, sort_order, created_at, updated_at)
+       base_path, models_path, proxy, country, provider_config, sort_order, created_at, updated_at)
      VALUES (@id, @name, @base_url, @host, @api_keys, @disabled_api_keys, @auth_scheme, @extra_headers,
        @retry_attempts, @retry_interval_ms, @request_timeout_ms, @tls_verify,
        @enabled, @format, @endpoints, @endpoint_paths, @native_conversion, @catalog_id,
-       @base_path, @models_path, @proxy, @country, @sort_order, @created_at, @updated_at)`,
+       @base_path, @models_path, @proxy, @country, @provider_config, @sort_order, @created_at, @updated_at)`,
   ).run({
     id,
     name: input.name,
@@ -188,6 +194,7 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
     models_path: input.modelsPath || "/v1/models",
     proxy: input.proxy || null,
     country: input.country || null,
+    provider_config: JSON.stringify(input.providerConfig ?? {}),
     sort_order: 0,
     created_at: now,
     updated_at: now,
@@ -259,6 +266,10 @@ export function updateProvider(
       input.modelsPath !== undefined ? input.modelsPath : existing.modelsPath,
     proxy: input.proxy !== undefined ? input.proxy : existing.proxy,
     country: input.country !== undefined ? input.country : existing.country,
+    providerConfig:
+      input.providerConfig !== undefined
+        ? input.providerConfig
+        : existing.providerConfig,
   };
   db.prepare(
     `UPDATE providers SET
@@ -271,7 +282,8 @@ export function updateProvider(
        endpoint_paths=@endpoint_paths,
        native_conversion=@native_conversion, catalog_id=@catalog_id,
        base_path=@base_path, models_path=@models_path, proxy=@proxy,
-       country=@country, updated_at=@updated_at
+       country=@country, provider_config=@provider_config,
+       updated_at=@updated_at
      WHERE id=@id`,
   ).run({
     id,
@@ -298,6 +310,7 @@ export function updateProvider(
     models_path: next.modelsPath || "/v1/models",
     proxy: next.proxy || null,
     country: next.country || null,
+    provider_config: JSON.stringify(next.providerConfig ?? {}),
     updated_at: now,
   });
   return getProvider(db, id);

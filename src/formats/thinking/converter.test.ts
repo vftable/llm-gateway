@@ -195,3 +195,43 @@ test("applyToResponse: a real block prepends exactly one reasoning output item",
   const summary = items[0].summary as Array<{ text: string }>;
   assert.equal(summary[0].text, "plan");
 });
+
+// --- code block / inline code protection -----------------------------------
+
+test("parseThinking: tags inside triple-backtick fences are NOT extracted", () => {
+  const text = "```\n<thinking>fenced</thinking>\n```";
+  assert.deepEqual(conv.parseThinking(text), []);
+});
+
+test("parseThinking: tags inside inline code spans are NOT extracted", () => {
+  const text = "use `<thinking>example</thinking>` for reasoning";
+  assert.deepEqual(conv.parseThinking(text), []);
+});
+
+test("stripThinking: unclosed <thinking> inside a code fence is preserved", () => {
+  const text = "here\n```\n<thinking>\n```\nend";
+  assert.equal(conv.stripThinking(text), text);
+});
+
+// --- looksLikeExample heuristic -------------------------------------------
+
+test("parseThinking: mid-sentence prose before tag -> skipped as example", () => {
+  assert.deepEqual(
+    conv.parseThinking("Here is an example: <thinking>demo</thinking> ok"),
+    [],
+  );
+});
+
+test("parseThinking: preceded by colon -> skipped as example", () => {
+  assert.deepEqual(
+    conv.parseThinking("output: <thinking>example</thinking>"),
+    [],
+  );
+});
+
+test("parseThinking: at start of text, newline-separated -> extracted", () => {
+  assert.deepEqual(
+    conv.parseThinking("<thinking>real plan</thinking>\nthe answer"),
+    ["real plan"],
+  );
+});

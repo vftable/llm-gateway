@@ -76,10 +76,16 @@ export interface ChatUsage {
   total_tokens?: number;
   prompt_tokens_details?: {
     cached_tokens?: number;
-    cache_creation_tokens?: number;
+    audio_tokens?: number;
     [k: string]: unknown;
   };
-  completion_tokens_details?: unknown;
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+    audio_tokens?: number;
+    accepted_prediction_tokens?: number;
+    rejected_prediction_tokens?: number;
+    [k: string]: unknown;
+  };
   [k: string]: unknown;
 }
 

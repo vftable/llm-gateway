@@ -1,5 +1,6 @@
 import { OpenAICompatibleAdapter } from "../base";
 import { WireKind } from "../../types";
+import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // Google Gemini's OpenAI-compatibility surface. Unlike other OpenAI-compatible
 // providers, the chat/models paths sit under /v1beta/openai rather than /v1, so
@@ -32,4 +33,7 @@ export const gemini = new GeminiAdapter({
       hint: "One per line — rotated round-robin.",
     },
   ],
+  quirks: {
+    defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
+  },
 });

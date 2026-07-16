@@ -65,6 +65,7 @@ export function ConfigForm({
     modelsPath: provider.modelsPath,
     proxy: provider.proxy,
     country: provider.country,
+    providerConfig: provider.providerConfig ?? {},
   }));
   const [headersText, setHeadersText] = useState(
     JSON.stringify(provider.extraHeaders ?? {}, null, 2),
@@ -73,6 +74,12 @@ export function ConfigForm({
 
   const set = <K extends keyof ProviderInput>(k: K, v: ProviderInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+
+  const setConfig = (key: string, value: unknown) =>
+    setForm((f) => ({
+      ...f,
+      providerConfig: { ...(f.providerConfig ?? {}), [key]: value },
+    }));
 
   // Toggle a wire kind on/off in the accepted set (order kept stable).
   const toggleEndpoint = (kind: WireKind) =>
@@ -106,7 +113,11 @@ export function ConfigForm({
       // clobber a key edit (updateProvider merges: undefined keeps existing).
       const { apiKeys, ...rest } = form;
       void apiKeys;
-      await api.updateProvider(provider.id, { ...rest, extraHeaders });
+      await api.updateProvider(provider.id, {
+        ...rest,
+        extraHeaders,
+        providerConfig: form.providerConfig,
+      });
       toast.success("Provider updated");
       onSaved();
     } catch (e) {
@@ -158,6 +169,30 @@ export function ConfigForm({
             </div>
           </SettingRow>
         </FormSection>
+
+        {provider.catalogId === "newapi" && (
+          <FormSection
+            title="Billing"
+            desc="Credit-to-dollar conversion for quota reporting."
+          >
+            <SettingRow
+              label="Credits per dollar"
+              hint="How many provider credits equal $1 (default: 1,000,000)."
+            >
+              <Input
+                type="number"
+                min={1}
+                value={
+                  (form.providerConfig?.quotaPerDollar as number) ?? 1000000
+                }
+                onChange={(e) =>
+                  setConfig("quotaPerDollar", Number(e.target.value) || 1000000)
+                }
+                className="sm:max-w-48"
+              />
+            </SettingRow>
+          </FormSection>
+        )}
 
         <FormSection
           title="Wire format & routing"

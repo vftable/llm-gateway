@@ -27,9 +27,7 @@ import type {
   AnthropicTextBlock,
   AnthropicThinkingConfig,
 } from "../../pipeline";
-
-// Anthropic rejects adaptive thinking + output_config.effort on Haiku.
-const ADAPTIVE_UNSUPPORTED = /haiku/i;
+import { ADAPTIVE_UNSUPPORTED_RE as ADAPTIVE_UNSUPPORTED } from "../model-version";
 const MIN_BUDGET = 1024;
 const HAIKU_ENABLED_BUDGET = 10000;
 

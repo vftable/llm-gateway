@@ -106,6 +106,10 @@ export interface Provider {
    * config sync. Drives the browser's brand icon + label; never affects routing.
    */
   catalogId: string | null;
+  /** Generic per-instance config bag for adapter-specific settings (e.g.
+   *  quotaPerDollar for NewAPI). Keyed by adapter; untyped so adding a
+   *  provider-specific knob doesn't require a schema migration. */
+  providerConfig: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 }

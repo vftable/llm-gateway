@@ -12,6 +12,7 @@
 //   placed on the last system block / last tool / last message content block.
 
 import type { Json, BodyXform } from "../pipeline";
+import { extractCacheKey } from "../session-id";
 
 type Block = Record<string, unknown>;
 
@@ -88,6 +89,24 @@ export function anthropicCache(ttlRaw: string): BodyXform {
         }
       }
     }
+    return body;
+  };
+}
+
+// --- openai-cache: extended prompt-cache retention --------------------------
+
+// Set `prompt_cache_retention` on OpenAI-shaped requests so cached prefixes
+// persist up to 24 hours (GPU-local storage) instead of the volatile in-memory
+// default (5-10 min). No-op on Anthropic-shaped bodies.
+export function openaiCache(retention: string): BodyXform {
+  const value = retention === "in_memory" ? "in_memory" : "24h";
+  return (body: Json) => {
+    if (body.system !== undefined) return body;
+    if (!Array.isArray(body.messages)) return body;
+    if (body.prompt_cache_retention === undefined)
+      body.prompt_cache_retention = value;
+    if (body.prompt_cache_key === undefined)
+      body.prompt_cache_key = extractCacheKey(body);
     return body;
   };
 }

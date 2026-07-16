@@ -333,6 +333,7 @@ function migrate(db: DB): void {
   // adapter-backed provider can store format=NULL (format is now a derived hint).
   // SQLite can't ALTER a constraint, so rebuild the table when it's still present.
   migrateProvidersFormatNullable(db);
+  addColumnIfMissing(db, "providers", "provider_config", "TEXT");
   addColumnIfMissing(db, "models", "type", "TEXT NOT NULL DEFAULT 'openai'");
   addColumnIfMissing(db, "request_logs", "client", "TEXT");
   addColumnIfMissing(db, "request_logs", "cached_tokens", "INTEGER");

@@ -120,6 +120,10 @@ export interface UsageCtx {
 
 // What keyUsage() returns.
 //   - `windows`   the token/request/credit limits over time (empty when none).
+//   - `expiresAt` optional; ISO timestamp when the KEY ITSELF becomes invalid
+//                 (a credential's own lifetime — distinct from a window's
+//                 `resetsAt`, which refills). Omit when the provider doesn't
+//                 report an expiry or the key never expires.
 //   - `dummy`     optional; DEFAULT false. Set true only for placeholder/estimate
 //                 data (e.g. the demo generator) so the UI can badge it.
 //   - `unavailable` optional; set true when the provider can't report usage for
@@ -128,6 +132,7 @@ export interface UsageCtx {
 //                 "Rate limited until 3pm", or an error detail).
 export interface KeyUsageResult {
   windows: ProviderKeyUsageWindow[];
+  expiresAt?: string;
   dummy?: boolean;
   unavailable?: boolean;
   message?: string;

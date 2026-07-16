@@ -93,11 +93,8 @@ export function anthropicUsageToChat(u: AnthropicUsage | undefined): ChatUsage {
     completion_tokens: output,
     total_tokens: prompt + output,
   };
-  if (cacheRead > 0 || cacheCreate > 0) {
-    usage.prompt_tokens_details = {};
-    if (cacheRead > 0) usage.prompt_tokens_details.cached_tokens = cacheRead;
-    if (cacheCreate > 0)
-      usage.prompt_tokens_details.cache_creation_tokens = cacheCreate;
+  if (cacheRead > 0) {
+    usage.prompt_tokens_details = { cached_tokens: cacheRead };
   }
   return usage;
 }

@@ -1714,6 +1714,7 @@ export class ForwardingEngine {
       const lk = k.toLowerCase();
       if (HOP_BY_HOP.has(lk)) continue;
       if (lk === "host" || lk === "content-length") continue;
+      if (lk === "x-anthropic-billing-header") continue;
       if ((lk === "authorization" || lk === "x-api-key") && !forwardClientAuth)
         continue;
       if (v === undefined) continue;

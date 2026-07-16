@@ -37,6 +37,7 @@ function prov(over: Partial<Provider>): Provider {
     modelsPath: "/v1/models",
     proxy: null,
     country: null,
+    providerConfig: {},
     createdAt: "",
     updatedAt: "",
     ...over,

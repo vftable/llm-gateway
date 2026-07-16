@@ -49,6 +49,7 @@ import { openaiCompatible } from "./catalog/openai-compatible";
 import { anthropicCompatible } from "./catalog/anthropic-compatible";
 import { exampleCustom } from "./catalog/example-custom";
 import { proxy } from "./catalog/proxy";
+import { newapi } from "./catalog/newapi";
 
 // Order here is the order shown in the catalog grid: branded stock providers
 // first, generic escape-hatch templates last.
@@ -65,6 +66,7 @@ const ADAPTERS: ProviderAdapter[] = [
   gemini,
   openaiCompatible,
   anthropicCompatible,
+  newapi,
   exampleCustom,
   proxy,
 ];

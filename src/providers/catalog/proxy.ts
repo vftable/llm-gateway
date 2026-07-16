@@ -1,5 +1,6 @@
 import { OpenAICompatibleAdapter } from "../base";
 import { WireKind } from "../../types";
+import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // Proxy / bridge instance (LiteLLM, 9router, one-api, …) that accepts EITHER
 // wire format and converts internally. nativeConversion=true forwards the
@@ -28,4 +29,7 @@ export const proxy = new ProxyAdapter({
     },
     { key: "apiKeys", label: "API key", hint: "Optional." },
   ],
+  quirks: {
+    defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
+  },
 });

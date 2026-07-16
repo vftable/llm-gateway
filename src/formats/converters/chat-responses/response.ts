@@ -177,7 +177,8 @@ function usageFromResponses(
     out.prompt_tokens_details =
       usage.input_tokens_details as ChatUsage["prompt_tokens_details"];
   if (usage.output_tokens_details)
-    out.completion_tokens_details = usage.output_tokens_details;
+    out.completion_tokens_details =
+      usage.output_tokens_details as ChatUsage["completion_tokens_details"];
   return out;
 }
 

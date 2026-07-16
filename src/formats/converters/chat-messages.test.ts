@@ -447,7 +447,6 @@ test("S2: messages->chat folds cache tokens into prompt_tokens + details", () =>
     total_tokens: number;
     prompt_tokens_details?: {
       cached_tokens?: number;
-      cache_creation_tokens?: number;
     };
   };
   // prompt = input + cache_read + cache_creation = 18
@@ -455,7 +454,13 @@ test("S2: messages->chat folds cache tokens into prompt_tokens + details", () =>
   assert.equal(usage.completion_tokens, 4);
   assert.equal(usage.total_tokens, 22);
   assert.equal(usage.prompt_tokens_details?.cached_tokens, 6);
-  assert.equal(usage.prompt_tokens_details?.cache_creation_tokens, 2);
+  // cache_creation_tokens is NOT emitted — it's Anthropic-only, not part of
+  // the OpenAI spec. The creation tokens are folded into prompt_tokens.
+  assert.equal(
+    (usage.prompt_tokens_details as Record<string, unknown>)
+      ?.cache_creation_tokens,
+    undefined,
+  );
 });
 
 test("S2: chat->messages subtracts folded cache tokens back out of input_tokens", () => {

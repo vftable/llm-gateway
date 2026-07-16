@@ -80,7 +80,7 @@ test("builtin stages carry label/blurb/group display metadata", () => {
   assert.ok(thinkingResp!.blurb);
 });
 
-test("OpenAI-native provider: OpenAI reasoning hooks, no Anthropic hooks, no family defaults", () => {
+test("OpenAI-native provider: OpenAI reasoning hooks, no Anthropic hooks, has openai-cache family default", () => {
   const r = resolveProviderTransforms(
     provider({ catalogId: "openai", format: "openai" }),
   );
@@ -93,10 +93,11 @@ test("OpenAI-native provider: OpenAI reasoning hooks, no Anthropic hooks, no fam
     r.request.filter((s) => s.name.startsWith("anthropic:")).length,
     0,
   );
-  assert.equal(
-    [...r.request, ...r.response].filter((s) => s.source === "family").length,
-    0,
+  const familyStages = [...r.request, ...r.response].filter(
+    (s) => s.source === "family",
   );
+  assert.equal(familyStages.length, 1);
+  assert.equal(familyStages[0].name, "family:openai-cache");
 });
 
 test("a model's own transform overrides the matching family default (same id+phase)", () => {

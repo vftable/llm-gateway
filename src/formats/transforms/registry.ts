@@ -10,6 +10,7 @@ import type { Json, BodyXform } from "../pipeline";
 import type { ParamSpec, TransformPhase, TransformDefInfo } from "../../types";
 import {
   anthropicCache,
+  openaiCache,
   systemPrepend,
   sanitizeToolArgs,
 } from "./builtins-extra";
@@ -227,6 +228,24 @@ const LIBRARY: TransformDef[] = [
       },
     ],
     build: (p) => anthropicCache(str(p.ttl) ?? "5m"),
+  },
+  {
+    id: "openai-cache",
+    label: "OpenAI prompt caching",
+    blurb:
+      "Set prompt_cache_retention to extend cached prefix lifetime (up to 24h) on OpenAI-shaped requests. Request phase; no-op on Anthropic-shaped bodies.",
+    phases: REQUEST,
+    params: [
+      {
+        key: "retention",
+        label: "Cache retention",
+        type: "string",
+        required: false,
+        placeholder: "24h",
+        hint: "in_memory (default 5-10min) or 24h (extended)",
+      },
+    ],
+    build: (p) => openaiCache(str(p.retention) ?? "24h"),
   },
   {
     id: "system-prepend",

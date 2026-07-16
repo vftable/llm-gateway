@@ -1,7 +1,11 @@
 import { OpenAICompatibleAdapter, prefersResponses } from "../base";
-import { WireKind } from "../../types";
+import { WireKind, type ModelTransformConfig } from "../../types";
 
 export { prefersResponses };
+
+export const OPENAI_DEFAULT_TRANSFORMS: ModelTransformConfig[] = [
+  { id: "openai-cache", phase: "request", params: { retention: "24h" } },
+];
 
 export const openai = new OpenAICompatibleAdapter({
   id: "openai",
@@ -25,4 +29,7 @@ export const openai = new OpenAICompatibleAdapter({
       hint: "One per line — rotated round-robin.",
     },
   ],
+  quirks: {
+    defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
+  },
 });

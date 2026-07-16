@@ -88,6 +88,7 @@ test("stock providers with a known origin pin a base URL", () => {
     "openai-compatible",
     "anthropic-compatible",
     "proxy",
+    "newapi",
   ]);
   for (const t of listProviderTemplates()) {
     if (generic.has(t.id)) continue;

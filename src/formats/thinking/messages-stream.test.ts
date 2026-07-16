@@ -100,6 +100,55 @@ test("splits an inline <thinking> tag out of a text block into a real thinking b
   assert.equal((textDelta!.data.delta as { text: string }).text, "answer");
 });
 
+test("a <thinking> tag inside an inline code span is NOT extracted, even split across chunks", async () => {
+  const raw = await runTransform(new AnthropicThinkingTransform(), [
+    sseEvent("message_start", {
+      type: "message_start",
+      message: { id: "m1", usage: { input_tokens: 5 } },
+    }),
+    sseEvent("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    }),
+    sseEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: "use `<thin" },
+    }),
+    sseEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: "king>example</thinking>` ok" },
+    }),
+    sseEvent("content_block_stop", { type: "content_block_stop", index: 0 }),
+    sseEvent("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "end_turn" },
+      usage: { output_tokens: 3 },
+    }),
+    sseEvent("message_stop", { type: "message_stop" }),
+  ]);
+  const events = parseEvents(raw);
+
+  const thinkingStart = events.find(
+    (e) =>
+      e.event === "content_block_start" &&
+      (e.data.content_block as { type?: string })?.type === "thinking",
+  );
+  assert.equal(thinkingStart, undefined, "expected no thinking block");
+
+  const text = events
+    .filter(
+      (e) =>
+        e.event === "content_block_delta" &&
+        (e.data.delta as { type?: string })?.type === "text_delta",
+    )
+    .map((e) => (e.data.delta as { text: string }).text)
+    .join("");
+  assert.equal(text, "use `<thinking>example</thinking>` ok");
+});
+
 test("emits a signature_delta with the synthetic signature before closing a synthesized thinking block", async () => {
   const raw = await runTransform(new AnthropicThinkingTransform(), [
     sseEvent("message_start", { type: "message_start", message: {} }),

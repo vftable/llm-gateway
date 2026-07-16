@@ -21,29 +21,16 @@
 // thinking-config (which reconciles budget_tokens vs max_tokens).
 
 import type { AnthropicMessagesRequest } from "../../pipeline";
-
-// ── model family detection ──────────────────────────────────────────────
-//
-// Patterns are deliberately forward-looking: they match the family prefix
-// so newly-released point versions are covered without edits.  The order
-// of checks in `normalizeThinkingMode` matters — more specific patterns
-// (fable/mythos) are tested before the catch-all "claude-*" branches.
-
-const FABLE = /claude-fable/i;
-const MYTHOS = /claude-mythos(?!.*preview)/i;
-const MYTHOS_PREVIEW = /claude-mythos.*preview/i;
-
-// Opus 4.7+ (but NOT 4.6): matches claude-opus-4-7, claude-opus-4-8, etc.
-const OPUS_47_PLUS = /claude-opus-4-([7-9]|\d{2,})/i;
-// Opus 4.6 specifically
-const OPUS_46 = /claude-opus-4-6/i;
-
-// Sonnet 5+ (major version): matches claude-sonnet-5, claude-sonnet-6, etc.
-const SONNET_5_PLUS = /claude-sonnet-([5-9]|\d{2,})(?:-|$)/i;
-// Sonnet 4.6 specifically
-const SONNET_46 = /claude-sonnet-4-6/i;
-
-const HAIKU = /claude-haiku/i;
+import {
+  FABLE_RE as FABLE,
+  MYTHOS_RE as MYTHOS,
+  MYTHOS_PREVIEW_RE as MYTHOS_PREVIEW,
+  OPUS_47_PLUS_RE as OPUS_47_PLUS,
+  OPUS_46_RE as OPUS_46,
+  SONNET_5_PLUS_RE as SONNET_5_PLUS,
+  SONNET_46_RE as SONNET_46,
+  HAIKU_RE as HAIKU,
+} from "../model-version";
 
 const DEFAULT_ADAPTIVE_BUDGET = 10_000;
 

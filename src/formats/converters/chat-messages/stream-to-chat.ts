@@ -40,8 +40,9 @@ export class MessagesToChatSseTransform extends Transform {
     if (tail) this.handleEvent(tail);
     if (this.started && this.finishReason == null) {
       this.emitChunk(
-        { finish_reason: "stop" },
+        {},
         { usage: anthropicUsageToChat(this.anthUsage) },
+        "stop",
       );
       this.emitDone();
     }
@@ -51,13 +52,14 @@ export class MessagesToChatSseTransform extends Transform {
   private emitChunk(
     delta: Record<string, unknown>,
     extra?: Record<string, unknown>,
+    finishReason?: string | null,
   ): void {
     const obj: Record<string, unknown> = {
       id: genId("chatcmpl-"),
       object: "chat.completion.chunk",
       created: Math.floor(Date.now() / 1000),
       model: this.model ?? "",
-      choices: [{ index: 0, delta, finish_reason: null }],
+      choices: [{ index: 0, delta, finish_reason: finishReason ?? null }],
     };
     if (extra) Object.assign(obj, extra);
     this.push(`data: ${JSON.stringify(obj)}\n\n`);
@@ -189,8 +191,9 @@ export class MessagesToChatSseTransform extends Transform {
 
   private onMessageStop(): void {
     this.emitChunk(
-      { finish_reason: this.finishReason ?? "stop" },
+      {},
       { usage: anthropicUsageToChat(this.anthUsage) },
+      this.finishReason ?? "stop",
     );
     this.emitDone();
     this.finishReason = this.finishReason ?? "stop";

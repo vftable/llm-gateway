@@ -96,6 +96,10 @@ export function parseProviderInput(
         : b.country == null
           ? null
           : str(b.country),
+    providerConfig:
+      b.providerConfig && typeof b.providerConfig === "object"
+        ? (b.providerConfig as Record<string, unknown>)
+        : undefined,
   };
 }
 
