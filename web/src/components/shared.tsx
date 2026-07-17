@@ -35,7 +35,7 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
       {/* min-w-0 lets this shrink below its content's natural width — without
           it, a flex row item defaults to min-width:auto, which locks the
           block to the description text's unwrapped width and gets clipped by
@@ -43,12 +43,12 @@ export function PageHeader({
           viewports. */}
       <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2.5">
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">
+          <h1 className="text-lg font-semibold tracking-tight text-foreground">
             {title}
           </h1>
           {meta}
         </div>
-        {desc && <p className="mt-1 text-xs text-muted-foreground">{desc}</p>}
+        {desc && <p className="mt-0.5 text-xs text-muted-foreground">{desc}</p>}
       </div>
       {actions && (
         <div className="flex flex-wrap items-center gap-2">{actions}</div>
@@ -128,11 +128,11 @@ export const Stat = memo(function Stat({
   accent?: boolean;
 }) {
   return (
-    <Card className="gap-1 p-3">
+    <Card className="gap-0.5 p-3">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div
         className={cn(
-          "text-2xl font-bold tabular-nums",
+          "text-xl font-bold tabular-nums leading-none",
           accent ? "text-primary" : "text-foreground",
         )}
       >
@@ -467,7 +467,7 @@ export function Field({
 }) {
   return (
     <div>
-      <label className="text-xs font-medium text-foreground mb-1.5 block">
+      <label className="text-xs font-medium text-foreground mb-1 block">
         {label}
       </label>
       {children}
@@ -519,7 +519,7 @@ export function SettingRow({
   htmlFor?: string;
 }) {
   return (
-    <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
+    <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
       <div className="min-w-0 sm:max-w-[46%]">
         <label
           htmlFor={htmlFor}

@@ -17,6 +17,7 @@ import type { Logger } from "./logger";
 import type { GatewayRouter } from "./gateway/router";
 import type { AdminAuth } from "./auth/admin-auth";
 import { adminRouter } from "./admin/routes";
+import type { BroadcastFn } from "./admin/routes/types";
 
 export function createServerApp(
   db: DB,
@@ -24,6 +25,7 @@ export function createServerApp(
   router: GatewayRouter,
   auth: AdminAuth,
   opts: { webDistDir: string; corsOrigin: string | null },
+  broadcast?: BroadcastFn,
 ): Express {
   const app = express();
 
@@ -54,7 +56,7 @@ export function createServerApp(
   }
 
   // Admin API.
-  app.use("/api", adminRouter(db, logger, router, auth));
+  app.use("/api", adminRouter(db, logger, router, auth, broadcast));
 
   // Gateway /v1 surface.
   router.register(app);

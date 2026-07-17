@@ -8,13 +8,13 @@ import type { ModelCapabilities, Provider } from "@/lib/types";
 import { Switch } from "@/components/ui/switch";
 import { cn, conversionLabel, conversionHelp } from "@/lib/utils";
 
-// One editable fallback-chain hop. Every hop always routes through the
-// provider's own native format — no per-hop endpoint pin — and the context-
-// window skip check always uses the imported ProviderModel's own window.
+// One editable fallback-chain hop. `endpoint` pins this hop to a specific
+// wire kind (chat/messages/responses); null = auto (the provider's default).
 export interface ChainRow {
   providerId: string;
   upstreamModel: string;
   enabled: boolean;
+  endpoint: string | null;
 }
 
 // Short endpoint tag for the list-row chain badges (legacy per-hop endpoint
@@ -28,19 +28,19 @@ export function endpointShort(ep: string): string {
 
 export type Wire = "messages" | "chat" | "responses";
 
-// Per-hop conversion indicator. Every hop routes through the provider's own
-// native format now (no per-hop endpoint pin), so this just compares the
-// client's format against the provider's. Plain text + dot rather than a
-// pill badge — this sits inline in a row of controls, not a standalone chip.
+// Per-hop conversion indicator. When an endpoint override is set, the hop
+// format is the override; otherwise it's the provider's native format.
 export function HopConversionBadge({
   provider,
   modelType,
+  endpoint,
 }: {
   provider: Provider;
   modelType: string;
+  endpoint?: string | null;
 }) {
   const clientFmt: Wire = modelType === "anthropic" ? "messages" : "chat";
-  if (provider.nativeConversion) {
+  if (provider.nativeConversion && !endpoint) {
     return (
       <span
         className="inline-flex min-w-0 items-center gap-1.5 text-xs whitespace-nowrap text-foreground"
@@ -51,7 +51,11 @@ export function HopConversionBadge({
       </span>
     );
   }
-  const hopFmt: Wire = provider.format === "anthropic" ? "messages" : "chat";
+  const nativeFmt: Wire = provider.format === "anthropic" ? "messages" : "chat";
+  const hopFmt: Wire =
+    endpoint === "messages" || endpoint === "chat" || endpoint === "responses"
+      ? endpoint
+      : nativeFmt;
   const converts = clientFmt !== hopFmt;
   return (
     <span

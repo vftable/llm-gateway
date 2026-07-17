@@ -30,7 +30,7 @@ export const DEFAULT_SETTINGS: Settings = {
   exposeExempt: ["claude"],
   allowUnknown: false,
   defaultMaxOutputTokens: 16384,
-  ssePingInterval: 30000,
+  ssePingInterval: 15000,
   requestLogRetentionDays: 30,
   debugLogging: false,
   webToolsEnabled: false,

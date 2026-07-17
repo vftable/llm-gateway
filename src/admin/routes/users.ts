@@ -18,7 +18,7 @@ import { parseUserInput, parseApiKeyInput } from "./parsers";
 import { bad } from "./respond";
 
 export function registerUserRoutes(ctx: RouteCtx): void {
-  const { db, router, r, requireAdmin } = ctx;
+  const { db, router, r, requireAdmin, broadcast } = ctx;
 
   // --- users ---
   r.get("/users", requireAdmin, (_req, res) => res.json(listUsers(db)));
@@ -56,6 +56,7 @@ export function registerUserRoutes(ctx: RouteCtx): void {
       const input = parseApiKeyInput(req.body);
       const key = createApiKey(db, input);
       router.reload();
+      broadcast(["keys", "overview"], "key:create");
       res.status(201).json(key);
     } catch (e) {
       bad(res, e);
@@ -88,6 +89,7 @@ export function registerUserRoutes(ctx: RouteCtx): void {
     if (!deleteApiKey(db, String(req.params.id)))
       return res.status(404).json({ error: { message: "not found" } });
     router.reload();
+    broadcast(["keys", "overview"], "key:delete");
     res.status(204).end();
   });
 }

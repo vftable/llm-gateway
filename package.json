@@ -24,13 +24,15 @@
     "better-sqlite3": "^11.8.1",
     "express": "^4.21.2",
     "https-proxy-agent": "^9.1.0",
-    "socks-proxy-agent": "^10.1.0"
+    "socks-proxy-agent": "^10.1.0",
+    "ws": "^8.21.1"
   },
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.110.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.6",
     "@types/node": "^26.0.0",
+    "@types/ws": "^8.18.1",
     "concurrently": "^9.1.2",
     "openai": "^6.45.0",
     "tsx": "^4.22.4",

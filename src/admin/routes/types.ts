@@ -9,6 +9,9 @@ import type { GatewayRouter } from "../../gateway/router";
 import type { RequestHandler } from "express";
 import type { AuthScheme } from "../../types";
 import type { ModelsFormat } from "../../providers";
+import type { WsTopic } from "../../ws/schema";
+
+export type BroadcastFn = (topics: WsTopic[], source: string) => void;
 
 // Everything a route-registration function needs: the shared db/logger/
 // router the top-level adminRouter() closes over, the router instance to
@@ -19,6 +22,7 @@ export interface RouteCtx {
   router: GatewayRouter;
   r: Router;
   requireAdmin: RequestHandler;
+  broadcast: BroadcastFn;
 }
 
 // Minimal provider shape the connectivity-test / model-discovery probes need

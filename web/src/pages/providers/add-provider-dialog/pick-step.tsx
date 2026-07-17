@@ -26,6 +26,11 @@ const FAMILIES: Family[] = [
   { label: "NVIDIA", brand: "nvidia", ids: new Set(["nvidia-nim"]) },
   { label: "OpenRouter", brand: "openrouter", ids: new Set(["openrouter"]) },
   { label: "Z.ai", brand: "zai", ids: new Set(["glm-coding"]) },
+  {
+    label: "Ollama",
+    brand: "ollama",
+    ids: new Set(["ollama", "ollama-cloud"]),
+  },
   { label: "NewAPI", brand: "newapi", ids: new Set(["newapi"]) },
   { label: "OpenCode", brand: "opencode", ids: new Set(["opencode"]) },
   { label: "Xiaomi", brand: "mimo", ids: new Set(["xiaomi-mimo"]) },

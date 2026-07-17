@@ -28,11 +28,11 @@ const buttonVariants = cva(
         link: "text-primary underline-offset-4 hover:underline",
       },
       size: {
-        default: "h-9 px-4",
+        default: "h-8 px-3.5",
         xs: "h-6 gap-1 rounded-md px-2 text-xs [&_svg:not([class*='size-'])]:size-3",
         sm: "h-7 gap-1 rounded-lg px-2.5 [&_svg:not([class*='size-'])]:size-3.5",
         lg: "h-10 gap-1.5 px-4 text-sm",
-        icon: "h-9 w-9",
+        icon: "h-8 w-8",
         "icon-xs": "h-6 w-6 rounded-md [&_svg:not([class*='size-'])]:size-3",
         "icon-sm": "h-7 w-7 rounded-lg",
         "icon-lg": "h-10 w-10",

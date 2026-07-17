@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "@/lib/api";
 import type { OverviewResponse } from "@/lib/types";
+import { useWsSubscription } from "@/hooks/use-ws";
 import { fmtNum } from "@/lib/utils";
 import {
   PageHeader,
@@ -31,29 +30,14 @@ import { Badge } from "@/components/ui/badge";
 import { ModelIcon, useModelTypes } from "@/components/model-icon";
 
 export default function Dashboard() {
-  const [data, setData] = useState<OverviewResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data } = useWsSubscription<OverviewResponse>("overview");
   const modelTypes = useModelTypes();
-
-  const load = () =>
-    api
-      .overview()
-      .then(setData)
-      .catch((e) => setError(e.message));
-
-  useEffect(() => {
-    load();
-    const t = setInterval(load, 15000);
-    return () => clearInterval(t);
-  }, []);
-
-  if (error) return <EmptyState msg={`error: ${error}`} />;
   if (!data)
     return (
       <div>
         <PageHeader
           title="Overview"
-          desc="Live gateway telemetry — auto-refreshes every 15 seconds"
+          desc="Live gateway telemetry — real-time via WebSocket"
         />
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatGridSkeleton count={4} />
@@ -61,7 +45,7 @@ export default function Dashboard() {
         <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatGridSkeleton count={4} />
         </div>
-        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
           <Card className="lg:col-span-2">
             <CardHeader>
               <Skeleton className="h-4 w-48" />
@@ -83,7 +67,7 @@ export default function Dashboard() {
             </CardContent>
           </Card>
         </div>
-        <Card className="mt-4">
+        <Card className="mt-3">
           <CardHeader>
             <Skeleton className="h-4 w-36" />
           </CardHeader>
@@ -105,7 +89,7 @@ export default function Dashboard() {
     <div>
       <PageHeader
         title="Overview"
-        desc="Live gateway telemetry — auto-refreshes every 15 seconds"
+        desc="Live gateway telemetry — real-time via WebSocket"
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
@@ -141,7 +125,7 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
         {/* Token usage by hour — real-time (last 24h) */}
         <Card className="lg:col-span-2">
           <CardHeader>
@@ -212,7 +196,7 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      <Card className="mt-4">
+      <Card className="mt-3">
         <CardHeader>
           <CardTitle>Provider Load Today</CardTitle>
           <Link

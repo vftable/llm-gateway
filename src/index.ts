@@ -12,6 +12,7 @@ import { getSettings } from "./repo/settings";
 import { initAdminAuth } from "./auth/admin-auth";
 import { GatewayRouter } from "./gateway/router";
 import { createServerApp } from "./server";
+import { createWsServer } from "./ws/server";
 import { Logger } from "./logger";
 import { pruneOldLogs } from "./repo/request-logs";
 
@@ -49,10 +50,24 @@ function main(): void {
 
   const router = new GatewayRouter(db, logger, settings.ssePingInterval);
 
-  const app = createServerApp(db, logger, router, auth, {
-    webDistDir: bootstrap.webDistDir,
-    corsOrigin: bootstrap.corsOrigin,
-  });
+  // Deferred broadcast: the WsHub is created after the http.Server starts,
+  // but the admin routes need the broadcast function at build time. This
+  // closure captures the hub reference once it's available.
+  let wsHub: ReturnType<typeof createWsServer> | null = null;
+  const broadcast: Parameters<typeof createServerApp>[5] = (topics, source) =>
+    wsHub?.broadcast(topics, source);
+
+  const app = createServerApp(
+    db,
+    logger,
+    router,
+    auth,
+    {
+      webDistDir: bootstrap.webDistDir,
+      corsOrigin: bootstrap.corsOrigin,
+    },
+    broadcast,
+  );
 
   logger.info("LLM Gateway starting");
   logger.info("db", { path: bootstrap.dbPath });
@@ -61,6 +76,8 @@ function main(): void {
 
   const server: Server = app.listen(bootstrap.port);
   configureTimeouts(server, logger);
+
+  wsHub = createWsServer(server, db, logger, auth.secret);
 
   // Periodically prune request logs to the configured retention window, then
   // hand freed pages back to the OS so the file doesn't grow monotonically.
@@ -97,6 +114,7 @@ function main(): void {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("shutdown", { signal: sig });
+    wsHub?.shutdown();
     server.close(() => exit(0));
     setTimeout(() => exit(0), 5000).unref();
   };

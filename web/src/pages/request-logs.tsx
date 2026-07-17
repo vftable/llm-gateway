@@ -1,7 +1,8 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useMemo, useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import type { RequestLog, RequestLogDetail } from "@/lib/types";
+import { useWsSubscription } from "@/hooks/use-ws";
 import {
   PageHeader,
   TableSkeleton,
@@ -35,7 +36,6 @@ import {
 const PAGE_SIZE = 50;
 
 export default function RequestLogs() {
-  const [items, setItems] = useState<RequestLog[] | null>(null);
   const [model, setModel] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
   const [page, setPage] = useState(0);
@@ -46,27 +46,25 @@ export default function RequestLogs() {
     setPage(0);
   }, [model, errorsOnly]);
 
-  useEffect(() => {
-    const load = () =>
-      api
-        .requestLogs({
-          limit: PAGE_SIZE,
-          offset: page * PAGE_SIZE,
-          model: model || undefined,
-          error: errorsOnly ? "1" : undefined,
-        })
-        .then(setItems)
-        .catch(() => {});
-    load();
-    const t = setInterval(load, 10000);
-    return () => clearInterval(t);
-  }, [model, errorsOnly, page]);
+  const wsParams = useMemo(
+    () => ({
+      limit: PAGE_SIZE,
+      offset: page * PAGE_SIZE,
+      ...(model ? { model } : {}),
+      ...(errorsOnly ? { error: "1" as const } : {}),
+    }),
+    [model, errorsOnly, page],
+  );
+  const { data: items } = useWsSubscription<RequestLog[]>(
+    "request-logs",
+    wsParams,
+  );
 
   return (
     <div>
       <PageHeader
         title="Request Logs"
-        desc="Per-request activity — auto-refreshes every 10 seconds"
+        desc="Per-request activity — real-time via WebSocket"
         actions={
           <div className="flex items-center gap-3">
             <Input
@@ -311,7 +309,7 @@ const LogRow = memo(function LogRow({
       {open && (
         <TableRow className="hover:bg-transparent">
           <TableCell colSpan={9} className="bg-muted/30 p-0">
-            <div className="grid gap-4 p-4 md:grid-cols-2">
+            <div className="grid gap-3 p-3 md:grid-cols-2">
               <DebugPanel
                 title="Request"
                 subtitle="what the client sent the model"

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { clearToken } from "@/lib/api";
+import { useWsStatus } from "@/hooks/use-ws";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 import {
@@ -99,9 +100,9 @@ const NavItem = React.memo(function NavItem({
       end={item.end}
       onClick={onClick}
       className={cn(
-        "group flex items-center gap-3 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200 ease-in-out",
+        "group relative flex items-center gap-3 overflow-hidden rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-200 ease-in-out",
         active
-          ? "bg-sidebar-accent text-sidebar-accent-foreground"
+          ? "bg-sidebar-accent text-sidebar-accent-foreground before:absolute before:inset-y-1 before:left-0 before:w-0.5 before:rounded-full before:bg-sidebar-primary"
           : "text-sidebar-foreground/60 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
       )}
     >
@@ -337,6 +338,7 @@ function MobileSidebar() {
 
 function TopBar() {
   const [time, setTime] = React.useState(() => formatTime());
+  const { status } = useWsStatus();
 
   React.useEffect(() => {
     const interval = setInterval(() => setTime(formatTime()), 1000);
@@ -350,8 +352,21 @@ function TopBar() {
       <div className="flex items-center gap-4 text-xs text-muted-foreground">
         <span className="hidden sm:inline font-mono tabular-nums">{time}</span>
         <span className="flex items-center gap-1.5">
-          <span className="h-1.5 w-1.5 rounded-full bg-success" />
-          operational
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              status === "connected"
+                ? "bg-success"
+                : status === "connecting"
+                  ? "bg-amber-500 animate-pulse"
+                  : "bg-destructive",
+            )}
+          />
+          {status === "connected"
+            ? "connected"
+            : status === "connecting"
+              ? "connecting…"
+              : "disconnected"}
         </span>
       </div>
       <ThemeToggle />

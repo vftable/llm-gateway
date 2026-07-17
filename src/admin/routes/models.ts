@@ -71,7 +71,7 @@ async function autoCreateImportedModels(
 }
 
 export function registerModelRoutes(ctx: RouteCtx): void {
-  const { db, logger, router, r, requireAdmin } = ctx;
+  const { db, logger, router, r, requireAdmin, broadcast } = ctx;
 
   // --- models (with fallback chain) ---
   r.get("/models", requireAdmin, (_req, res) => res.json(listModels(db)));
@@ -82,6 +82,7 @@ export function registerModelRoutes(ctx: RouteCtx): void {
       await autoCreateImportedModels(db, input);
       const m = createModel(db, input);
       router.reload();
+      broadcast(["models", "overview"], "model:create");
       res.status(201).json(m);
     } catch (e) {
       bad(res, e);
@@ -109,6 +110,7 @@ export function registerModelRoutes(ctx: RouteCtx): void {
       const m = updateModel(db, String(req.params.id), input);
       if (!m) return res.status(404).json({ error: { message: "not found" } });
       router.reload();
+      broadcast(["models", "overview"], "model:update");
       res.json(m);
     } catch (e) {
       bad(res, e);
@@ -119,6 +121,7 @@ export function registerModelRoutes(ctx: RouteCtx): void {
     if (!deleteModel(db, String(req.params.id)))
       return res.status(404).json({ error: { message: "not found" } });
     router.reload();
+    broadcast(["models", "overview"], "model:delete");
     res.status(204).end();
   });
 

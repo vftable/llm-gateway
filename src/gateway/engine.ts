@@ -952,7 +952,7 @@ export class ForwardingEngine {
     // A tiny head-tap timestamps each upstream chunk without altering bytes (so
     // the usageObserver still sees identical provider-native SSE).
     let lastActivity = Date.now();
-    const headTap = new PassThrough();
+    const headTap = new PassThrough({ highWaterMark: 0 });
     headTap.on("data", () => {
       lastActivity = Date.now();
     });
@@ -1024,7 +1024,7 @@ export class ForwardingEngine {
     // control when `res` ends. A client disconnect is still propagated back to
     // the upstream: res 'close' destroys clientSink, which errors the pipeline
     // and tears down `upRes` (same teardown guarantee as piping to res directly).
-    const clientSink = new PassThrough();
+    const clientSink = new PassThrough({ highWaterMark: 0 });
     clientSink.pipe(res, { end: false });
     const onClientClose = () => {
       if (!clientSink.destroyed)
@@ -1216,7 +1216,7 @@ export class ForwardingEngine {
         /* client already gone */
       }
     }
-    const clientSink = new PassThrough();
+    const clientSink = new PassThrough({ highWaterMark: 0 });
     clientSink.pipe(res, { end: false });
     const onClientClose = () => {
       if (!clientSink.destroyed)

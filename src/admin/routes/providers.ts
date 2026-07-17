@@ -40,7 +40,7 @@ import { buildUsageReport, buildUsageReports } from "./usage-report";
 import { bad } from "./respond";
 
 export function registerProviderRoutes(ctx: RouteCtx): void {
-  const { db, logger, router, r, requireAdmin } = ctx;
+  const { db, logger, router, r, requireAdmin, broadcast } = ctx;
 
   // --- providers ---
   // Attach importedModelCount (rows in provider_models) so the card badge shows
@@ -68,6 +68,7 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
       const input = parseProviderInput(req.body, true);
       const p = createProvider(db, input);
       router.reload();
+      broadcast(["providers", "overview"], "provider:create");
       res.status(201).json(p);
     } catch (e) {
       bad(res, e);
@@ -86,6 +87,7 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
       const p = updateProvider(db, id, parseProviderInput(req.body));
       if (!p) return res.status(404).json({ error: { message: "not found" } });
       router.reload();
+      broadcast(["providers", "overview"], "provider:update");
       res.json(p);
     } catch (e) {
       bad(res, e);
@@ -96,6 +98,7 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
     if (!deleteProvider(db, String(req.params.id)))
       return res.status(404).json({ error: { message: "not found" } });
     router.reload();
+    broadcast(["providers", "models", "overview"], "provider:delete");
     res.status(204).end();
   });
 
@@ -345,6 +348,7 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
               : str(b.notes),
       });
       router.reload();
+      broadcast(["providers", "models"], "provider-model:update");
       res.json(pm);
     } catch (e) {
       bad(res, e);
@@ -358,6 +362,7 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
       return res.status(404).json({ error: { message: "not found" } });
     deleteProviderModel(db, mid);
     router.reload();
+    broadcast(["providers", "models"], "provider-model:delete");
     res.status(204).end();
   });
 

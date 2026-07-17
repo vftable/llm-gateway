@@ -33,6 +33,7 @@ import nvidiaSvg from "@lobehub/icons-static-svg/icons/nvidia.svg?raw";
 import openrouterSvg from "@lobehub/icons-static-svg/icons/openrouter.svg?raw";
 import opencodeSvg from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
 import newapiSvg from "@lobehub/icons-static-svg/icons/newapi.svg?raw";
+import ollamaSvg from "@lobehub/icons-static-svg/icons/ollama.svg?raw";
 
 // Ordered: more specific patterns before broader ones (e.g. "gemini" before
 // a generic "google", "kimi" before "k2").
@@ -58,6 +59,7 @@ const BRAND_RULES: Array<{ pattern: RegExp; svg: string; label: string }> = [
   { pattern: /qwen|qwq|qvq/i, svg: qwenSvg, label: "Qwen" },
   { pattern: /mimo|xiaomi/i, svg: mimoSvg, label: "MiMo" },
   { pattern: /grok|xai/i, svg: grokSvg, label: "Grok" },
+  { pattern: /ollama/i, svg: ollamaSvg, label: "Ollama" },
   { pattern: /llama|meta\b/i, svg: metaSvg, label: "Meta" },
   { pattern: /command-?r|cohere|aya\b/i, svg: cohereSvg, label: "Cohere" },
   { pattern: /phi-?\d|microsoft/i, svg: microsoftSvg, label: "Microsoft" },
@@ -98,6 +100,7 @@ const PROVIDER_BRANDS: Record<string, { svg: string; label: string }> = {
   gemini: { svg: geminiSvg, label: "Gemini" },
   zai: { svg: zaiSvg, label: "Z.ai" },
   newapi: { svg: newapiSvg, label: "NewAPI" },
+  ollama: { svg: ollamaSvg, label: "Ollama" },
   // Generic-adapter catalog ids — ProviderCard passes provider.catalogId
   // straight through as `brand`, so these need entries too (a custom-named
   // "openai-compatible"/"anthropic-compatible" provider must still show its

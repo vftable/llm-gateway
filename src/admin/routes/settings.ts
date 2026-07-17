@@ -17,7 +17,7 @@ import type { RouteCtx } from "./types";
 import { bad } from "./respond";
 
 export function registerSettingsRoutes(ctx: RouteCtx, auth: AdminAuth): void {
-  const { db, router, r, requireAdmin } = ctx;
+  const { db, router, r, requireAdmin, broadcast } = ctx;
 
   // --- auth ---
   r.post("/auth/login", (req, res) => {
@@ -99,6 +99,7 @@ export function registerSettingsRoutes(ctx: RouteCtx, auth: AdminAuth): void {
       patch.webProviderApiKey = body.webProviderApiKey;
     saveSettings(db, patch);
     router.reload();
+    broadcast(["settings", "overview"], "settings:update");
     res.json(publicSettings());
   });
 

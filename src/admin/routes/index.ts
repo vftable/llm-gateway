@@ -13,22 +13,32 @@ import type { Logger } from "../../logger";
 import type { GatewayRouter } from "../../gateway/router";
 import type { AdminAuth } from "../../auth/admin-auth";
 import { adminAuthMiddleware } from "../../auth/admin-auth";
-import type { RouteCtx } from "./types";
+import type { RouteCtx, BroadcastFn } from "./types";
 import { registerSettingsRoutes } from "./settings";
 import { registerProviderRoutes } from "./providers";
 import { registerModelRoutes } from "./models";
 import { registerUserRoutes } from "./users";
 import { registerUsageRoutes } from "./usage";
 
+const noop: BroadcastFn = () => {};
+
 export function adminRouter(
   db: DB,
   logger: Logger,
   router: GatewayRouter,
   auth: AdminAuth,
+  broadcast?: BroadcastFn,
 ): Router {
   const r = Router();
   const requireAdmin = adminAuthMiddleware(auth.secret);
-  const ctx: RouteCtx = { db, logger, router, r, requireAdmin };
+  const ctx: RouteCtx = {
+    db,
+    logger,
+    router,
+    r,
+    requireAdmin,
+    broadcast: broadcast ?? noop,
+  };
 
   registerSettingsRoutes(ctx, auth);
   registerProviderRoutes(ctx);

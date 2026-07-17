@@ -1,7 +1,8 @@
-import { Fragment, memo, useCallback, useEffect, useState } from "react";
+import { Fragment, memo, useState } from "react";
 import { ChevronDown, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
+import { useWsSubscription } from "@/hooks/use-ws";
 import type {
   FullBreakdownRow,
   ModelResolutionRow,
@@ -44,8 +45,11 @@ const BREAKDOWN_PAGE_SIZE = 15;
 const KEYS_PAGE_SIZE = 10;
 
 export default function Usage() {
-  const [data, setData] = useState<UsageResponse | null>(null);
-  const [rows, setRows] = useState<FullBreakdownRow[]>([]);
+  const { data } = useWsSubscription<UsageResponse>("usage");
+  const { data: breakdownData } = useWsSubscription<{
+    rows: FullBreakdownRow[];
+  }>("usage:breakdown");
+  const rows = breakdownData?.rows ?? [];
   const [breakdownPage, setBreakdownPage] = useState(0);
   const [keysPage, setKeysPage] = useState(0);
   const [modelQuery, setModelQuery] = useState("");
@@ -53,22 +57,6 @@ export default function Usage() {
     null,
   );
   const modelTypes = useModelTypes();
-
-  const loadAll = useCallback(() => {
-    api
-      .usage()
-      .then(setData)
-      .catch(() => {});
-    api
-      .usageBreakdown()
-      .then((r) => setRows(r.rows))
-      .catch(() => {});
-  }, []);
-  useEffect(() => {
-    loadAll();
-    const t = setInterval(loadAll, 20000);
-    return () => clearInterval(t);
-  }, [loadAll]);
 
   // "If a user uses model X, what provider did it resolve to?" lookup.
   const resolve = (m: string) => {
@@ -92,7 +80,7 @@ export default function Usage() {
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <StatGridSkeleton count={4} />
         </div>
-        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
           <Card className="self-start lg:col-span-1">
             <CardHeader>
               <Skeleton className="h-4 w-32" />
@@ -114,7 +102,7 @@ export default function Usage() {
             </CardContent>
           </Card>
         </div>
-        <Card className="mt-4">
+        <Card className="mt-3">
           <CardHeader>
             <Skeleton className="h-4 w-56" />
           </CardHeader>
@@ -167,7 +155,7 @@ export default function Usage() {
         <Stat label="Resolved requests" value={fmtNum(rows.length)} />
       </div>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
         {/* self-start keeps the chart at its natural height instead of being
             stretched to match the (taller, expandable) keys card in the same
             grid row — which otherwise inflated the chart and never shrank back. */}
@@ -215,7 +203,11 @@ export default function Usage() {
                 </TableHeader>
                 <TableBody>
                   {visibleKeys.map((k) => (
-                    <KeyUsageRow key={k.apiKeyId} row={k} onChanged={loadAll} />
+                    <KeyUsageRow
+                      key={k.apiKeyId}
+                      row={k}
+                      onChanged={() => {}}
+                    />
                   ))}
                 </TableBody>
               </Table>
@@ -232,7 +224,7 @@ export default function Usage() {
       </div>
 
       {/* Per-(key, model, provider) breakdown — "what did each request resolve to" */}
-      <Card className="mt-4">
+      <Card className="mt-3">
         <CardHeader>
           <CardTitle>Resolution by Key, Model & Provider</CardTitle>
           <CardAction>
@@ -308,7 +300,7 @@ export default function Usage() {
       </Card>
 
       {/* Model resolution lookup — "gpt-5.5 resolved to which provider + tokens" */}
-      <Card className="mt-4">
+      <Card className="mt-3">
         <CardHeader>
           <CardTitle>Model Resolver</CardTitle>
         </CardHeader>

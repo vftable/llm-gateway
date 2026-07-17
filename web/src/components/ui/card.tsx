@@ -8,7 +8,7 @@ function Card({ className, ...props }: React.ComponentProps<"div">) {
       className={cn(
         // Solid bg on purpose: cards scroll over a static background, so a
         // backdrop blur here would repaint every frame for no visible effect.
-        "flex flex-col gap-4 overflow-visible rounded-lg border border-border bg-card p-5 text-base text-card-foreground",
+        "flex flex-col gap-3 overflow-visible rounded-lg border border-border bg-card p-4 text-base text-card-foreground",
         className,
       )}
       {...props}
@@ -81,7 +81,7 @@ function CardFooter({ className, ...props }: React.ComponentProps<"div">) {
         // onto a second line instead of overflowing — the parent Card is
         // overflow-visible, so an unwrapped row would bleed past the card's
         // edge (visually floating outside it) rather than clip or wrap.
-        "flex flex-wrap items-center gap-y-2 rounded-b-lg border-t bg-muted/50 -mx-5 -mb-5 mt-auto px-5 py-3",
+        "flex flex-wrap items-center gap-y-2 rounded-b-lg border-t bg-muted/50 -mx-4 -mb-4 mt-auto px-4 py-2.5",
         className,
       )}
       {...props}

@@ -169,7 +169,7 @@ export const newapi = new NewApiAdapter({
     "OpenAI-compatible provider with credit-based billing (1M credits = $1 default).",
   brand: "newapi",
   defaults: {
-    endpoints: [WireKind.Chat],
+    endpoints: [WireKind.Chat, WireKind.Messages, WireKind.Responses],
     authScheme: "bearer",
     nativeConversion: false,
   },

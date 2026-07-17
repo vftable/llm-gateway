@@ -69,6 +69,11 @@ const FAMILY_RULES: Array<{
     match: (p) => p.catalogId === "glm-coding",
   },
   {
+    label: "Ollama",
+    brand: "ollama",
+    match: (p) => p.catalogId === "ollama" || p.catalogId === "ollama-cloud",
+  },
+  {
     label: "NewAPI",
     brand: "newapi",
     match: (p) => p.catalogId === "newapi",

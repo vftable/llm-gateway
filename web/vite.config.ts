@@ -20,6 +20,7 @@ export default defineConfig({
       "/api": "http://127.0.0.1:8787",
       "/v1": "http://127.0.0.1:8787",
       "/health": "http://127.0.0.1:8787",
+      "/ws": { target: "ws://127.0.0.1:8787", ws: true },
     },
   },
   build: {
