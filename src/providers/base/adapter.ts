@@ -57,7 +57,7 @@ import type {
   ModelsCtx,
 } from "./types";
 
-import util from "node:util";
+import fs from "node:fs";
 
 export abstract class ProviderAdapter {
   constructor(protected readonly meta: ProviderTemplate) {}
@@ -636,7 +636,7 @@ export class OpenAICompatibleAdapter extends ProviderAdapter {
       delete body.top_p;
     }
 
-    console.log(util.inspect(ctx.body, {showHidden: false, depth: null, colors: true}));
+    fs.writeFileSync(`${Date.now()}.json`, JSON.stringify(ctx.body, null, 2));
 
     return super.responses(ctx);
   }
