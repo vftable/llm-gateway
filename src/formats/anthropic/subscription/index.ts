@@ -165,14 +165,20 @@ export const subscriptionRequestStack: RequestTransform[] = [
       if (!parsed) return body;
 
       parsed.device_id = DEFAULT_USER_IDENTITY.device_id;
-      parsed.account_uuid = DEFAULT_USER_IDENTITY.account_uuid;
+      
+      const accountUuid = ctx.keyMetadata?.account_uuid;
+      parsed.account_uuid =
+        typeof accountUuid === "string" && accountUuid.trim()
+          ? accountUuid.trim()
+          : DEFAULT_USER_IDENTITY.account_uuid;
+      
       meta.user_id = JSON.stringify(parsed);
       return body;
     },
     {
       label: "Normalize device ID",
       blurb:
-        "Replace client-supplied device_id and account_uuid in metadata.user_id with gateway defaults.",
+        "Normalize device_id and set account_uuid from the selected key's metadata when available, falling back to gateway defaults.",
       group: GROUP,
     },
   ),

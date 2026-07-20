@@ -38,7 +38,10 @@ class ClaudeCodeAdapter extends AnthropicCompatibleAdapter {
   messages(ctx: BuildCtx): BuiltRequest {
     const built = super.messages(ctx);
     built.url = withBetaQuery(built.url);
-    // console.log(JSON.stringify(ctx, null, 2), JSON.stringify(built, null, 2));
+    console.log(
+      "[claude-code] outbound Messages body:\n" +
+        JSON.stringify(ctx.body, null, 2),
+    );
     return built;
   }
 }
