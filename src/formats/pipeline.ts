@@ -69,6 +69,8 @@ export interface TransformCtx {
    *  provider-adapters.md) reads it here instead of parsing it back out of a
    *  header. Never log or echo this value. */
   apiKey?: string | null;
+  /** Structured metadata for the selected provider key. Never log wholesale. */
+  keyMetadata?: Readonly<Record<string, string>>;
 
   // --- request-side rewrite side-channel ------------------------------------
   // A REQUEST transform may rewrite the outbound URL + headers (not just the

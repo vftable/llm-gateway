@@ -6,24 +6,25 @@ import type { Database as DB } from "better-sqlite3";
 import type { Provider, ProviderUsageReport } from "../../types";
 import { adapterForProvider } from "../../providers";
 import { listProviders } from "../../repo/providers";
+import { listProviderKeys } from "../../repo/provider-keys";
 import { maskKey, seedFromKey, makeUsageCtx } from "./provider-probe";
 
 // Build the usage report for ONE provider by asking its adapter for each key's
-// windows (active keys from apiKeys, operator-disabled from disabledApiKeys). The
-// adapter keyUsage() is async (a real one queries the provider's usage endpoint),
-// so we await every key in parallel; the raw key is passed to the adapter but
-// masked before it reaches the response. `dummy` defaults to false; a key with no
-// data reports `unavailable` (and may carry a message). A failing adapter query
-// degrades to an unavailable key with the error message rather than failing the
-// whole report.
+// windows (keys read from provider_keys table). The adapter keyUsage() is async
+// (a real one queries the provider's usage endpoint), so we await every key in
+// parallel; the raw key is passed to the adapter but masked before it reaches
+// the response.
 export async function buildUsageReport(
   p: Provider,
+  db: DB,
 ): Promise<ProviderUsageReport> {
   const adapter = adapterForProvider(p);
-  const rows = [
-    ...p.apiKeys.map((k) => ({ key: k, enabled: true })),
-    ...(p.disabledApiKeys ?? []).map((k) => ({ key: k, enabled: false })),
-  ];
+  const providerKeys = listProviderKeys(db, p.id);
+  const rows = providerKeys.map((k) => ({
+    key: k.credential,
+    enabled: k.enabled,
+    metadata: k.metadata,
+  }));
 
   // Visibility gate: if the adapter doesn't report usage at all, skip the per-key
   // queries and return an empty, unsupported report. The dashboard drops these;
@@ -33,6 +34,7 @@ export async function buildUsageReport(
   const supported = adapter.supportsKeyUsage({
     provider: p,
     apiKey: first?.key ?? "",
+    keyMetadata: first?.metadata ?? {},
     mask: first ? maskKey(first.key) : "",
     enabled: first?.enabled ?? true,
     seed: first ? seedFromKey(first.key) : 0,
@@ -52,13 +54,14 @@ export async function buildUsageReport(
 
   let anyDummy = false;
   const keys = await Promise.all(
-    rows.map(async ({ key, enabled }) => {
+    rows.map(async ({ key, enabled, metadata }) => {
       const mask = maskKey(key);
       try {
         const { windows, expiresAt, dummy, unavailable, message } =
           await adapter.keyUsage({
             provider: p,
             apiKey: key,
+            keyMetadata: metadata,
             mask,
             enabled,
             seed: seedFromKey(key),
@@ -105,7 +108,7 @@ export async function buildUsageReports(
   db: DB,
 ): Promise<ProviderUsageReport[]> {
   const reports = await Promise.all(
-    listProviders(db).map((p) => buildUsageReport(p)),
+    listProviders(db).map((p) => buildUsageReport(p, db)),
   );
   return reports.filter((r) => r.supported);
 }

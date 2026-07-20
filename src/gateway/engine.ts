@@ -37,6 +37,10 @@ import {
 } from "../providers";
 import { getProviderModel } from "../repo/provider-models";
 import {
+  getProviderKeyByHash,
+  listEnabledCredentials,
+} from "../repo/provider-keys";
+import {
   modelTransformBags,
   dropOverriddenDefaults,
 } from "../formats/transforms";
@@ -53,7 +57,11 @@ import {
   type TransformCtx,
 } from "../formats/pipeline";
 import { collectDefaults } from "../formats/transforms/defaults";
-import { SsePingKeepAlive } from "./sse-ping";
+import {
+  ANTHROPIC_PING_EVENT,
+  ANTHROPIC_PING_INTERVAL_MS,
+  SsePingKeepAlive,
+} from "./sse-ping";
 import { SseUsageObserver } from "./sse-usage";
 import { requestJson, type JsonResponse } from "./http";
 import { detectWebTools } from "../web-tools/tools";
@@ -61,7 +69,7 @@ import { runWebToolLoop } from "../web-tools/loop";
 import { getWebProvider, DEFAULT_PROVIDER } from "../web-tools/backends";
 import { chatRequestToMessages } from "../formats/converters/chat-messages";
 import { stripInvisible } from "../utils";
-import { readResponseUsage, readMaxOutputTokens } from "../formats/tokens";
+import { readResponseUsage } from "../formats/tokens";
 import { listProviders } from "../repo/providers";
 import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
 import { insertRequestLog } from "../repo/request-logs";
@@ -120,8 +128,12 @@ export class ForwardingEngine {
   // recordFailure/markAuthFailed — the probe itself does its own HTTP call and
   // reports its own status, not through the key-health feedback loop. Returns
   // null only when the provider has no keys at all.
-  pickKeyForTest(provider: Provider, model: string | null): KeyPick | null {
-    return this.keyHealth.select(provider, model, new Set());
+  pickKeyForTest(
+    providerId: string,
+    keys: string[],
+    model: string | null,
+  ): KeyPick | null {
+    return this.keyHealth.select(providerId, keys, model, new Set());
   }
 
   // --- chain + route --------------------------------------------------------
@@ -371,27 +383,6 @@ export class ForwardingEngine {
     let first: ChainEntry | null = null;
     for (const entry of chain) {
       if (!first) first = entry;
-      // Safe fallback: if this hop advertises a context window this request
-      // would exceed, skip it and try the next provider rather than sending an
-      // oversized request that will fail upstream.
-      const maxOut =
-        readMaxOutputTokens(ctx.requestBody) ??
-        ctx.resolvedModel?.maxOutputTokens ??
-        0;
-      if (
-        entry.contextWindow &&
-        entry.contextWindow > 0 &&
-        ctx.inputTokens + maxOut > entry.contextWindow
-      ) {
-        lastReason = `hop context window ${entry.contextWindow} < projected ${ctx.inputTokens + maxOut}`;
-        this.logger.warn("context_skip", {
-          provider: entry.provider.id,
-          model: entry.upstreamModel,
-          hopContextWindow: entry.contextWindow,
-          projected: ctx.inputTokens + maxOut,
-        });
-        continue; // fall through to the next hop
-      }
       let route: Route;
       try {
         route = this.buildRoute(ctx.clientPath, entry, ctx.reqId, ctx.alias);
@@ -418,17 +409,22 @@ export class ForwardingEngine {
       // Attempt budget: at least the provider's configured retries, but widened
       // so a multi-key provider can fail a rate-limited/auth-failed key over to
       // a healthy one within this request (bounded by the key count).
-      const usable = this.keyHealth.usableCount(entry.provider);
+      const providerKeys = listEnabledCredentials(this.db, entry.provider.id);
+      const usable = this.keyHealth.usableCount(
+        entry.provider.id,
+        providerKeys,
+      );
       const attempts = Math.max(
         1,
         entry.provider.retryAttempts,
-        Math.min(usable || 1, entry.provider.apiKeys.length || 1),
+        Math.min(usable || 1, providerKeys.length || 1),
       );
       const tried = new Set<string>();
       for (let attempt = 1; attempt <= attempts; attempt++) {
         if (res.headersSent || res.writableEnded) return;
         const pick = this.keyHealth.select(
-          entry.provider,
+          entry.provider.id,
+          providerKeys,
           entry.upstreamModel,
           tried,
         );
@@ -573,9 +569,14 @@ export class ForwardingEngine {
     // header from and the build phase will separately receive as
     // BuildCtx.apiKey — see TransformCtx.headers's/apiKey's doc comments.
     const key = pick?.key ?? null;
+    const keyMetadata = pick
+      ? (getProviderKeyByHash(this.db, provider.id, pick.keyHash)?.metadata ??
+        {})
+      : {};
     const attemptCtx: TransformCtx = {
       ...route.xctx,
       apiKey: key,
+      keyMetadata,
       headers: this.buildHeaders(req, provider, key),
       urlOverride: undefined,
     };
@@ -619,6 +620,7 @@ export class ForwardingEngine {
         model: upstreamModel,
         body: converted,
         apiKey: key,
+        keyMetadata,
         clientFmt: route.clientFmt,
         providerFmt: route.providerFmt,
         endpointKind: route.endpointKind,
@@ -837,7 +839,7 @@ export class ForwardingEngine {
         debugResponse: usage.debugResponse ?? null,
       };
     }
-    this.pipeThrough(upRes, res, status, headers);
+    this.pipeThrough(upRes, res, status, headers, route.clientFmt);
     return {
       committed: true,
       status,
@@ -923,8 +925,14 @@ export class ForwardingEngine {
     // response text + tool calls — still per-event, never buffering the stream.
     const usageObserver = new SseUsageObserver({ capture: ctx.debug });
 
-    const ping =
-      this.ssePingInterval > 0
+    const anthropicClient = route.clientFmt === "messages";
+    const ping = anthropicClient
+      ? new SsePingKeepAlive({
+          interval: ANTHROPIC_PING_INTERVAL_MS,
+          pingMessage: ANTHROPIC_PING_EVENT,
+          idleOnly: false,
+        })
+      : this.ssePingInterval > 0
         ? new SsePingKeepAlive({ interval: this.ssePingInterval })
         : null;
 
@@ -933,14 +941,12 @@ export class ForwardingEngine {
     );
     if (!res.headersSent) res.writeHead(status, out);
 
-    // Prime the stream: write a ping the instant the SSE response opens, before
-    // the upstream's first token. The longest idle gap on a streaming request is
-    // the model's time-to-first-token; a client/proxy idle timer that starts now
-    // would otherwise fire before any byte arrives. (The ping stage keeps pinging
-    // on the interval thereafter.) SSE comment lines are ignored by clients.
+    // Emit immediately once the upstream request has been accepted and the
+    // client-facing stream is open. Messages clients receive Anthropic's named
+    // ping event; other SSE dialects retain the generic comment keepalive.
     if (ping) {
       try {
-        res.write(": ping\n\n");
+        res.write(anthropicClient ? ANTHROPIC_PING_EVENT : ": ping\n\n");
       } catch {
         /* client already gone; the pipeline below will settle */
       }
@@ -1173,6 +1179,7 @@ export class ForwardingEngine {
     res: Response,
     status: number,
     headers: IncomingMessage["headers"],
+    clientFmt: Route["clientFmt"],
   ): void {
     const out = filteredHeaders(headers);
     res.on("error", (err: Error) =>
@@ -1181,8 +1188,14 @@ export class ForwardingEngine {
     if (!res.headersSent) res.writeHead(status, out);
     const ct = String(out["content-type"] || "").toLowerCase();
     const isSse = ct.includes("text/event-stream");
-    const ping =
-      isSse && this.ssePingInterval > 0
+    const anthropicClient = isSse && clientFmt === "messages";
+    const ping = anthropicClient
+      ? new SsePingKeepAlive({
+          interval: ANTHROPIC_PING_INTERVAL_MS,
+          pingMessage: ANTHROPIC_PING_EVENT,
+          idleOnly: false,
+        })
+      : isSse && this.ssePingInterval > 0
         ? new SsePingKeepAlive({ interval: this.ssePingInterval })
         : null;
 
@@ -1211,7 +1224,7 @@ export class ForwardingEngine {
 
     if (ping) {
       try {
-        res.write(": ping\n\n");
+        res.write(anthropicClient ? ANTHROPIC_PING_EVENT : ": ping\n\n");
       } catch {
         /* client already gone */
       }
@@ -1387,8 +1400,18 @@ export class ForwardingEngine {
     // Health-aware key pick for the (non-streaming) web-tool turn. Each turn is
     // a fresh selection so a rate-limited/auth-failed key is skipped. Picked up
     // front so the builder sees the selected key.
-    const pick = this.keyHealth.select(provider, upstreamModel, new Set());
+    const turnKeys = listEnabledCredentials(this.db, provider.id);
+    const pick = this.keyHealth.select(
+      provider.id,
+      turnKeys,
+      upstreamModel,
+      new Set(),
+    );
     const key = pick?.key ?? null;
+    const keyMetadata = pick
+      ? (getProviderKeyByHash(this.db, provider.id, pick.keyHash)?.metadata ??
+        {})
+      : {};
 
     // Convert Messages -> provider format (via the ordered request stages), force
     // non-streaming, stamp model, then let the adapter build the final request.
@@ -1399,6 +1422,7 @@ export class ForwardingEngine {
     const attemptCtx: TransformCtx = {
       ...route.xctx,
       apiKey: key,
+      keyMetadata,
       headers: this.buildHeaders(req, provider, key),
       urlOverride: undefined,
     };
@@ -1424,6 +1448,7 @@ export class ForwardingEngine {
         model: upstreamModel,
         body: converted,
         apiKey: key,
+        keyMetadata,
         clientFmt: route.clientFmt,
         providerFmt: route.providerFmt,
         endpointKind: route.endpointKind,

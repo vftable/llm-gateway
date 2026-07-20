@@ -15,7 +15,6 @@
 
 import crypto from "crypto";
 import type { Database as DB } from "better-sqlite3";
-import type { Provider } from "../types";
 
 // HTTP statuses that mark a key rate-limited / auth-failed. (Retryable statuses
 // live in the engine; these two sets drive key health specifically.)
@@ -157,19 +156,19 @@ export class KeyHealthStore {
   // Choose a key for this attempt. Returns null only when the provider has no
   // keys at all (a keyless provider still routes — the engine sends no auth).
   select(
-    provider: Provider,
+    providerId: string,
+    keys: string[],
     model: string | null,
     tried: Set<string>,
   ): KeyPick | null {
-    const keys = provider.apiKeys;
     if (!keys.length) return null;
-    this.ensureLoaded(provider.id);
+    this.ensureLoaded(providerId);
     const now = this.now();
     const hashes = keys.map(hashKey);
     const idx = keys.map((_, i) => i);
 
     const isFresh = (i: number) => {
-      const h = this.getHealth(provider.id, hashes[i]);
+      const h = this.getHealth(providerId, hashes[i]);
       return (
         !tried.has(hashes[i]) && !h.authFailed && h.rateLimitedUntil <= now
       );
@@ -179,12 +178,11 @@ export class KeyHealthStore {
     if (fresh.length) {
       if (model) {
         const proven = fresh.filter((i) =>
-          this.affinity.get(this.hk(provider.id, hashes[i]))?.has(model),
+          this.affinity.get(this.hk(providerId, hashes[i]))?.has(model),
         );
-        if (proven.length)
-          return this.rrPick(provider.id, proven, keys, hashes);
+        if (proven.length) return this.rrPick(providerId, proven, keys, hashes);
       }
-      return this.rrPick(provider.id, fresh, keys, hashes);
+      return this.rrPick(providerId, fresh, keys, hashes);
     }
 
     // No fresh key: try an untried non-auth-failed one (may be cooling down),
@@ -192,12 +190,12 @@ export class KeyHealthStore {
     const untried = idx.filter(
       (i) =>
         !tried.has(hashes[i]) &&
-        !this.getHealth(provider.id, hashes[i]).authFailed,
+        !this.getHealth(providerId, hashes[i]).authFailed,
     );
     if (untried.length) {
       const best = untried.reduce((a, b) =>
-        this.getHealth(provider.id, hashes[a]).rateLimitedUntil <=
-        this.getHealth(provider.id, hashes[b]).rateLimitedUntil
+        this.getHealth(providerId, hashes[a]).rateLimitedUntil <=
+        this.getHealth(providerId, hashes[b]).rateLimitedUntil
           ? a
           : b,
       );
@@ -206,10 +204,10 @@ export class KeyHealthStore {
 
     // Everything tried or auth-failed: prefer any non-auth-failed, else any.
     const nonAuth = idx.filter(
-      (i) => !this.getHealth(provider.id, hashes[i]).authFailed,
+      (i) => !this.getHealth(providerId, hashes[i]).authFailed,
     );
     const pool = nonAuth.length ? nonAuth : idx;
-    return this.rrPick(provider.id, pool, keys, hashes);
+    return this.rrPick(providerId, pool, keys, hashes);
   }
 
   // Round-robin pick: advance a per-provider cursor over the full key list and
@@ -317,12 +315,12 @@ export class KeyHealthStore {
   // How many keys are currently usable (not auth-failed, not cooling down).
   // Used by the engine to bound per-provider attempts so a rate-limited key can
   // fail over to a healthy one within a single request.
-  usableCount(provider: Provider): number {
-    if (!provider.apiKeys.length) return 0;
-    this.ensureLoaded(provider.id);
+  usableCount(providerId: string, keys: string[]): number {
+    if (!keys.length) return 0;
+    this.ensureLoaded(providerId);
     const now = this.now();
-    return provider.apiKeys.filter((key) => {
-      const h = this.getHealth(provider.id, hashKey(key));
+    return keys.filter((key) => {
+      const h = this.getHealth(providerId, hashKey(key));
       return !h.authFailed && h.rateLimitedUntil <= now;
     }).length;
   }

@@ -9,12 +9,15 @@ import {
 import {
   createApiKey,
   deleteApiKey,
-  getApiKeyFull,
   listApiKeys,
   updateApiKey,
 } from "../../repo/api-keys";
 import type { RouteCtx } from "./types";
-import { parseUserInput, parseApiKeyInput } from "./parsers";
+import {
+  parseUserInput,
+  parseApiKeyInput,
+  parseBatchApiKeyOps,
+} from "./parsers";
 import { bad } from "./respond";
 
 export function registerUserRoutes(ctx: RouteCtx): void {
@@ -63,14 +66,6 @@ export function registerUserRoutes(ctx: RouteCtx): void {
     }
   });
 
-  // Reveal the full key value (self-hosted admin tool — operator's own keys).
-  r.get("/api-keys/:id/reveal", requireAdmin, (req, res) => {
-    const full = getApiKeyFull(db, String(req.params.id));
-    if (full == null)
-      return res.status(404).json({ error: { message: "not found" } });
-    res.json({ keyFull: full });
-  });
-
   r.put("/api-keys/:id", requireAdmin, (req, res) => {
     try {
       const k = updateApiKey(
@@ -91,5 +86,69 @@ export function registerUserRoutes(ctx: RouteCtx): void {
     router.reload();
     broadcast(["keys", "overview"], "key:delete");
     res.status(204).end();
+  });
+
+  // --- api keys batch ---
+  r.post("/api-keys/batch", requireAdmin, (req, res) => {
+    try {
+      const ops = parseBatchApiKeyOps(req.body);
+      const result = {
+        created: [] as Array<ReturnType<typeof createApiKey>>,
+        updated: [] as Array<NonNullable<ReturnType<typeof updateApiKey>>>,
+        deleted: 0,
+        enabled: 0,
+        disabled: 0,
+        errors: [] as Array<{ op: string; id?: string; detail: string }>,
+      };
+
+      const tx = db.transaction(() => {
+        if (ops.create) {
+          for (const input of ops.create) {
+            try {
+              result.created.push(createApiKey(db, input));
+            } catch (e) {
+              result.errors.push({
+                op: "create",
+                detail: (e as Error).message,
+              });
+            }
+          }
+        }
+        if (ops.update) {
+          for (const { id, ...input } of ops.update) {
+            const updated = updateApiKey(db, id, input);
+            if (updated) result.updated.push(updated);
+            else result.errors.push({ op: "update", id, detail: "not found" });
+          }
+        }
+        if (ops.enable) {
+          for (const id of ops.enable) {
+            const updated = updateApiKey(db, id, { enabled: true });
+            if (updated) result.enabled++;
+            else result.errors.push({ op: "enable", id, detail: "not found" });
+          }
+        }
+        if (ops.disable) {
+          for (const id of ops.disable) {
+            const updated = updateApiKey(db, id, { enabled: false });
+            if (updated) result.disabled++;
+            else result.errors.push({ op: "disable", id, detail: "not found" });
+          }
+        }
+        if (ops.delete) {
+          for (const id of ops.delete) {
+            if (deleteApiKey(db, id)) result.deleted++;
+            else result.errors.push({ op: "delete", id, detail: "not found" });
+          }
+        }
+      });
+      tx();
+
+      router.reload();
+      broadcast(["keys", "overview"], "key:batch");
+      res.json(result);
+    } catch (e) {
+      bad(res, e);
+    }
   });
 }

@@ -14,14 +14,84 @@ export const WIRE_KIND_LABELS: Record<WireKind, string> = {
   responses: "Responses",
 };
 
+export interface KeyCount {
+  enabled: number;
+  disabled: number;
+  total: number;
+}
+
+export interface ProviderKey {
+  id: string;
+  providerId: string;
+  credential: string;
+  credHash: string;
+  enabled: boolean;
+  metadata: Record<string, string>;
+  label: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProviderKeyInput {
+  credential: string;
+  enabled?: boolean;
+  metadata?: Record<string, string>;
+  label?: string | null;
+}
+
+export interface BatchKeyOps {
+  add?: ProviderKeyInput[];
+  remove?: string[];
+  update?: Array<{
+    id: string;
+    enabled?: boolean;
+    metadata?: Record<string, string>;
+    label?: string | null;
+  }>;
+  enable?: string[];
+  disable?: string[];
+}
+
+export interface BatchKeyResult {
+  added: number;
+  removed: number;
+  updated: number;
+  enabled: number;
+  disabled: number;
+  duplicatesSkipped: number;
+  errors: Array<{ op: string; detail: string }>;
+  keys: ProviderKey[];
+}
+
+export interface ProviderKeySyncConfig {
+  providerId: string;
+  pollUrl: string;
+  pollHeaders: Record<string, string>;
+  pollIntervalSec: number;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  enabled: boolean;
+}
+
+export interface KeyImportRequest {
+  url: string;
+  headers?: Record<string, string>;
+  mode?: "append" | "replace";
+  defaultMetadata?: Record<string, string>;
+}
+
+export interface KeyImportResult {
+  batch: BatchKeyResult;
+  fetched: number;
+  mode: "append" | "replace";
+}
+
 export interface Provider {
   id: string;
   name: string;
   baseUrl: string;
   host: string | null;
-  apiKeys: string[];
-  /** Keys toggled off by the operator: retained but skipped in rotation. */
-  disabledApiKeys: string[];
+  keyCount: KeyCount;
   authScheme: AuthScheme;
   extraHeaders: Record<string, string>;
   retryAttempts: number;
@@ -214,6 +284,34 @@ export interface ModelProviderLink {
   contextWindow: number | null;
   /** Per-hop max-output override (null = inherit). */
   maxOutputTokens: number | null;
+}
+
+export interface ModelLinkIdentity {
+  providerId: string;
+  upstreamModel: string;
+}
+
+export interface ModelLinkInput extends ModelLinkIdentity {
+  enabled?: boolean;
+  endpoint?: string | null;
+  contextWindow?: number | null;
+  maxOutputTokens?: number | null;
+}
+
+export interface BatchModelLinkOps {
+  add?: ModelLinkInput[];
+  remove?: ModelLinkIdentity[];
+  update?: ModelLinkInput[];
+  /** Listed links move to the front in this exact order. */
+  reorder?: ModelLinkIdentity[];
+}
+
+export interface BatchModelLinkResult {
+  added: number;
+  removed: number;
+  updated: number;
+  reordered: number;
+  model: Model;
 }
 
 // --- Per-model transforms + imported provider models ---

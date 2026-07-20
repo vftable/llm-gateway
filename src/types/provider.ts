@@ -38,15 +38,19 @@ export const WIRE_KINDS: WireKind[] = [
   WireKind.Responses,
 ];
 
+export interface KeyCount {
+  enabled: number;
+  disabled: number;
+  total: number;
+}
+
 export interface Provider {
   id: string;
   name: string;
   baseUrl: string;
   host: string | null;
-  /** Active keys — rotated round-robin across requests. */
-  apiKeys: string[];
-  /** Keys toggled off by the operator: retained but skipped in selection. */
-  disabledApiKeys: string[];
+  /** Aggregate key counts (keys live in the provider_keys table). */
+  keyCount: KeyCount;
   authScheme: AuthScheme;
   extraHeaders: Record<string, string>;
   retryAttempts: number;

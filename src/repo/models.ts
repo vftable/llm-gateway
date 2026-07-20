@@ -252,7 +252,34 @@ function writeModel(
   }
 }
 
-type LinkInput = NonNullable<ModelInput["providers"]>[number];
+export type ModelLinkInput = NonNullable<ModelInput["providers"]>[number];
+export interface ModelLinkIdentity {
+  providerId: string;
+  upstreamModel: string;
+}
+export interface BatchModelLinkOps {
+  add?: ModelLinkInput[];
+  remove?: ModelLinkIdentity[];
+  update?: Array<
+    ModelLinkIdentity & {
+      enabled?: boolean;
+      endpoint?: string | null;
+      contextWindow?: number | null;
+      maxOutputTokens?: number | null;
+    }
+  >;
+  /** Listed identities move to the front in this exact order. */
+  reorder?: ModelLinkIdentity[];
+}
+export interface BatchModelLinkResult {
+  added: number;
+  removed: number;
+  updated: number;
+  reordered: number;
+  model: Model;
+}
+
+type LinkInput = ModelLinkInput;
 
 function upsertLink(
   db: DB,
@@ -280,6 +307,111 @@ function upsertLink(
     context_window: link.contextWindow ?? null,
     max_output_tokens: link.maxOutputTokens ?? null,
   });
+}
+
+export function batchModelLinks(
+  db: DB,
+  modelId: string,
+  ops: BatchModelLinkOps,
+): BatchModelLinkResult {
+  const existingModel = getModel(db, modelId);
+  if (!existingModel) throw new Error(`Model '${modelId}' not found`);
+
+  const result = { added: 0, removed: 0, updated: 0, reordered: 0 };
+  const identity = (link: ModelLinkIdentity) =>
+    `${link.providerId} ${link.upstreamModel}`;
+
+  const tx = db.transaction(() => {
+    let current = getModel(db, modelId)!.providers;
+
+    for (const link of ops.add ?? []) {
+      if (current.some((row) => identity(row) === identity(link)))
+        throw new Error(
+          `Model link '${link.providerId}/${link.upstreamModel}' already exists`,
+        );
+      upsertLink(db, modelId, current.length, link);
+      result.added++;
+      current = getModel(db, modelId)!.providers;
+    }
+
+    for (const link of ops.update ?? []) {
+      const saved = current.find((row) => identity(row) === identity(link));
+      if (!saved)
+        throw new Error(
+          `Model link '${link.providerId}/${link.upstreamModel}' not found`,
+        );
+      upsertLink(db, modelId, saved.priority, {
+        providerId: saved.providerId,
+        upstreamModel: saved.upstreamModel,
+        enabled: link.enabled ?? saved.enabled,
+        endpoint: link.endpoint !== undefined ? link.endpoint : saved.endpoint,
+        contextWindow:
+          link.contextWindow !== undefined
+            ? link.contextWindow
+            : saved.contextWindow,
+        maxOutputTokens:
+          link.maxOutputTokens !== undefined
+            ? link.maxOutputTokens
+            : saved.maxOutputTokens,
+      });
+      result.updated++;
+      current = getModel(db, modelId)!.providers;
+    }
+
+    for (const link of ops.remove ?? []) {
+      const changes = db
+        .prepare(
+          `DELETE FROM model_providers
+           WHERE model_id = ? AND provider_id = ? AND upstream_model = ?`,
+        )
+        .run(modelId, link.providerId, link.upstreamModel).changes;
+      if (!changes)
+        throw new Error(
+          `Model link '${link.providerId}/${link.upstreamModel}' not found`,
+        );
+      result.removed++;
+      current = getModel(db, modelId)!.providers;
+    }
+
+    if (ops.reorder) {
+      const requested = new Set<string>();
+      const ordered: typeof current = [];
+      for (const link of ops.reorder) {
+        const key = identity(link);
+        if (requested.has(key))
+          throw new Error(`Duplicate reorder link '${key}'`);
+        const saved = current.find((row) => identity(row) === key);
+        if (!saved)
+          throw new Error(
+            `Model link '${link.providerId}/${link.upstreamModel}' not found`,
+          );
+        requested.add(key);
+        ordered.push(saved);
+      }
+      ordered.push(...current.filter((row) => !requested.has(identity(row))));
+      const setPriority = db.prepare(
+        `UPDATE model_providers SET priority = ?
+         WHERE model_id = ? AND provider_id = ? AND upstream_model = ?`,
+      );
+      ordered.forEach((link, priority) =>
+        setPriority.run(priority, modelId, link.providerId, link.upstreamModel),
+      );
+      result.reordered = ops.reorder.length;
+    } else if ((ops.add?.length ?? 0) + (ops.remove?.length ?? 0) > 0) {
+      // Compact priorities after structural edits.
+      current = getModel(db, modelId)!.providers;
+      const setPriority = db.prepare(
+        `UPDATE model_providers SET priority = ?
+         WHERE model_id = ? AND provider_id = ? AND upstream_model = ?`,
+      );
+      current.forEach((link, priority) =>
+        setPriority.run(priority, modelId, link.providerId, link.upstreamModel),
+      );
+    }
+  });
+
+  tx();
+  return { ...result, model: getModel(db, modelId)! };
 }
 
 export function deleteModel(db: DB, id: string): boolean {

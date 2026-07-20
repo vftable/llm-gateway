@@ -50,7 +50,6 @@ export function ConfigForm({
     baseUrl: provider.baseUrl,
     host: provider.host ?? "",
     authScheme: provider.authScheme,
-    apiKeys: provider.apiKeys,
     retryAttempts: provider.retryAttempts,
     retryIntervalMs: provider.retryIntervalMs,
     requestTimeoutMs: provider.requestTimeoutMs,
@@ -111,10 +110,8 @@ export function ConfigForm({
     try {
       // Keys are managed on the Keys tab — omit them here so a config save can't
       // clobber a key edit (updateProvider merges: undefined keeps existing).
-      const { apiKeys, ...rest } = form;
-      void apiKeys;
       await api.updateProvider(provider.id, {
-        ...rest,
+        ...form,
         extraHeaders,
         providerConfig: form.providerConfig,
       });

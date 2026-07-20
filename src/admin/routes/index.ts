@@ -13,9 +13,11 @@ import type { Logger } from "../../logger";
 import type { GatewayRouter } from "../../gateway/router";
 import type { AdminAuth } from "../../auth/admin-auth";
 import { adminAuthMiddleware } from "../../auth/admin-auth";
+import type { KeySyncService } from "../../services/key-sync";
 import type { RouteCtx, BroadcastFn } from "./types";
 import { registerSettingsRoutes } from "./settings";
 import { registerProviderRoutes } from "./providers";
+import { registerProviderKeyRoutes } from "./provider-keys";
 import { registerModelRoutes } from "./models";
 import { registerUserRoutes } from "./users";
 import { registerUsageRoutes } from "./usage";
@@ -28,6 +30,7 @@ export function adminRouter(
   router: GatewayRouter,
   auth: AdminAuth,
   broadcast?: BroadcastFn,
+  keySyncService?: KeySyncService,
 ): Router {
   const r = Router();
   const requireAdmin = adminAuthMiddleware(auth.secret);
@@ -38,10 +41,12 @@ export function adminRouter(
     r,
     requireAdmin,
     broadcast: broadcast ?? noop,
+    keySyncService,
   };
 
   registerSettingsRoutes(ctx, auth);
   registerProviderRoutes(ctx);
+  registerProviderKeyRoutes(ctx);
   registerModelRoutes(ctx);
   registerUserRoutes(ctx);
   registerUsageRoutes(ctx);

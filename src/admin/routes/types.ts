@@ -10,6 +10,7 @@ import type { RequestHandler } from "express";
 import type { AuthScheme } from "../../types";
 import type { ModelsFormat } from "../../providers";
 import type { WsTopic } from "../../ws/schema";
+import type { KeySyncService } from "../../services/key-sync";
 
 export type BroadcastFn = (topics: WsTopic[], source: string) => void;
 
@@ -23,6 +24,7 @@ export interface RouteCtx {
   r: Router;
   requireAdmin: RequestHandler;
   broadcast: BroadcastFn;
+  keySyncService?: KeySyncService;
 }
 
 // Minimal provider shape the connectivity-test / model-discovery probes need
@@ -40,4 +42,33 @@ export interface ProviderLike {
   proxy?: string | null;
   /** Model-list dialect to fetch in (default "openai" when unset/null). */
   format?: ModelsFormat | null;
+}
+
+// Construct a ProviderLike from a saved Provider + its enabled credentials.
+export function providerLikeFrom(
+  p: {
+    baseUrl: string;
+    host: string | null;
+    authScheme: AuthScheme;
+    tlsVerify: boolean;
+    extraHeaders: Record<string, string>;
+    basePath: string;
+    modelsPath: string;
+    proxy: string | null;
+    format: ModelsFormat | null;
+  },
+  keys: string[],
+): ProviderLike {
+  return {
+    baseUrl: p.baseUrl,
+    host: p.host,
+    apiKeys: keys,
+    authScheme: p.authScheme,
+    tlsVerify: p.tlsVerify,
+    extraHeaders: p.extraHeaders,
+    basePath: p.basePath,
+    modelsPath: p.modelsPath,
+    proxy: p.proxy,
+    format: p.format,
+  };
 }

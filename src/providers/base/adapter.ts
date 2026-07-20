@@ -57,8 +57,6 @@ import type {
   ModelsCtx,
 } from "./types";
 
-import fs from "node:fs";
-
 export abstract class ProviderAdapter {
   constructor(protected readonly meta: ProviderTemplate) {}
 
@@ -410,6 +408,7 @@ export abstract class ProviderAdapter {
       providerFmt: kind,
       upstreamModel: ctx.model,
       apiKey: ctx.apiKey,
+      keyMetadata: {},
       headers: { ...ctx.headers },
     };
     (rawBody as Json).model = ctx.model;
@@ -430,6 +429,7 @@ export abstract class ProviderAdapter {
       model: ctx.model,
       body: transformed,
       apiKey: ctx.apiKey,
+      keyMetadata: {},
       clientFmt: kind,
       providerFmt: kind,
       endpointKind: kind,
@@ -635,8 +635,6 @@ export class OpenAICompatibleAdapter extends ProviderAdapter {
       delete body.temperature;
       delete body.top_p;
     }
-
-    fs.writeFileSync(`${Date.now()}.json`, JSON.stringify(ctx.body, null, 2));
 
     return super.responses(ctx);
   }

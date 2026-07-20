@@ -22,6 +22,8 @@
 //   6. thinking-config  — normalize thinking + hoist system; may raise
 //                          max_tokens (gets the final say on the ceiling);
 //                          strips output_config.effort on Haiku
+//   7. cache-control    — final-boundary enforcement of Anthropic's maximum
+//                          four cache_control breakpoints
 //
 // Each stage is individually guarded by applyBodyTransforms in the engine (a
 // throw is caught and the body passes through), so one bad hook can't break the
@@ -41,6 +43,7 @@ import { applyPrefillFix } from "../prefill";
 import { sanitizeAnthropicRequest } from "./sanitize-request";
 import { sanitizeAnthropicResponse } from "./sanitize-response";
 import { normalizeThinkingMode } from "./thinking-mode";
+import { limitAnthropicCacheControl } from "./cache-control-limiter";
 
 // Resolve the upstream model id a hook should key on. Prefer the chain-hop's
 // upstream model; fall back to whatever is on the body.
@@ -69,6 +72,7 @@ function modelOf(body: { model?: unknown }, ctx: TransformCtx): string {
 //   4. sanitize-request — rescue effort, strip non-Anthropic fields
 //   5. thinking-mode    — per-model thinking type normalization
 //   6. thinking-config  — normalize thinking + hoist system, may raise max_tokens
+//   7. cache-control    — enforce the final outbound four-breakpoint ceiling
 function messagesOnly(ctx: TransformCtx): boolean {
   return ctx.providerFmt === "messages";
 }
@@ -183,6 +187,21 @@ export function defaultAnthropicRequestHooks(): TaggedRequestTransform[] {
         label: "Thinking-config normalization",
         blurb:
           "Normalizes the thinking config (adaptive→enabled on Haiku, budget_tokens floor) and hoists mid-conversation system turns; may raise max_tokens.",
+        group: GROUP,
+      },
+    ),
+    // 7. Runs at the FINAL Anthropic request boundary, after thinking-config
+    // may have hoisted content into system. This catches client, family,
+    // adapter, and model-transform breakpoints in one place.
+    onRequest(
+      "messages",
+      "anthropic:cache-control-limit",
+      (body, ctx) =>
+        messagesOnly(ctx) ? limitAnthropicCacheControl(body) : body,
+      {
+        label: "Cache-control limit enforcement",
+        blurb:
+          "Deterministically keeps at most four cache_control breakpoints, preserving the stable-prefix positions Anthropic recommends.",
         group: GROUP,
       },
     ),

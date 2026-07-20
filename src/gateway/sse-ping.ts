@@ -20,20 +20,26 @@
 
 import { Transform, type TransformCallback } from "stream";
 
+export const ANTHROPIC_PING_INTERVAL_MS = 15_000;
+export const ANTHROPIC_PING_EVENT = 'event: ping\ndata: {"type":"ping"}\n\n';
+
 export interface PingKeepAliveOptions {
-  /** Interval in milliseconds between ping comments when idle. Default: 15000. */
+  /** Interval in milliseconds between pings. Default: 15000. */
   interval?: number;
-  /** The ping comment to send. Default: ': ping\n\n' */
+  /** Serialized SSE frame. Default: ': ping\n\n' */
   pingMessage?: string;
+  /** Reset the clock on data and emit only while idle. Default: true. */
+  idleOnly?: boolean;
 }
 
 // 15s: comfortably under the common ~90-100s proxy/client idle ceilings, with
 // margin for several missed pings.
-const DEFAULT_INTERVAL = 15_000;
+const DEFAULT_INTERVAL = ANTHROPIC_PING_INTERVAL_MS;
 
 export class SsePingKeepAlive extends Transform {
   private readonly interval: number;
   private readonly pingMessage: string;
+  private readonly idleOnly: boolean;
   private timer: ReturnType<typeof setInterval> | null = null;
   private lastActivity = Date.now();
   private finished = false;
@@ -42,6 +48,7 @@ export class SsePingKeepAlive extends Transform {
     super({ highWaterMark: 0 });
     this.interval = opts?.interval ?? DEFAULT_INTERVAL;
     this.pingMessage = opts?.pingMessage ?? ": ping\n\n";
+    this.idleOnly = opts?.idleOnly ?? true;
     // Arm immediately so pings flow during the initial (pre-first-token) gap,
     // which is where timeouts actually happen.
     this.startTimer();
@@ -52,8 +59,9 @@ export class SsePingKeepAlive extends Transform {
     _encoding: string,
     callback: TransformCallback,
   ): void {
-    // Real data resets the idle clock (but the interval timer keeps running).
-    this.lastActivity = Date.now();
+    // Generic keepalives are idle-only. Anthropic protocol pings use a strict
+    // cadence and therefore do not reset their clock when content flows.
+    if (this.idleOnly) this.lastActivity = Date.now();
     this.push(chunk);
     callback();
   }
@@ -75,11 +83,12 @@ export class SsePingKeepAlive extends Transform {
     // race with backpressure).
     this.timer = setInterval(() => {
       if (this.finished) return;
-      if (Date.now() - this.lastActivity < this.interval) return;
-      // Idle long enough — send a ping. If the readable side is full, push()
-      // returns false; we simply skip this tick rather than buffer unboundedly.
+      if (this.idleOnly && Date.now() - this.lastActivity < this.interval)
+        return;
+      // Send the configured frame. If the readable side is full, push() returns
+      // false; skip buffering and let the next fixed-rate tick try again.
       const ok = this.push(this.pingMessage);
-      this.lastActivity = Date.now();
+      if (this.idleOnly) this.lastActivity = Date.now();
       if (!ok) {
         // Backpressure — the client is already receiving data, so a missed
         // ping is harmless; the next tick retries.

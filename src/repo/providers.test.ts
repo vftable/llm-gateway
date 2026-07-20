@@ -11,6 +11,7 @@ import {
   listProviders,
   normBasePath,
 } from "./providers";
+import { listProviderKeys } from "./provider-keys";
 
 function freshDb() {
   return openDatabase(":memory:");
@@ -32,7 +33,10 @@ test("createProvider persists catalogId and defaults", () => {
     assert.equal(p.baseUrl, "https://integrate.api.nvidia.com");
     const read = getProvider(db, p.id)!;
     assert.equal(read.catalogId, "nvidia-nim");
-    assert.deepEqual(read.apiKeys, ["nvapi-x"]);
+    assert.equal(read.keyCount.total, 1);
+    assert.equal(read.keyCount.enabled, 1);
+    const keys = listProviderKeys(db, read.id);
+    assert.equal(keys[0].credential, "nvapi-x");
   } finally {
     closeDatabase(db);
   }
@@ -75,29 +79,32 @@ test("updateProvider preserves catalogId when omitted, updates when set", () => 
   }
 });
 
-test("disabledApiKeys round-trip: default empty, persists, merges on update", () => {
+test("provider_keys: create with keys, disable via update, preserved on unrelated update", () => {
   const db = freshDb();
   try {
-    // Default: no disabled keys.
     const p = createProvider(db, {
       name: "p",
       baseUrl: "https://a.example.com",
       apiKeys: ["k1", "k2"],
     });
-    assert.deepEqual(p.disabledApiKeys, []);
+    assert.equal(p.keyCount.enabled, 2);
+    assert.equal(p.keyCount.disabled, 0);
 
-    // Toggle k2 off: it leaves apiKeys and lands in disabledApiKeys.
+    // Toggle k2 off via the legacy shim.
     const u1 = updateProvider(db, p.id, {
       apiKeys: ["k1"],
       disabledApiKeys: ["k2"],
     })!;
-    assert.deepEqual(u1.apiKeys, ["k1"]);
-    assert.deepEqual(u1.disabledApiKeys, ["k2"]);
-    assert.deepEqual(getProvider(db, p.id)!.disabledApiKeys, ["k2"]);
+    assert.equal(u1.keyCount.enabled, 1);
+    assert.equal(u1.keyCount.disabled, 1);
+    const keys1 = listProviderKeys(db, p.id);
+    assert.equal(keys1.find((k) => k.credential === "k1")!.enabled, true);
+    assert.equal(keys1.find((k) => k.credential === "k2")!.enabled, false);
 
-    // Omitting disabledApiKeys on a later update preserves it.
+    // Omitting apiKeys/disabledApiKeys on a later update preserves keys.
     const u2 = updateProvider(db, p.id, { name: "p2" })!;
-    assert.deepEqual(u2.disabledApiKeys, ["k2"]);
+    assert.equal(u2.keyCount.enabled, 1);
+    assert.equal(u2.keyCount.disabled, 1);
   } finally {
     closeDatabase(db);
   }

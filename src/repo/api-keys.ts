@@ -1,10 +1,9 @@
 // Gateway API-key repository.
 //
 // Gateway keys are the credentials *clients* present to this gateway. We store
-// a SHA-256 hash for O(1) auth lookup, a short prefix for display, and the full
-// key so the dashboard can show/copy it (this is a self-hosted admin tool — the
-// keys are the operator's own). The full key is returned from create() so the
-// UI can display it; it is never needed for auth (we hash first, then look up).
+// a SHA-256 hash for O(1) auth lookup and a short prefix for display. The full
+// key is returned in-memory from create() so the UI can show it once; it is
+// never persisted or re-readable from the DB.
 
 import crypto from "crypto";
 import type { Database as DB } from "better-sqlite3";
@@ -24,7 +23,6 @@ interface ApiKeyRow {
   name: string | null;
   key_prefix: string;
   key_hash: string;
-  key_full: string;
   user_id: string | null;
   tokens_per_day: number | null;
   enabled: number;
@@ -87,14 +85,6 @@ export function listApiKeys(db: DB): ApiKey[] {
   return rows.map(mapKey);
 }
 
-// Reveal the stored full key value for dashboard show/copy.
-export function getApiKeyFull(db: DB, id: string): string | null {
-  const row = db
-    .prepare("SELECT key_full FROM api_keys WHERE id = ?")
-    .get(id) as { key_full: string } | undefined;
-  return row ? row.key_full : null;
-}
-
 export function getApiKey(db: DB, id: string): ApiKey | null {
   const row = db.prepare(`${SELECT_JOIN} WHERE k.id = ?`).get(id) as
     ApiKeyRow | undefined;
@@ -134,14 +124,13 @@ export function createApiKey(
 
   db.prepare(
     `INSERT INTO api_keys
-      (id, name, key_prefix, key_hash, key_full, user_id, tokens_per_day, enabled, last_used_at, created_at)
-     VALUES (@id, @name, @key_prefix, @key_hash, @key_full, @user_id, @tokens_per_day, @enabled, @last_used_at, @created_at)`,
+      (id, name, key_prefix, key_hash, user_id, tokens_per_day, enabled, last_used_at, created_at)
+     VALUES (@id, @name, @key_prefix, @key_hash, @user_id, @tokens_per_day, @enabled, @last_used_at, @created_at)`,
   ).run({
     id,
     name: input.name ?? null,
     key_prefix: maskKey(full),
     key_hash: sha256(full),
-    key_full: full,
     user_id: input.userId ?? null,
     tokens_per_day:
       input.tokensPerDay !== undefined && input.tokensPerDay !== null

@@ -7,18 +7,19 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openDatabase, closeDatabase } from "../db";
 import { createProvider } from "../repo/providers";
+import { listEnabledCredentials } from "../repo/provider-keys";
 import { KeyHealthStore, parseRateLimit, hashKey } from "./key-health";
-import type { Provider } from "../types";
 
 function provider(
   db: ReturnType<typeof openDatabase>,
   keys: string[],
-): Provider {
-  return createProvider(db, {
+): { id: string; keys: string[] } {
+  const p = createProvider(db, {
     name: "p",
     baseUrl: "https://x.example.com",
     apiKeys: keys,
   });
+  return { id: p.id, keys: listEnabledCredentials(db, p.id) };
 }
 
 // A controllable clock so cooldown tests are deterministic.
@@ -33,10 +34,10 @@ test("round-robin rotates keys in order", () => {
     const p = provider(db, ["a", "b", "c"]);
     const store = new KeyHealthStore(db);
     const seen = [
-      store.select(p, null, new Set())!.key,
-      store.select(p, null, new Set())!.key,
-      store.select(p, null, new Set())!.key,
-      store.select(p, null, new Set())!.key,
+      store.select(p.id, p.keys, null, new Set())!.key,
+      store.select(p.id, p.keys, null, new Set())!.key,
+      store.select(p.id, p.keys, null, new Set())!.key,
+      store.select(p.id, p.keys, null, new Set())!.key,
     ];
     // Fresh picks each call (empty tried set) cycle a,b,c,a.
     assert.deepEqual(seen, ["a", "b", "c", "a"]);
@@ -52,14 +53,14 @@ test("select skips already-tried keys within a request", () => {
     const store = new KeyHealthStore(db);
     const tried = new Set<string>();
     const picks = [
-      store.select(p, null, tried)!,
-      store.select(p, null, tried)!,
-      store.select(p, null, tried)!,
+      store.select(p.id, p.keys, null, tried)!,
+      store.select(p.id, p.keys, null, tried)!,
+      store.select(p.id, p.keys, null, tried)!,
     ];
     picks.forEach((pk) => tried.add(pk.keyHash));
     assert.equal(new Set(picks.map((p) => p.key)).size, 3); // all distinct
     // Pool exhausted (all tried) -> still returns a key (last-resort), never null.
-    assert.ok(store.select(p, null, tried));
+    assert.ok(store.select(p.id, p.keys, null, tried));
   } finally {
     closeDatabase(db);
   }
@@ -74,13 +75,13 @@ test("rate-limited keys are skipped until cooldown expires", () => {
     // Rate-limit "a" for 60s.
     store.markRateLimited(p.id, hashKey("a"), 60_000);
     // Fresh selects should now only yield "b".
-    assert.equal(store.select(p, null, new Set())!.key, "b");
-    assert.equal(store.select(p, null, new Set())!.key, "b");
+    assert.equal(store.select(p.id, p.keys, null, new Set())!.key, "b");
+    assert.equal(store.select(p.id, p.keys, null, new Set())!.key, "b");
     // After cooldown, "a" is eligible again.
     clk.advance(61_000);
     const keys = new Set([
-      store.select(p, null, new Set())!.key,
-      store.select(p, null, new Set())!.key,
+      store.select(p.id, p.keys, null, new Set())!.key,
+      store.select(p.id, p.keys, null, new Set())!.key,
     ]);
     assert.ok(keys.has("a"));
   } finally {
@@ -95,7 +96,7 @@ test("auth-failed keys are skipped", () => {
     const store = new KeyHealthStore(db);
     store.markAuthFailed(p.id, hashKey("a"));
     for (let i = 0; i < 4; i++)
-      assert.equal(store.select(p, null, new Set())!.key, "b");
+      assert.equal(store.select(p.id, p.keys, null, new Set())!.key, "b");
   } finally {
     closeDatabase(db);
   }
@@ -110,16 +111,16 @@ test("model affinity: proven key is preferred, evicted after threshold", () => {
     store.recordSuccess(p.id, hashKey("b"), "gpt");
     // With affinity, "gpt" always routes to "b".
     for (let i = 0; i < 5; i++)
-      assert.equal(store.select(p, "gpt", new Set())!.key, "b");
+      assert.equal(store.select(p.id, p.keys, "gpt", new Set())!.key, "b");
     // Three failures evict the pairing.
     store.recordFailure(p.id, hashKey("b"), "gpt");
     store.recordFailure(p.id, hashKey("b"), "gpt");
     store.recordFailure(p.id, hashKey("b"), "gpt");
     // No affinity now -> round-robin across all keys again (not pinned to b).
     const picks = new Set([
-      store.select(p, "gpt", new Set())!.key,
-      store.select(p, "gpt", new Set())!.key,
-      store.select(p, "gpt", new Set())!.key,
+      store.select(p.id, p.keys, "gpt", new Set())!.key,
+      store.select(p.id, p.keys, "gpt", new Set())!.key,
+      store.select(p.id, p.keys, "gpt", new Set())!.key,
     ]);
     assert.ok(picks.size > 1);
   } finally {
@@ -136,8 +137,8 @@ test("health persists across store reopen (same DB)", () => {
     s1.recordSuccess(p.id, hashKey("b"), "m");
     // A fresh store instance re-hydrates from SQLite.
     const s2 = new KeyHealthStore(db);
-    assert.equal(s2.select(p, null, new Set())!.key, "b"); // "a" still disabled
-    assert.equal(s2.select(p, "m", new Set())!.key, "b"); // affinity restored
+    assert.equal(s2.select(p.id, p.keys, null, new Set())!.key, "b"); // "a" still disabled
+    assert.equal(s2.select(p.id, p.keys, "m", new Set())!.key, "b"); // affinity restored
   } finally {
     closeDatabase(db);
   }
@@ -148,8 +149,8 @@ test("keyless provider yields null (no auth attached)", () => {
   try {
     const p = provider(db, []);
     const store = new KeyHealthStore(db);
-    assert.equal(store.select(p, null, new Set()), null);
-    assert.equal(store.usableCount(p), 0);
+    assert.equal(store.select(p.id, p.keys, null, new Set()), null);
+    assert.equal(store.usableCount(p.id, p.keys), 0);
   } finally {
     closeDatabase(db);
   }
@@ -161,12 +162,12 @@ test("usableCount excludes cooling-down and auth-failed keys", () => {
     const p = provider(db, ["a", "b", "c"]);
     const clk = clock();
     const store = new KeyHealthStore(db, clk.now);
-    assert.equal(store.usableCount(p), 3);
+    assert.equal(store.usableCount(p.id, p.keys), 3);
     store.markAuthFailed(p.id, hashKey("a"));
     store.markRateLimited(p.id, hashKey("b"), 30_000);
-    assert.equal(store.usableCount(p), 1);
+    assert.equal(store.usableCount(p.id, p.keys), 1);
     clk.advance(31_000);
-    assert.equal(store.usableCount(p), 2); // b recovered, a still failed
+    assert.equal(store.usableCount(p.id, p.keys), 2); // b recovered, a still failed
   } finally {
     closeDatabase(db);
   }

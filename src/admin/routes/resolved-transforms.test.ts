@@ -28,7 +28,7 @@ test("Anthropic-native provider: builtin hooks + thinking + family defaults, no 
   assert.equal(r.nativeFormat, "anthropic");
   assert.equal(r.nativeWireKind, "messages");
 
-  // Builtin anthropic-hooks (5 stages) land first, in stack order.
+  // Builtin Anthropic hooks land first, in stack order.
   const builtinReq = r.request.filter((s) => s.source === "builtin");
   assert.deepEqual(
     builtinReq.map((s) => s.name),
@@ -39,6 +39,7 @@ test("Anthropic-native provider: builtin hooks + thinking + family defaults, no 
       "anthropic:sanitize-request",
       "anthropic:thinking-mode",
       "anthropic:thinking-config",
+      "anthropic:cache-control-limit",
     ],
   );
 

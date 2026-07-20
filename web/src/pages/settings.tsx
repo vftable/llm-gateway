@@ -226,8 +226,8 @@ export default function Settings() {
                 />
               </SettingRow>
               <SettingRow
-                label="SSE ping interval (ms)"
-                hint="0 = disabled; prevents idle proxy timeouts"
+                label="Generic SSE keepalive (ms)"
+                hint="OpenAI-compatible streams only; 0 disables. Anthropic Messages always emits protocol-native ping events every 15 seconds."
               >
                 <Input
                   type="number"

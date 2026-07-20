@@ -2,6 +2,7 @@
 
 import type { Database as DB } from "better-sqlite3";
 import {
+  batchModelLinks,
   createModel,
   deleteModel,
   getModel,
@@ -16,9 +17,14 @@ import {
 } from "../../repo/provider-models";
 import { listTransformDefs } from "../../formats/transforms";
 import { hopStats } from "../../repo/request-logs";
+import type { Model } from "../../types";
 import type { UpstreamModel } from "../../providers";
 import type { RouteCtx } from "./types";
-import { parseModelInput } from "./parsers";
+import {
+  parseBatchModelLinkOps,
+  parseBatchModelOps,
+  parseModelInput,
+} from "./parsers";
 import { fetchProviderModels, testProviderModel } from "./provider-probe";
 import { bad } from "./respond";
 
@@ -48,7 +54,7 @@ async function autoCreateImportedModels(
     const provider = getProvider(db, providerId);
     if (!provider) continue;
     try {
-      const models = await fetchProviderModels(provider);
+      const models = await fetchProviderModels(provider, db);
       upstreamByProvider.set(providerId, new Map(models.map((m) => [m.id, m])));
     } catch {
       // Best-effort — fall back to bare identity for this provider's links.
@@ -183,6 +189,112 @@ export function registerModelRoutes(ctx: RouteCtx): void {
       upstreamModel: null,
       hopIndex: -1,
     });
+  });
+
+  // --- models batch ---
+  r.post("/models/batch", requireAdmin, async (req, res) => {
+    try {
+      const ops = parseBatchModelOps(req.body);
+      const result = {
+        created: [] as Model[],
+        updated: [] as Model[],
+        deleted: 0,
+        enabled: 0,
+        disabled: 0,
+        errors: [] as Array<{ op: string; id?: string; detail: string }>,
+      };
+
+      // Auto-create imported models for any new chain links
+      if (ops.create) {
+        for (const input of ops.create) {
+          try {
+            await autoCreateImportedModels(db, input);
+          } catch {
+            /* best effort */
+          }
+        }
+      }
+      if (ops.update) {
+        for (const { id, ...input } of ops.update) {
+          try {
+            await autoCreateImportedModels(db, input as ModelInput);
+          } catch {
+            /* best effort */
+          }
+        }
+      }
+
+      const tx = db.transaction(() => {
+        if (ops.create) {
+          for (const input of ops.create) {
+            try {
+              result.created.push(createModel(db, input));
+            } catch (e) {
+              result.errors.push({
+                op: "create",
+                detail: (e as Error).message,
+              });
+            }
+          }
+        }
+        if (ops.update) {
+          for (const { id, ...input } of ops.update) {
+            const m = updateModel(db, id, input);
+            if (m) result.updated.push(m);
+            else result.errors.push({ op: "update", id, detail: "not found" });
+          }
+        }
+        if (ops.enable) {
+          for (const id of ops.enable) {
+            const m = updateModel(db, id, { enabled: true });
+            if (m) result.enabled++;
+            else result.errors.push({ op: "enable", id, detail: "not found" });
+          }
+        }
+        if (ops.disable) {
+          for (const id of ops.disable) {
+            const m = updateModel(db, id, { enabled: false });
+            if (m) result.disabled++;
+            else result.errors.push({ op: "disable", id, detail: "not found" });
+          }
+        }
+        if (ops.delete) {
+          for (const id of ops.delete) {
+            if (deleteModel(db, id)) result.deleted++;
+            else result.errors.push({ op: "delete", id, detail: "not found" });
+          }
+        }
+      });
+      tx();
+
+      router.reload();
+      broadcast(["models", "overview"], "model:batch");
+      res.json(result);
+    } catch (e) {
+      bad(res, e);
+    }
+  });
+
+  // --- model provider-link batch (fallback chain) ---
+  r.post("/models/:id/providers/batch", requireAdmin, async (req, res) => {
+    try {
+      const modelId = String(req.params.id);
+      if (!getModel(db, modelId))
+        return res.status(404).json({ error: { message: "not found" } });
+      const ops = parseBatchModelLinkOps(req.body);
+      if (ops.add?.length) {
+        await autoCreateImportedModels(db, {
+          alias: "",
+          providers: ops.add,
+        });
+      }
+      const result = batchModelLinks(db, modelId, ops);
+      router.reload();
+      broadcast(["models", "overview"], "model-providers:batch");
+      res.json(result);
+    } catch (e) {
+      bad(res, e);
+    }
   });
 
   // --- transform library (for the per-model transform editor) ---

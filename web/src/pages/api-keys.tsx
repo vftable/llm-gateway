@@ -161,16 +161,6 @@ const KeyRow = memo(function KeyRow({
 }) {
   const [toggling, setToggling] = useState(false);
 
-  const copyFull = async () => {
-    try {
-      const { keyFull } = await api.revealApiKey(k.id);
-      await navigator.clipboard.writeText(keyFull);
-      toast.success("Full key copied to clipboard");
-    } catch (e) {
-      toast.error(e instanceof ApiError ? e.message : (e as Error).message);
-    }
-  };
-
   const toggle = async (enabled: boolean) => {
     setToggling(true);
     try {
@@ -188,18 +178,7 @@ const KeyRow = memo(function KeyRow({
     <TableRow>
       <TableCell className="max-w-[12rem] truncate">{k.name ?? "—"}</TableCell>
       <TableCell>
-        <span className="inline-flex items-center gap-1.5">
-          <span className="font-mono text-primary">{k.keyPrefix}</span>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            title="Copy full key"
-            onClick={copyFull}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <Copy className="h-3 w-3" />
-          </Button>
-        </span>
+        <span className="font-mono text-primary">{k.keyPrefix}</span>
       </TableCell>
       <TableCell className="max-w-[12rem] truncate">
         {k.userName ?? "—"}

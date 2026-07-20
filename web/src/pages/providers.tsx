@@ -369,7 +369,7 @@ const ProviderCard = memo(function ProviderCard({
           {conversionLabel(provider.nativeConversion)}
         </Badge>
         <Badge variant="secondary">
-          {plural(provider.apiKeys.length, "key")}
+          {plural(provider.keyCount.total, "key")}
         </Badge>
         <Badge
           variant="secondary"

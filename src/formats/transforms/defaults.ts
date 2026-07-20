@@ -71,11 +71,15 @@ export const DEFAULT_TRANSFORMS: DefaultTransformSet[] = [
         "chat",
         "openai:reasoning",
         (body, ctx) =>
-          ctx.providerFmt === "chat" ? normalizeOpenAIReasoning(body) : body,
+          ctx.providerFmt === "chat"
+            ? normalizeOpenAIReasoning(body, {
+                catalogId: ctx.provider.catalogId,
+              })
+            : body,
         {
           label: "Reasoning normalization",
           blurb:
-            "Normalizes reasoning_effort to valid OpenAI values (low/medium/high) and defaults reasoning summary to detailed.",
+            "Normalizes reasoning_effort for OpenAI-compatible providers; Z.AI GLM-5.2+ keeps its native effort levels and synchronizes the thinking toggle.",
           group: "openai-hooks",
         },
       ),
@@ -84,7 +88,9 @@ export const DEFAULT_TRANSFORMS: DefaultTransformSet[] = [
         "openai:reasoning-responses",
         (body, ctx) =>
           ctx.providerFmt === "responses"
-            ? normalizeOpenAIReasoning(body)
+            ? normalizeOpenAIReasoning(body, {
+                catalogId: ctx.provider.catalogId,
+              })
             : body,
         {
           label: "Reasoning normalization (Responses)",

@@ -5,13 +5,13 @@
 // format *transform* pipeline is a separate concern — see formats/pipeline.ts.)
 //
 //   request log -> body parser -> client-key auth -> model listings ->
-//   model guard -> context-window + usage enforcement -> prefill fix ->
+//   model guard -> usage enforcement -> prefill fix ->
 //   forwarding engine (which applies the transform pipeline)
 
 import express, { type Express, type Request } from "express";
 import type { Database as DB } from "better-sqlite3";
 import type { Logger } from "../logger";
-import type { ApiKey, Model, Provider } from "../types";
+import type { ApiKey, Model } from "../types";
 import { ModelRegistry } from "./registry";
 import { ForwardingEngine, type ForwardContext } from "./engine";
 import { detectClient } from "./client-detect";
@@ -65,8 +65,12 @@ export class GatewayRouter {
   // ForwardingEngine.pickKeyForTest. Exposes just this one capability rather
   // than the whole engine, so the admin routes get the live rotation/health
   // state without reaching into forwarding internals.
-  pickKeyForTest(provider: Provider, model: string | null): KeyPick | null {
-    return this.engine.pickKeyForTest(provider, model);
+  pickKeyForTest(
+    providerId: string,
+    keys: string[],
+    model: string | null,
+  ): KeyPick | null {
+    return this.engine.pickKeyForTest(providerId, keys, model);
   }
 
   register(app: Express): void {
@@ -163,7 +167,7 @@ export class GatewayRouter {
       next();
     });
 
-    // --- context-window + per-key usage enforcement ---
+    // --- per-key usage enforcement ---
     app.use("/v1", (req, res, next) => {
       if (req.method !== "POST") return next();
       const body = req.body as Record<string, unknown> | undefined;
@@ -174,34 +178,6 @@ export class GatewayRouter {
       const settings = this.registry.getSettings();
       const inputTokens = countInputTokens(body, req.originalUrl || req.url);
       gw.__inputTokens = inputTokens;
-
-      if (model?.contextWindow && model.contextWindow > 0) {
-        const maxOut =
-          readMaxOutputTokens(body) ??
-          model.maxOutputTokens ??
-          settings.defaultMaxOutputTokens ??
-          0;
-        const projected = inputTokens + maxOut;
-        if (projected > model.contextWindow) {
-          this.logger.warn("context_limit", {
-            model: gw.__alias,
-            inputTokens,
-            maxOut,
-            contextWindow: model.contextWindow,
-          });
-          return res.status(413).json({
-            error: {
-              type: "context_too_large",
-              message: `Request projected at ${projected} tokens exceeds the ${model.contextWindow}-token context window for '${String(body.model)}'.`,
-              source: "gateway",
-              input_tokens: inputTokens,
-              max_output_tokens: maxOut,
-              context_window: model.contextWindow,
-              projected,
-            },
-          });
-        }
-      }
 
       // Per-key daily quota + optimistic reservation.
       const apiKey = gw.__apiKey;

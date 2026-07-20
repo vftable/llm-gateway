@@ -33,7 +33,8 @@ test("config-synced upstream is seeded as the proxy provider type", () => {
     ]);
     // Config values still applied over the template.
     assert.equal(p.baseUrl, "https://bridge.example.com"); // trailing slash trimmed
-    assert.deepEqual(p.apiKeys, ["sk-up"]);
+    assert.equal(p.keyCount.total, 1);
+    assert.equal(p.keyCount.enabled, 1);
   } finally {
     closeDatabase(db);
   }

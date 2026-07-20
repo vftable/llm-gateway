@@ -4,7 +4,12 @@
 // `requireCreate` enforces required fields on POST.
 
 import { normBasePath, type ProviderInput } from "../../repo/providers";
-import type { ModelInput } from "../../repo/models";
+import type {
+  BatchModelLinkOps,
+  ModelInput,
+  ModelLinkIdentity,
+  ModelLinkInput,
+} from "../../repo/models";
 import type { UserInput } from "../../repo/users";
 import type { ApiKeyInput } from "../../repo/api-keys";
 import type {
@@ -227,4 +232,371 @@ export function parseApiKeyInput(body: unknown): ApiKeyInput {
           : (num(b.tokensPerDay) ?? null),
     enabled: b.enabled === undefined ? undefined : !!b.enabled,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Provider key parsers
+// ---------------------------------------------------------------------------
+
+import type { ProviderKeyInput, BatchKeyOps } from "../../repo/provider-keys";
+
+function parseStringRecord(v: unknown): Record<string, string> | undefined {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === "string") out[k] = val;
+  }
+  return out;
+}
+
+export function parseProviderKeyInput(body: unknown): ProviderKeyInput {
+  const b = (body || {}) as Record<string, unknown>;
+  const credential = str(b.credential);
+  if (!credential) throw new Error("credential is required");
+  return {
+    credential,
+    enabled: b.enabled === undefined ? undefined : !!b.enabled,
+    metadata: parseStringRecord(b.metadata),
+    label:
+      b.label === undefined ? undefined : b.label == null ? null : str(b.label),
+  };
+}
+
+export function parseProviderKeyUpdate(
+  body: unknown,
+): Partial<Omit<ProviderKeyInput, "credential">> {
+  const b = (body || {}) as Record<string, unknown>;
+  return {
+    enabled: b.enabled === undefined ? undefined : !!b.enabled,
+    metadata:
+      b.metadata === undefined ? undefined : parseStringRecord(b.metadata),
+    label:
+      b.label === undefined ? undefined : b.label == null ? null : str(b.label),
+  };
+}
+
+const MAX_BATCH_OPS = 5000;
+
+export function parseBatchKeyOps(body: unknown): BatchKeyOps {
+  const b = (body || {}) as Record<string, unknown>;
+  const ops: BatchKeyOps = {};
+
+  if (Array.isArray(b.add)) {
+    ops.add = (b.add as unknown[]).map((item) => {
+      const i = (item || {}) as Record<string, unknown>;
+      const credential = str(i.credential);
+      if (!credential) throw new Error("each add item requires a credential");
+      return {
+        credential,
+        enabled: i.enabled === undefined ? undefined : !!i.enabled,
+        metadata: parseStringRecord(i.metadata),
+        label: i.label == null ? undefined : str(i.label),
+      };
+    });
+  }
+
+  if (Array.isArray(b.remove))
+    ops.remove = (b.remove as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+
+  if (Array.isArray(b.update)) {
+    ops.update = (b.update as unknown[]).map((item) => {
+      const i = (item || {}) as Record<string, unknown>;
+      const id = str(i.id);
+      if (!id) throw new Error("each update item requires an id");
+      return {
+        id,
+        enabled: i.enabled === undefined ? undefined : !!i.enabled,
+        metadata:
+          i.metadata === undefined ? undefined : parseStringRecord(i.metadata),
+        label:
+          i.label === undefined
+            ? undefined
+            : i.label == null
+              ? null
+              : str(i.label),
+      };
+    });
+  }
+
+  if (Array.isArray(b.enable))
+    ops.enable = (b.enable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+
+  if (Array.isArray(b.disable))
+    ops.disable = (b.disable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+
+  const total =
+    (ops.add?.length ?? 0) +
+    (ops.remove?.length ?? 0) +
+    (ops.update?.length ?? 0) +
+    (ops.enable?.length ?? 0) +
+    (ops.disable?.length ?? 0);
+  if (total === 0) throw new Error("batch must contain at least one operation");
+  if (total > MAX_BATCH_OPS)
+    throw new Error(
+      `batch exceeds ${MAX_BATCH_OPS} operation limit (got ${total})`,
+    );
+
+  return ops;
+}
+
+export interface KeyImportRequest {
+  url: string;
+  headers?: Record<string, string>;
+  mode?: "append" | "replace";
+  defaultMetadata?: Record<string, string>;
+}
+
+export function parseKeyImportRequest(body: unknown): KeyImportRequest {
+  const b = (body || {}) as Record<string, unknown>;
+  const url = str(b.url);
+  if (!url) throw new Error("url is required");
+  try {
+    new URL(url);
+  } catch {
+    throw new Error("url is not a valid URL");
+  }
+  return {
+    url,
+    headers: parseStringRecord(b.headers),
+    mode: b.mode === "replace" ? "replace" : "append",
+    defaultMetadata: parseStringRecord(b.defaultMetadata),
+  };
+}
+
+export interface KeySyncInput {
+  pollUrl: string;
+  pollHeaders?: Record<string, string>;
+  pollIntervalSec?: number;
+  enabled?: boolean;
+}
+
+export function parseKeySyncInput(body: unknown): KeySyncInput {
+  const b = (body || {}) as Record<string, unknown>;
+  const pollUrl = str(b.pollUrl);
+  if (!pollUrl) throw new Error("pollUrl is required");
+  try {
+    new URL(pollUrl);
+  } catch {
+    throw new Error("pollUrl is not a valid URL");
+  }
+  const interval = num(b.pollIntervalSec);
+  if (interval !== undefined && interval < 30)
+    throw new Error("pollIntervalSec must be >= 30");
+  return {
+    pollUrl,
+    pollHeaders: parseStringRecord(b.pollHeaders),
+    pollIntervalSec: interval,
+    enabled: b.enabled === undefined ? undefined : !!b.enabled,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Batch parsers for other entities
+// ---------------------------------------------------------------------------
+
+export interface BatchApiKeyOps {
+  create?: ApiKeyInput[];
+  update?: Array<{ id: string } & ApiKeyInput>;
+  delete?: string[];
+  enable?: string[];
+  disable?: string[];
+}
+
+export function parseBatchApiKeyOps(body: unknown): BatchApiKeyOps {
+  const b = (body || {}) as Record<string, unknown>;
+  const ops: BatchApiKeyOps = {};
+
+  if (Array.isArray(b.create))
+    ops.create = (b.create as unknown[]).map((item) => parseApiKeyInput(item));
+  if (Array.isArray(b.update))
+    ops.update = (b.update as unknown[]).map((item) => {
+      const i = (item || {}) as Record<string, unknown>;
+      const id = str(i.id);
+      if (!id) throw new Error("each update item requires an id");
+      return { id, ...parseApiKeyInput(item) };
+    });
+  if (Array.isArray(b.delete))
+    ops.delete = (b.delete as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+  if (Array.isArray(b.enable))
+    ops.enable = (b.enable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+  if (Array.isArray(b.disable))
+    ops.disable = (b.disable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+
+  const total =
+    (ops.create?.length ?? 0) +
+    (ops.update?.length ?? 0) +
+    (ops.delete?.length ?? 0) +
+    (ops.enable?.length ?? 0) +
+    (ops.disable?.length ?? 0);
+  if (total === 0) throw new Error("batch must contain at least one operation");
+  if (total > MAX_BATCH_OPS)
+    throw new Error(
+      `batch exceeds ${MAX_BATCH_OPS} operation limit (got ${total})`,
+    );
+  return ops;
+}
+
+export interface BatchModelOps {
+  create?: ModelInput[];
+  update?: Array<{ id: string } & Partial<ModelInput>>;
+  delete?: string[];
+  enable?: string[];
+  disable?: string[];
+}
+
+export function parseBatchModelOps(body: unknown): BatchModelOps {
+  const b = (body || {}) as Record<string, unknown>;
+  const ops: BatchModelOps = {};
+
+  if (Array.isArray(b.create))
+    ops.create = (b.create as unknown[]).map((item) =>
+      parseModelInput(item, true),
+    );
+  if (Array.isArray(b.update))
+    ops.update = (b.update as unknown[]).map((item) => {
+      const i = (item || {}) as Record<string, unknown>;
+      const id = str(i.id);
+      if (!id) throw new Error("each update item requires an id");
+      return { id, ...parseModelInput(item) };
+    });
+  if (Array.isArray(b.delete))
+    ops.delete = (b.delete as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+  if (Array.isArray(b.enable))
+    ops.enable = (b.enable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+  if (Array.isArray(b.disable))
+    ops.disable = (b.disable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+
+  const total =
+    (ops.create?.length ?? 0) +
+    (ops.update?.length ?? 0) +
+    (ops.delete?.length ?? 0) +
+    (ops.enable?.length ?? 0) +
+    (ops.disable?.length ?? 0);
+  if (total === 0) throw new Error("batch must contain at least one operation");
+  if (total > MAX_BATCH_OPS)
+    throw new Error(
+      `batch exceeds ${MAX_BATCH_OPS} operation limit (got ${total})`,
+    );
+  return ops;
+}
+
+function parseModelLinkIdentity(value: unknown): ModelLinkIdentity {
+  const item = (value || {}) as Record<string, unknown>;
+  const providerId = str(item.providerId);
+  const upstreamModel = str(item.upstreamModel);
+  if (!providerId || !upstreamModel)
+    throw new Error("each model link requires providerId and upstreamModel");
+  return { providerId, upstreamModel };
+}
+
+function parseModelLink(value: unknown): ModelLinkInput {
+  const item = (value || {}) as Record<string, unknown>;
+  const identity = parseModelLinkIdentity(item);
+  return {
+    ...identity,
+    enabled: item.enabled === undefined ? undefined : !!item.enabled,
+    endpoint:
+      item.endpoint === undefined
+        ? undefined
+        : item.endpoint === null
+          ? null
+          : str(item.endpoint),
+    contextWindow:
+      item.contextWindow === undefined
+        ? undefined
+        : item.contextWindow === null
+          ? null
+          : num(item.contextWindow),
+    maxOutputTokens:
+      item.maxOutputTokens === undefined
+        ? undefined
+        : item.maxOutputTokens === null
+          ? null
+          : num(item.maxOutputTokens),
+  };
+}
+
+export function parseBatchModelLinkOps(body: unknown): BatchModelLinkOps {
+  const b = (body || {}) as Record<string, unknown>;
+  const ops: BatchModelLinkOps = {};
+  if (Array.isArray(b.add)) ops.add = b.add.map(parseModelLink);
+  if (Array.isArray(b.remove))
+    ops.remove = b.remove.map(parseModelLinkIdentity);
+  if (Array.isArray(b.update)) ops.update = b.update.map(parseModelLink);
+  if (Array.isArray(b.reorder))
+    ops.reorder = b.reorder.map(parseModelLinkIdentity);
+
+  const total =
+    (ops.add?.length ?? 0) +
+    (ops.remove?.length ?? 0) +
+    (ops.update?.length ?? 0) +
+    (ops.reorder?.length ?? 0);
+  if (total === 0) throw new Error("batch must contain at least one operation");
+  if (total > MAX_BATCH_OPS)
+    throw new Error(
+      `batch exceeds ${MAX_BATCH_OPS} operation limit (got ${total})`,
+    );
+  return ops;
+}
+
+export interface BatchProviderOps {
+  update?: Array<{ id: string } & Partial<ProviderInput>>;
+  delete?: string[];
+  enable?: string[];
+  disable?: string[];
+}
+
+export function parseBatchProviderOps(body: unknown): BatchProviderOps {
+  const b = (body || {}) as Record<string, unknown>;
+  const ops: BatchProviderOps = {};
+
+  if (Array.isArray(b.update))
+    ops.update = (b.update as unknown[]).map((item) => {
+      const i = (item || {}) as Record<string, unknown>;
+      const id = str(i.id);
+      if (!id) throw new Error("each update item requires an id");
+      return { id, ...parseProviderInput(item) };
+    });
+  if (Array.isArray(b.delete))
+    ops.delete = (b.delete as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+  if (Array.isArray(b.enable))
+    ops.enable = (b.enable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+  if (Array.isArray(b.disable))
+    ops.disable = (b.disable as unknown[]).filter(
+      (k): k is string => typeof k === "string" && k.length > 0,
+    );
+
+  const total =
+    (ops.update?.length ?? 0) +
+    (ops.delete?.length ?? 0) +
+    (ops.enable?.length ?? 0) +
+    (ops.disable?.length ?? 0);
+  if (total === 0) throw new Error("batch must contain at least one operation");
+  if (total > MAX_BATCH_OPS)
+    throw new Error(
+      `batch exceeds ${MAX_BATCH_OPS} operation limit (got ${total})`,
+    );
+  return ops;
 }

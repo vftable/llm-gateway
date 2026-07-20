@@ -2,9 +2,21 @@
 
 import type { Database as DB } from "better-sqlite3";
 import { randomBytes } from "crypto";
-import type { AuthScheme, Provider, ProviderFormat, WireKind } from "../types";
+import type {
+  AuthScheme,
+  KeyCount,
+  Provider,
+  ProviderFormat,
+  WireKind,
+} from "../types";
 import { wireKindOf } from "../providers/base";
 import { parseJsonArray, parseJsonObject, isString } from "./json";
+import {
+  batchProviderKeys,
+  countProviderKeys,
+  listProviderKeys,
+  type ProviderKeyInput,
+} from "./provider-keys";
 
 interface ProviderRow {
   id: string;
@@ -44,20 +56,20 @@ function readEndpointKinds(raw: string): WireKind[] {
   return [...seen];
 }
 
-export function mapProvider(r: ProviderRow): Provider {
-  const apiKeys = parseJsonArray(r.api_keys, isString);
-  const disabledApiKeys = parseJsonArray(r.disabled_api_keys, isString);
+export function mapProvider(r: ProviderRow, db?: DB): Provider {
   const extraHeaders = parseJsonObject<Record<string, string>>(
     r.extra_headers,
     {},
   );
+  const keyCount: KeyCount = db
+    ? countProviderKeys(db, r.id)
+    : { enabled: 0, disabled: 0, total: 0 };
   return {
     id: r.id,
     name: r.name,
     baseUrl: r.base_url,
     host: r.host,
-    apiKeys,
-    disabledApiKeys,
+    keyCount,
     authScheme: (r.auth_scheme as AuthScheme) || "bearer",
     extraHeaders,
     retryAttempts: r.retry_attempts,
@@ -91,14 +103,14 @@ export function listProviders(db: DB, includeDisabled = true): Provider[] {
   const rows = db
     .prepare("SELECT * FROM providers ORDER BY sort_order, name")
     .all() as ProviderRow[];
-  const all = rows.map(mapProvider);
+  const all = rows.map((r) => mapProvider(r, db));
   return includeDisabled ? all : all.filter((p) => p.enabled);
 }
 
 export function getProvider(db: DB, id: string): Provider | null {
   const row = db.prepare("SELECT * FROM providers WHERE id = ?").get(id) as
     ProviderRow | undefined;
-  return row ? mapProvider(row) : null;
+  return row ? mapProvider(row, db) : null;
 }
 
 export interface ProviderInput {
@@ -160,7 +172,7 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
        retry_attempts, retry_interval_ms, request_timeout_ms, tls_verify,
        enabled, format, endpoints, endpoint_paths, native_conversion, catalog_id,
        base_path, models_path, proxy, country, provider_config, sort_order, created_at, updated_at)
-     VALUES (@id, @name, @base_url, @host, @api_keys, @disabled_api_keys, @auth_scheme, @extra_headers,
+     VALUES (@id, @name, @base_url, @host, '[]', '[]', @auth_scheme, @extra_headers,
        @retry_attempts, @retry_interval_ms, @request_timeout_ms, @tls_verify,
        @enabled, @format, @endpoints, @endpoint_paths, @native_conversion, @catalog_id,
        @base_path, @models_path, @proxy, @country, @provider_config, @sort_order, @created_at, @updated_at)`,
@@ -169,12 +181,6 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
     name: input.name,
     base_url: input.baseUrl.replace(/\/+$/, ""),
     host: input.host ?? null,
-    api_keys: JSON.stringify(
-      (input.apiKeys ?? []).filter((k) => k && k.length),
-    ),
-    disabled_api_keys: JSON.stringify(
-      (input.disabledApiKeys ?? []).filter((k) => k && k.length),
-    ),
     auth_scheme: input.authScheme || "bearer",
     extra_headers: JSON.stringify(input.extraHeaders ?? {}),
     retry_attempts: input.retryAttempts ?? 1,
@@ -182,7 +188,6 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
     request_timeout_ms: input.requestTimeoutMs ?? 600000,
     tls_verify: input.tlsVerify === false ? 0 : 1,
     enabled: input.enabled === false ? 0 : 1,
-    // Persist null unless explicitly set — format is only a generic-adapter hint.
     format: input.format ?? null,
     endpoints: JSON.stringify(
       input.endpoints ?? defaultEndpoints(input.format),
@@ -199,6 +204,13 @@ export function createProvider(db: DB, input: ProviderInput): Provider {
     created_at: now,
     updated_at: now,
   });
+  // Route legacy apiKeys/disabledApiKeys through the provider_keys table.
+  const addKeys: ProviderKeyInput[] = [];
+  for (const k of (input.apiKeys ?? []).filter((k) => k && k.length))
+    addKeys.push({ credential: k, enabled: true });
+  for (const k of (input.disabledApiKeys ?? []).filter((k) => k && k.length))
+    addKeys.push({ credential: k, enabled: false });
+  if (addKeys.length) batchProviderKeys(db, id, { add: addKeys });
   return getProvider(db, id)!;
 }
 
@@ -245,8 +257,6 @@ export function updateProvider(
     name: input.name ?? existing.name,
     baseUrl: input.baseUrl ?? existing.baseUrl,
     host: input.host !== undefined ? input.host : existing.host,
-    apiKeys: input.apiKeys ?? existing.apiKeys,
-    disabledApiKeys: input.disabledApiKeys ?? existing.disabledApiKeys,
     authScheme: input.authScheme ?? existing.authScheme,
     extraHeaders: input.extraHeaders ?? existing.extraHeaders,
     retryAttempts: input.retryAttempts ?? existing.retryAttempts,
@@ -273,8 +283,7 @@ export function updateProvider(
   };
   db.prepare(
     `UPDATE providers SET
-       name=@name, base_url=@base_url, host=@host, api_keys=@api_keys,
-       disabled_api_keys=@disabled_api_keys,
+       name=@name, base_url=@base_url, host=@host,
        auth_scheme=@auth_scheme, extra_headers=@extra_headers,
        retry_attempts=@retry_attempts, retry_interval_ms=@retry_interval_ms,
        request_timeout_ms=@request_timeout_ms, tls_verify=@tls_verify,
@@ -290,10 +299,6 @@ export function updateProvider(
     name: next.name,
     base_url: next.baseUrl.replace(/\/+$/, ""),
     host: next.host ?? null,
-    api_keys: JSON.stringify((next.apiKeys ?? []).filter((k) => k && k.length)),
-    disabled_api_keys: JSON.stringify(
-      (next.disabledApiKeys ?? []).filter((k) => k && k.length),
-    ),
     auth_scheme: next.authScheme || "bearer",
     extra_headers: JSON.stringify(next.extraHeaders ?? {}),
     retry_attempts: next.retryAttempts ?? 1,
@@ -313,6 +318,20 @@ export function updateProvider(
     provider_config: JSON.stringify(next.providerConfig ?? {}),
     updated_at: now,
   });
+  // Legacy shim: when apiKeys/disabledApiKeys arrays are provided (e.g. from
+  // old UI or config sync), replace the provider_keys table contents.
+  if (input.apiKeys !== undefined || input.disabledApiKeys !== undefined) {
+    const existing_keys = listProviderKeys(db, id);
+    const removeIds = existing_keys.map((k) => k.id);
+    const addKeys: ProviderKeyInput[] = [];
+    for (const k of (input.apiKeys ?? []).filter((k) => k && k.length))
+      addKeys.push({ credential: k, enabled: true });
+    for (const k of (input.disabledApiKeys ?? []).filter((k) => k && k.length))
+      addKeys.push({ credential: k, enabled: false });
+    // Remove first so the add step doesn't hit cred_hash duplicates.
+    if (removeIds.length) batchProviderKeys(db, id, { remove: removeIds });
+    if (addKeys.length) batchProviderKeys(db, id, { add: addKeys });
+  }
   return getProvider(db, id);
 }
 

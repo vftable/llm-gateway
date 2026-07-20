@@ -544,7 +544,7 @@ test("streaming: primes a ping on connect + surfaces upstream error as SSE event
       providers: [{ providerId: "up", upstreamModel: "up-1" }],
     });
     const model = getModel(db, m.id)!;
-    // ping interval > 0 so priming writes a ping immediately.
+    // Messages streams always prime a protocol-native ping immediately.
     const engine = new ForwardingEngine(
       db,
       quietLogger(),
@@ -556,10 +556,14 @@ test("streaming: primes a ping on connect + surfaces upstream error as SSE event
       { method: "POST", headers: {} } as never,
       res as never,
       {
-        ...ctxFor(model, {
-          model: "test-model",
-          messages: [{ role: "user", content: "hi" }],
-        }),
+        ...ctxFor(
+          model,
+          {
+            model: "test-model",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          "/v1/messages",
+        ),
         isStream: true,
       },
     );
@@ -581,12 +585,12 @@ test("streaming: primes a ping on connect + surfaces upstream error as SSE event
     // Primed ping landed at connect, the one content chunk streamed, and the
     // abnormal upstream end surfaced as a terminal SSE error event (not a hang).
     assert.ok(
-      state.text.startsWith(": ping\n\n"),
-      "expected a primed ping first",
+      state.text.startsWith('event: ping\ndata: {"type":"ping"}\n\n'),
+      "expected a primed Anthropic ping event first",
     );
     assert.ok(
-      state.text.includes('"content":"hi"'),
-      "expected the streamed chunk",
+      state.text.includes('"text":"hi"'),
+      "expected the converted Anthropic text delta",
     );
     assert.ok(
       state.text.includes("event: error"),
@@ -639,10 +643,14 @@ test("pipeThrough SSE: a native event-stream that dies surfaces a terminal error
       { method: "POST", headers: {} } as never,
       res as never,
       {
-        ...ctxFor(model, {
-          model: "test-model",
-          messages: [{ role: "user", content: "hi" }],
-        }),
+        ...ctxFor(
+          model,
+          {
+            model: "test-model",
+            messages: [{ role: "user", content: "hi" }],
+          },
+          "/v1/messages",
+        ),
         isStream: false,
       },
     );
@@ -659,8 +667,8 @@ test("pipeThrough SSE: a native event-stream that dies surfaces a terminal error
       }, 10);
     });
     assert.ok(
-      state.text.startsWith(": ping\n\n"),
-      "expected a primed ping first",
+      state.text.startsWith('event: ping\ndata: {"type":"ping"}\n\n'),
+      "expected a primed Anthropic ping event first",
     );
     assert.ok(
       state.text.includes('"content":"hi"'),

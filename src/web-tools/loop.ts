@@ -86,7 +86,7 @@ export async function runWebToolLoop(
   // without this the connection sits idle and a proxy drops it at ~90s. The
   // heartbeat opens the SSE response now and pings until we're ready to emit.
   const heartbeat: SseHeartbeat | null = wantStream
-    ? startSseHeartbeat(res, engine.pingInterval)
+    ? startSseHeartbeat(res, engine.pingInterval, fmt === "messages")
     : null;
 
   // Short-circuit: Claude Code sends web search as a standalone /v1/messages

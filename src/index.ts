@@ -15,6 +15,7 @@ import { createServerApp } from "./server";
 import { createWsServer } from "./ws/server";
 import { Logger } from "./logger";
 import { pruneOldLogs } from "./repo/request-logs";
+import { KeySyncService } from "./services/key-sync";
 
 function main(): void {
   const bootstrap = loadBootstrap();
@@ -57,6 +58,14 @@ function main(): void {
   const broadcast: Parameters<typeof createServerApp>[5] = (topics, source) =>
     wsHub?.broadcast(topics, source);
 
+  // Background key sync: polls configured URLs per-provider and reconciles keys.
+  // Created before the app so routes can register/unregister timers; started
+  // after the server is listening.
+  const keySyncService = new KeySyncService(db, logger, () => {
+    router.reload();
+    broadcast(["providers"], "provider:update");
+  });
+
   const app = createServerApp(
     db,
     logger,
@@ -67,6 +76,7 @@ function main(): void {
       corsOrigin: bootstrap.corsOrigin,
     },
     broadcast,
+    keySyncService,
   );
 
   logger.info("LLM Gateway starting");
@@ -98,6 +108,8 @@ function main(): void {
   if (typeof (pruneTimer as { unref?: () => void }).unref === "function")
     (pruneTimer as { unref: () => void }).unref();
 
+  keySyncService.start();
+
   // Graceful shutdown: stop accepting connections, checkpoint + close the DB
   // exactly once, then exit. The 5s timer forces exit if in-flight streams
   // won't drain; the DB is still closed cleanly on that path.
@@ -114,6 +126,7 @@ function main(): void {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("shutdown", { signal: sig });
+    keySyncService.stop();
     wsHub?.shutdown();
     server.close(() => exit(0));
     setTimeout(() => exit(0), 5000).unref();

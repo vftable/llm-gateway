@@ -4,13 +4,21 @@
 
 import type {
   ApiKey,
+  BatchModelLinkOps,
+  BatchModelLinkResult,
+  BatchKeyOps,
+  BatchKeyResult,
   FullBreakdownRow,
+  KeyImportRequest,
+  KeyImportResult,
   Model,
   ModelInput,
   ModelResolutionRow,
   OverviewResponse,
   Provider,
   ProviderInput,
+  ProviderKey,
+  ProviderKeySyncConfig,
   ProviderTestResult,
   ProviderTemplate,
   ProviderTestInput,
@@ -103,7 +111,7 @@ export const api = {
   createProvider: (input: ProviderInput) =>
     req<Provider>("/api/providers", json("POST", input)),
   // Partial: the backend merges (undefined keeps existing), so callers can PUT
-  // just the fields they changed (e.g. the Keys tab sends only { apiKeys }).
+  // just the fields they changed.
   updateProvider: (id: string, input: Partial<ProviderInput>) =>
     req<Provider>(`/api/providers/${id}`, json("PUT", input)),
   deleteProvider: (id: string) =>
@@ -140,11 +148,106 @@ export const api = {
     req<Model>("/api/models", json("POST", input)),
   updateModel: (id: string, input: ModelInput) =>
     req<Model>(`/api/models/${id}`, json("PUT", input)),
+  batchModelLinks: (id: string, ops: BatchModelLinkOps) =>
+    req<BatchModelLinkResult>(
+      `/api/models/${id}/providers/batch`,
+      json("POST", ops),
+    ),
   deleteModel: (id: string) =>
     req<void>(`/api/models/${id}`, { method: "DELETE" }),
   hopStats: (id: string) => req<HopStat[]>(`/api/models/${id}/hop-stats`),
   testModel: (id: string) =>
     req<ExposedModelTestResult>(`/api/models/${id}/test`, { method: "POST" }),
+
+  // provider keys
+  listProviderKeys: (
+    providerId: string,
+    params?: { offset?: number; limit?: number },
+  ) => {
+    const qs = new URLSearchParams();
+    if (params?.offset) qs.set("offset", String(params.offset));
+    if (params?.limit) qs.set("limit", String(params.limit));
+    const q = qs.toString();
+    return req<{
+      keys: ProviderKey[];
+      total: number;
+      offset: number;
+      limit: number;
+    }>(`/api/providers/${providerId}/keys${q ? `?${q}` : ""}`);
+  },
+  createProviderKey: (
+    providerId: string,
+    input: {
+      credential: string;
+      metadata?: Record<string, string>;
+      label?: string;
+    },
+  ) =>
+    req<ProviderKey>(`/api/providers/${providerId}/keys`, json("POST", input)),
+  updateProviderKey: (
+    providerId: string,
+    keyId: string,
+    input: {
+      enabled?: boolean;
+      metadata?: Record<string, string>;
+      label?: string | null;
+    },
+  ) =>
+    req<ProviderKey>(
+      `/api/providers/${providerId}/keys/${keyId}`,
+      json("PUT", input),
+    ),
+  deleteProviderKey: (providerId: string, keyId: string) =>
+    req<void>(`/api/providers/${providerId}/keys/${keyId}`, {
+      method: "DELETE",
+    }),
+  batchProviderKeys: (providerId: string, ops: BatchKeyOps) =>
+    req<BatchKeyResult>(
+      `/api/providers/${providerId}/keys/batch`,
+      json("POST", ops),
+    ),
+  importProviderKeys: (providerId: string, input: KeyImportRequest) =>
+    req<KeyImportResult>(
+      `/api/providers/${providerId}/keys/import`,
+      json("POST", input),
+    ),
+  getProviderKeySync: (providerId: string) =>
+    req<ProviderKeySyncConfig | null>(`/api/providers/${providerId}/keys/sync`),
+  updateProviderKeySync: (
+    providerId: string,
+    input: {
+      pollUrl: string;
+      pollHeaders?: Record<string, string>;
+      pollIntervalSec?: number;
+      enabled?: boolean;
+    },
+  ) =>
+    req<ProviderKeySyncConfig>(
+      `/api/providers/${providerId}/keys/sync`,
+      json("PUT", input),
+    ),
+  deleteProviderKeySync: (providerId: string) =>
+    req<void>(`/api/providers/${providerId}/keys/sync`, { method: "DELETE" }),
+  triggerProviderKeySync: (providerId: string) =>
+    req<KeyImportResult>(
+      `/api/providers/${providerId}/keys/sync/trigger`,
+      json("POST"),
+    ),
+
+  // batch providers
+  batchProviders: (ops: {
+    update?: Array<{ id: string } & Partial<ProviderInput>>;
+    delete?: string[];
+    enable?: string[];
+    disable?: string[];
+  }) =>
+    req<{
+      updated: number;
+      deleted: number;
+      enabled: number;
+      disabled: number;
+      errors: Array<{ op: string; id?: string; detail: string }>;
+    }>("/api/providers/batch", json("POST", ops)),
 
   // imported provider models (per-provider catalog, not exposed)
   listProviderModels: (providerId: string) =>
@@ -202,8 +305,48 @@ export const api = {
   ) => req<ApiKey>(`/api/api-keys/${id}`, json("PUT", input)),
   deleteApiKey: (id: string) =>
     req<void>(`/api/api-keys/${id}`, { method: "DELETE" }),
-  revealApiKey: (id: string) =>
-    req<{ keyFull: string }>(`/api/api-keys/${id}/reveal`),
+  batchApiKeys: (ops: {
+    create?: Array<{
+      name?: string | null;
+      userId?: string | null;
+      tokensPerDay?: number | null;
+    }>;
+    update?: Array<{
+      id: string;
+      name?: string | null;
+      userId?: string | null;
+      tokensPerDay?: number | null;
+      enabled?: boolean;
+    }>;
+    delete?: string[];
+    enable?: string[];
+    disable?: string[];
+  }) =>
+    req<{
+      created: ApiKey[];
+      updated: ApiKey[];
+      deleted: number;
+      enabled: number;
+      disabled: number;
+      errors: Array<{ op: string; id?: string; detail: string }>;
+    }>("/api/api-keys/batch", json("POST", ops)),
+
+  // batch models
+  batchModels: (ops: {
+    create?: ModelInput[];
+    update?: Array<{ id: string } & Partial<ModelInput>>;
+    delete?: string[];
+    enable?: string[];
+    disable?: string[];
+  }) =>
+    req<{
+      created: Model[];
+      updated: Model[];
+      deleted: number;
+      enabled: number;
+      disabled: number;
+      errors: Array<{ op: string; id?: string; detail: string }>;
+    }>("/api/models/batch", json("POST", ops)),
 
   // usage + logs
   usage: () => req<UsageResponse>("/api/usage"),

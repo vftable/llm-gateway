@@ -8,7 +8,9 @@ to add a new provider. See [`docs/format-conversion.md`](./format-conversion.md)
 for the wire-format conversion rules that run *around* an adapter,
 [`docs/transforms-api.md`](./transforms-api.md) for how to author a transform
 stage and how a provider family's `quirks.defaultTransforms` composes into
-the default provider transform stack, and
+the default provider transform stack,
+[`docs/key-management.md`](./key-management.md) for structured provider keys,
+per-key metadata, URL imports, and the custom polling-source contract, and
 [`docs/wire-types.md`](./wire-types.md) for the field-by-field reference of
 `ctx.body`'s shape once you narrow it inside a build method (and of every
 type a transform hook sees).
@@ -204,7 +206,11 @@ hand.
 ### `BuildCtx` — phase 2 (see table above)
 
 The only *synchronous* seam (build methods are not async — they only shape
-a request; the engine sends it).
+a request; the engine sends it). `ctx.apiKey` is the raw credential selected
+by health-aware rotation; `ctx.keyMetadata` is its structured
+`Record<string,string>` metadata (uuid, email, tier, etc.). Request transforms
+receive the same values as `TransformCtx.apiKey` / `TransformCtx.keyMetadata`.
+Never log either wholesale.
 
 ### `UsageCtx` — `keyUsage(ctx): Promise<KeyUsageResult>`
 
@@ -214,6 +220,7 @@ time window) for the dashboard.
 | Field | What it is |
 |---|---|
 | `ctx.apiKey` | Raw key for this row — query the provider's usage endpoint with it |
+| `ctx.keyMetadata` | Structured metadata attached to this exact key — use uuid/email/tier when the provider's stats API requires them |
 | `ctx.mask` | Masked form (head…tail) — safe for logs/labels; never surface the raw key |
 | `ctx.enabled` | Whether this key is operator-enabled (still reported when disabled) |
 | `ctx.seed` | Stable per-key seed for deterministic placeholder windows |

@@ -18,6 +18,7 @@ import {
   getProviderModelById,
   countProviderModelsByProvider,
 } from "../../repo/provider-models";
+import { listProviderKeys } from "../../repo/provider-keys";
 import { listProviderTemplates, type UpstreamModel } from "../../providers";
 import type { AuthScheme } from "../../types";
 import type { RouteCtx, ProviderLike } from "./types";
@@ -27,6 +28,7 @@ import {
   parseProviderInput,
   parseCapabilities,
   parseTransformConfig,
+  parseBatchProviderOps,
 } from "./parsers";
 import {
   testProviderAdhoc,
@@ -102,6 +104,63 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
     res.status(204).end();
   });
 
+  // --- providers batch ---
+  r.post("/providers/batch", requireAdmin, (req, res) => {
+    try {
+      const ops = parseBatchProviderOps(req.body);
+      const result = {
+        updated: 0,
+        deleted: 0,
+        enabled: 0,
+        disabled: 0,
+        errors: [] as Array<{ op: string; id?: string; detail: string }>,
+      };
+
+      const tx = db.transaction(() => {
+        if (ops.update) {
+          for (const { id, ...input } of ops.update) {
+            try {
+              if (updateProvider(db, id, input)) result.updated++;
+              else
+                result.errors.push({ op: "update", id, detail: "not found" });
+            } catch (e) {
+              result.errors.push({
+                op: "update",
+                id,
+                detail: (e as Error).message,
+              });
+            }
+          }
+        }
+        if (ops.enable) {
+          for (const id of ops.enable) {
+            if (updateProvider(db, id, { enabled: true })) result.enabled++;
+            else result.errors.push({ op: "enable", id, detail: "not found" });
+          }
+        }
+        if (ops.disable) {
+          for (const id of ops.disable) {
+            if (updateProvider(db, id, { enabled: false })) result.disabled++;
+            else result.errors.push({ op: "disable", id, detail: "not found" });
+          }
+        }
+        if (ops.delete) {
+          for (const id of ops.delete) {
+            if (deleteProvider(db, id)) result.deleted++;
+            else result.errors.push({ op: "delete", id, detail: "not found" });
+          }
+        }
+      });
+      tx();
+
+      router.reload();
+      broadcast(["providers", "models", "overview"], "provider:batch");
+      res.json(result);
+    } catch (e) {
+      bad(res, e);
+    }
+  });
+
   // Live test: goes through the resolved adapter's testProvider() seam (default:
   // GET {baseUrl}{basePath}{modelsPath} with the key's auth — see
   // ProviderAdapter.testProvider; a bespoke provider can override this, see
@@ -119,18 +178,20 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
     if (!provider)
       return res.status(404).json({ error: { message: "not found" } });
     const requestedKey = str((req.body as Record<string, unknown>)?.key);
-    if (
-      requestedKey &&
-      !provider.apiKeys.includes(requestedKey) &&
-      !(provider.disabledApiKeys ?? []).includes(requestedKey)
-    )
+    const allKeys = listProviderKeys(db, provider.id);
+    if (requestedKey && !allKeys.some((k) => k.credential === requestedKey))
       return res
         .status(400)
         .json({ error: { message: "key is not configured on this provider" } });
+    const enabledCreds = allKeys
+      .filter((k) => k.enabled)
+      .map((k) => k.credential);
     try {
       const key =
-        requestedKey ?? router.pickKeyForTest(provider, null)?.key ?? undefined;
-      const result = await testSavedProvider(provider, key);
+        requestedKey ??
+        router.pickKeyForTest(provider.id, enabledCreds, null)?.key ??
+        undefined;
+      const result = await testSavedProvider(provider, db, key);
       res.json(result);
     } catch (e) {
       res.json({ ok: false, status: null, ms: 0, error: (e as Error).message });
@@ -143,7 +204,7 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
     const provider = getProvider(db, String(req.params.id));
     if (!provider)
       return res.status(404).json({ error: { message: "not found" } });
-    res.json(await buildUsageReport(provider));
+    res.json(await buildUsageReport(provider, db));
   });
 
   // Probe upstream models via the adapter's fetchModels() seam (honors any
@@ -153,7 +214,7 @@ export function registerProviderRoutes(ctx: RouteCtx): void {
     if (!provider)
       return res.status(404).json({ error: { message: "not found" } });
     try {
-      const models = await fetchProviderModels(provider);
+      const models = await fetchProviderModels(provider, db);
       res.json({ models });
     } catch (e) {
       res.json({ models: [], error: (e as Error).message });

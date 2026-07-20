@@ -123,14 +123,15 @@ export function messagesRequestToChat(
         typeof thinking.budget_tokens === "number" &&
         thinking.budget_tokens > 0
       ) {
-        rawEffort = budgetToLevel(thinking.budget_tokens, targetModel);
+        rawEffort = budgetToLevel(thinking.budget_tokens, targetModel, false);
       } else {
         rawEffort = "high";
       }
     }
   }
   if (rawEffort !== undefined) {
-    out.reasoning_effort = toOpenAIEffort(rawEffort, targetModel) ?? rawEffort;
+    out.reasoning_effort =
+      toOpenAIEffort(rawEffort, targetModel, false) ?? rawEffort;
   }
 
   // thinking.display -> _reasoning_summary (gateway-internal)

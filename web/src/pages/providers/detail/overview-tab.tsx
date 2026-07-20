@@ -71,9 +71,9 @@ export function OverviewTab({
     ["Auth scheme", authSchemeLabel(provider.authScheme)],
     [
       "API keys",
-      (provider.disabledApiKeys?.length ?? 0) > 0
-        ? `${provider.apiKeys.length} active · ${provider.disabledApiKeys.length} off`
-        : `${provider.apiKeys.length}`,
+      provider.keyCount.disabled > 0
+        ? `${provider.keyCount.enabled} active · ${provider.keyCount.disabled} off`
+        : `${provider.keyCount.total}`,
     ],
     ["Imported models", `${provider.importedModelCount ?? 0}`],
     ["Models routed", `${modelCount}`],

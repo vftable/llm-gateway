@@ -194,7 +194,28 @@ The two APIs use different effort scales:
 - The `anthropic:sanitize-request` hook also casts effort to valid Anthropic
   values on native `/v1/messages` requests (not just cross-format conversions).
 
-We never *fabricate* a thinking config from an effort hint.
+#### Z.AI GLM reasoning effort
+
+The Z.AI GLM Coding adapter uses the same Chat-shaped hook, but applies Z.AI's
+native rules at the final provider-boundary stage:
+
+- GLM-5.2 and later accept `low`, `medium`, `high`, `xhigh`, and `max` without
+  GPT-family clamping, and the gateway ensures `thinking.type` is `enabled`.
+- `minimal` and `none` disable thinking and are removed from the outbound
+  `reasoning_effort` field. Compatibility aliases (`maximum`, `x-high`, `min`,
+  `lowest`, etc.) are normalized first.
+- An explicit native `thinking.type: "disabled"` wins over a positive effort.
+- Earlier GLM versions receive only the `thinking.type` enable/disable toggle;
+  unsupported `reasoning_effort` is not forwarded.
+- The behavior is gated by the Z.AI provider catalog identity, so a GLM-named
+  model behind OpenRouter or another compatible provider retains that
+  provider's generic OpenAI reasoning behavior.
+
+Official reference: [Z.AI reasoning_effort](https://docs.z.ai/guides/overview/concept-param#reasoning_effort).
+
+For generic OpenAI-compatible providers we never *fabricate* a thinking config
+from an effort hint; the GLM branch above is the provider-specific exception
+required by Z.AI's documented wire contract.
 
 ### R11 — `reasoning.summary` passthrough  (→ `chat` and `→ messages`)
 The Responses API's `reasoning.summary` (`"auto"` | `"concise"` | `"detailed"`)
@@ -384,7 +405,7 @@ model in the UI:
 
 | Transform | Phase | Default for Anthropic-native providers? | What it does |
 |---|---|---|---|
-| `anthropic-cache` | request | **Yes** — `ANTHROPIC_DEFAULT_TRANSFORMS`, `ttl:"5m"` | Add `cache_control:{type:"ephemeral", ttl}` breakpoints to the stable prefix (last `system` block, last tool, last message content block) for Anthropic prompt caching. `ttl` = `5m`\|`1h`. Stays within the 4-breakpoint limit; skips thinking blocks. No-ops on a body that looks OpenAI-shaped (`role:"tool"`, `tool_calls`, or `{type:"function"}` tools) — a defensive guard now that this runs unconditionally as a family default, not just when a user opted in. |
+| `anthropic-cache` | request | **Yes** — `ANTHROPIC_DEFAULT_TRANSFORMS`, `ttl:"5m"` | Add `cache_control:{type:"ephemeral", ttl}` breakpoints to the stable prefix (last `system` block, last tool, last message content block) for Anthropic prompt caching. `ttl` = `5m`\|`1h`. Skips thinking blocks and no-ops on an OpenAI-shaped body. The final `anthropic:cache-control-limit` request hook counts client-, family-, adapter-, and model-supplied breakpoints together and deterministically removes excess entries so the outbound request never exceeds Anthropic's maximum of four. |
 | `sanitize-tool-args` | response | **Yes** — `ANTHROPIC_DEFAULT_TRANSFORMS` | Coerce/clamp malformed tool-call args from non-Claude models (numeric strings→numbers, `Read.limit` ≤ 2000, drop negative offsets / invalid pdf `pages`) in both the Anthropic `tool_use.input` and chat `tool_calls[].arguments` shapes. |
 | `system-prepend` | request | No — opt-in only | Prepend a **user-supplied** system string (Anthropic `system` or chat system message). Generic — the text is yours. |
 
@@ -397,6 +418,29 @@ its own transform config — the model's entry wins by `(id, phase)` (see
 in the admin UI) to see exactly what applies to a given provider/model —
 never guess from this table alone, since it only says what's true for the
 *catalog default*, not any provider-specific override.
+
+## Anthropic streaming pings
+
+Every client-facing `/v1/messages` SSE response emits Anthropic's protocol
+ping frame exactly as documented by the Messages API:
+
+```sse
+event: ping
+data: {"type":"ping"}
+
+```
+
+The gateway emits one immediately after the upstream request is accepted and
+the client response is opened, then emits another every **15 seconds** until
+the stream ends. This is a fixed protocol guarantee for Messages streams: it
+continues while content is flowing and is not disabled or changed by the
+generic SSE keepalive setting. The same rule applies while the buffered
+web-tool loop is processing searches and upstream turns. OpenAI-compatible
+SSE streams retain the configurable idle comment keepalive.
+
+The normal Messages event lifecycle remains unchanged:
+`message_start` → content block events → `message_delta` → `message_stop`, with
+ping events permitted between any of those events.
 
 ## Hosted / custom tools
 

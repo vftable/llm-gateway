@@ -111,7 +111,7 @@ test("max-tokens: shrinks budget when clamp would breach budget < max invariant"
 
 // --- composed stack --------------------------------------------------------
 
-test("stack: order is thinking-signature, max-tokens, prefill, sanitize-request, thinking-mode, thinking-config", () => {
+test("stack: cache-control enforcement is the final Anthropic request hook", () => {
   const names = defaultAnthropicRequestHooks().map((h) => h.name);
   assert.deepEqual(names, [
     "anthropic:thinking-signature",
@@ -120,6 +120,7 @@ test("stack: order is thinking-signature, max-tokens, prefill, sanitize-request,
     "anthropic:sanitize-request",
     "anthropic:thinking-mode",
     "anthropic:thinking-config",
+    "anthropic:cache-control-limit",
   ]);
 });
 

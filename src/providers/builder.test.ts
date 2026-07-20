@@ -38,6 +38,7 @@ const buildCtx = (over: Partial<BuildCtx> = {}): BuildCtx => ({
   model: "gpt-x",
   body: { messages: [{ role: "user", content: "hi" }] },
   apiKey: "sk-test",
+  keyMetadata: {},
   clientFmt: "chat",
   providerFmt: "chat",
   endpointKind: "chat",

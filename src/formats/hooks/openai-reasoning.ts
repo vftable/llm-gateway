@@ -16,7 +16,18 @@
 // Runs as an all-provider default (DEFAULT_TRANSFORMS), tagged "chat" and
 // "responses", gated on providerFmt so it only fires for OpenAI-compatible hops.
 
-import { isGpt56Plus, isGpt5Family } from "../model-version";
+import {
+  isGlm52Plus,
+  isGlmModel,
+  isGpt56Plus,
+  isGpt5Family,
+} from "../model-version";
+
+const GLM_CATALOG_ID = "glm-coding";
+
+export interface ReasoningNormalizationContext {
+  catalogId?: string | null;
+}
 
 const OPENAI_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 type OpenAIEffort = (typeof OPENAI_EFFORTS)[number];
@@ -47,6 +58,7 @@ export function clampEffortForModel(
 export function toOpenAIEffort(
   value: unknown,
   model?: string,
+  clamp = true,
 ): OpenAIEffort | undefined {
   if (typeof value !== "string") return undefined;
   const v = value.toLowerCase();
@@ -67,43 +79,109 @@ export function toOpenAIEffort(
   else if (v === "max" || v === "maximum") mapped = "max";
 
   if (!mapped) return undefined;
-  return clampEffortForModel(mapped, model);
+  return clamp ? clampEffortForModel(mapped, model) : mapped;
 }
 
-export function budgetToLevel(budget: number, model?: string): OpenAIEffort {
+export function budgetToLevel(
+  budget: number,
+  model?: string,
+  clamp = true,
+): OpenAIEffort {
   let level: OpenAIEffort;
   if (budget <= 4096) level = "low";
   else if (budget <= 16384) level = "medium";
   else if (budget <= 32768) level = "high";
   else if (budget <= 65536) level = "xhigh";
   else level = "max";
-  return clampEffortForModel(level, model);
+  return clamp ? clampEffortForModel(level, model) : level;
 }
 
 export function normalizeOpenAIReasoning(
   body: Record<string, unknown>,
+  context: ReasoningNormalizationContext = {},
 ): Record<string, unknown> {
   if (!body || typeof body !== "object") return body;
 
-  if ("messages" in body) return normalizeChatReasoning(body);
+  if ("messages" in body) return normalizeChatReasoning(body, context);
   if ("input" in body) return normalizeResponsesReasoning(body);
   return body;
 }
 
 function normalizeChatReasoning(
   body: Record<string, unknown>,
+  context: ReasoningNormalizationContext,
 ): Record<string, unknown> {
   // Strip gateway-internal and Anthropic-only fields that should never
   // reach an OpenAI-compatible upstream.
   delete body._reasoning_summary;
   stripAnthropicMetadata(body);
 
+  const model = typeof body.model === "string" ? body.model : undefined;
+  if (
+    context.catalogId === GLM_CATALOG_ID &&
+    typeof model === "string" &&
+    isGlmModel(model)
+  )
+    return normalizeGlmChatReasoning(body, model);
+
   if (body.reasoning_effort === undefined) return body;
 
-  const model = typeof body.model === "string" ? body.model : undefined;
   const casted = toOpenAIEffort(body.reasoning_effort, model);
   if (casted) body.reasoning_effort = casted;
 
+  return body;
+}
+
+type GlmEffort =
+  "low" | "medium" | "high" | "xhigh" | "max" | "minimal" | "none";
+
+function toGlmEffort(value: unknown): GlmEffort | undefined {
+  if (typeof value !== "string") return undefined;
+  const effort = value.toLowerCase();
+  if (
+    effort === "low" ||
+    effort === "medium" ||
+    effort === "high" ||
+    effort === "xhigh" ||
+    effort === "max" ||
+    effort === "minimal" ||
+    effort === "none"
+  )
+    return effort;
+  if (effort === "maximum") return "max";
+  if (effort === "x-high" || effort === "extra-high" || effort === "extra_high")
+    return "xhigh";
+  if (effort === "highest") return "high";
+  if (effort === "min" || effort === "lowest") return "minimal";
+  return undefined;
+}
+
+function normalizeGlmChatReasoning(
+  body: Record<string, unknown>,
+  model: string,
+): Record<string, unknown> {
+  const rawEffort = body.reasoning_effort;
+  if (rawEffort === undefined) return body;
+
+  const effort = toGlmEffort(rawEffort);
+  if (!effort) return body;
+
+  const existingThinking =
+    body.thinking && typeof body.thinking === "object"
+      ? (body.thinking as Record<string, unknown>)
+      : {};
+  const explicitlyDisabled = existingThinking.type === "disabled";
+  const skipThinking = effort === "minimal" || effort === "none";
+
+  if (skipThinking || explicitlyDisabled) {
+    body.thinking = { ...existingThinking, type: "disabled" };
+    delete body.reasoning_effort;
+    return body;
+  }
+
+  body.thinking = { ...existingThinking, type: "enabled" };
+  if (isGlm52Plus(model)) body.reasoning_effort = effort;
+  else delete body.reasoning_effort;
   return body;
 }
 

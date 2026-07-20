@@ -19,6 +19,7 @@ function usageCtx(
 ): UsageCtx {
   return {
     provider: p,
+    keyMetadata: {},
     baseUrl: p.baseUrl,
     basePath: p.basePath || "",
     resolve: (target) => p.baseUrl + (typeof target === "string" ? target : ""),
@@ -35,8 +36,7 @@ function prov(over: Partial<Provider>): Provider {
     name: "p",
     baseUrl: "https://api.example.com",
     host: null,
-    apiKeys: [],
-    disabledApiKeys: [],
+    keyCount: { enabled: 0, disabled: 0, total: 0 },
     authScheme: "bearer",
     extraHeaders: {},
     retryAttempts: 1,
@@ -151,6 +151,7 @@ function newapiCtx(
   return {
     provider: p,
     apiKey: "sk-secret",
+    keyMetadata: {},
     mask: "sk-…abcd",
     enabled: true,
     seed: 1,
@@ -415,6 +416,7 @@ function glmCtx(
   return {
     provider: p,
     apiKey: "sk-secret",
+    keyMetadata: {},
     mask: "sk-…abcd",
     enabled: true,
     seed: 1,

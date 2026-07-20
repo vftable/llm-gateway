@@ -114,7 +114,7 @@ export default function ProviderDetailPage() {
               ? {
                   ...t,
                   badge: (
-                    <Badge variant="secondary">{provider.apiKeys.length}</Badge>
+                    <Badge variant="secondary">{provider.keyCount.total}</Badge>
                   ),
                 }
               : t,

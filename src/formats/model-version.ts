@@ -57,3 +57,22 @@ export function isGpt56Plus(model: unknown): boolean {
 export function isGpt5Family(model: unknown): boolean {
   return typeof model === "string" && GPT5_RE.test(model);
 }
+
+// ---- Z.AI / GLM ------------------------------------------------------------
+
+const GLM_RE = /^glm-(\d+)(?:\.(\d+))?(?:[-_]|$)/i;
+
+/** True when `model` is a versioned GLM model id. */
+export function isGlmModel(model: unknown): boolean {
+  return typeof model === "string" && GLM_RE.test(model);
+}
+
+/** True for GLM-5.2 and later, where Z.AI supports reasoning_effort. */
+export function isGlm52Plus(model: unknown): boolean {
+  if (typeof model !== "string") return false;
+  const match = GLM_RE.exec(model);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2] ?? 0);
+  return major > 5 || (major === 5 && minor >= 2);
+}

@@ -6,6 +6,7 @@
 // for concurrent reader/writer throughput; foreign keys are ON so deleting a
 // model cascades its fallback links and deleting a user nulls-out her keys.
 
+import crypto from "crypto";
 import Database from "better-sqlite3";
 import type { Database as DB } from "better-sqlite3";
 import fs from "fs";
@@ -107,7 +108,6 @@ CREATE TABLE IF NOT EXISTS api_keys (
   name           TEXT,
   key_prefix     TEXT NOT NULL,
   key_hash       TEXT NOT NULL UNIQUE,
-  key_full       TEXT NOT NULL,
   user_id        TEXT REFERENCES users(id) ON DELETE SET NULL,
   tokens_per_day INTEGER,
   enabled        INTEGER NOT NULL DEFAULT 1,
@@ -189,6 +189,35 @@ CREATE TABLE IF NOT EXISTS key_model_affinity (
   model       TEXT NOT NULL,
   fails       INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (provider_id, key_hash, model)
+);
+
+-- Structured provider API keys. Each key has an id, per-key metadata, and an
+-- enabled flag. Replaces the legacy api_keys / disabled_api_keys JSON arrays
+-- on the providers table.
+CREATE TABLE IF NOT EXISTS provider_keys (
+  id          TEXT PRIMARY KEY,
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  credential  TEXT NOT NULL,
+  cred_hash   TEXT NOT NULL,
+  enabled     INTEGER NOT NULL DEFAULT 1,
+  metadata    TEXT NOT NULL DEFAULT '{}',
+  label       TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  UNIQUE(provider_id, cred_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_keys_provider  ON provider_keys(provider_id);
+CREATE INDEX IF NOT EXISTS idx_provider_keys_cred_hash ON provider_keys(cred_hash);
+
+-- Per-provider key sync configuration for background polling.
+CREATE TABLE IF NOT EXISTS provider_key_sync (
+  provider_id       TEXT PRIMARY KEY REFERENCES providers(id) ON DELETE CASCADE,
+  poll_url          TEXT NOT NULL,
+  poll_headers      TEXT NOT NULL DEFAULT '{}',
+  poll_interval_sec INTEGER NOT NULL DEFAULT 300,
+  last_synced_at    TEXT,
+  last_sync_error   TEXT,
+  enabled           INTEGER NOT NULL DEFAULT 1
 );
 `;
 
@@ -349,6 +378,8 @@ function migrate(db: DB): void {
     "requests",
     "INTEGER NOT NULL DEFAULT 0",
   );
+  migrateProviderKeysToTable(db);
+  migrateApiKeysDropFull(db);
 }
 
 // Rebuild model_providers when it still carries the legacy
@@ -551,6 +582,123 @@ function migrateProvidersFormatNullable(db: DB): void {
        DROP TABLE providers;
        ALTER TABLE providers_new RENAME TO providers;`,
     );
+  });
+  tx();
+  db.exec("PRAGMA foreign_keys=ON;");
+}
+
+// Migrate legacy api_keys / disabled_api_keys JSON arrays on the providers
+// table into the new provider_keys table. Idempotent: skips providers that
+// already have rows in provider_keys.
+function migrateProviderKeysToTable(db: DB): void {
+  const hasTable =
+    (
+      db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='provider_keys'",
+        )
+        .get() as { n: number }
+    ).n > 0;
+  if (!hasTable) return;
+
+  const hasKeys = db
+    .prepare("SELECT COUNT(*) AS n FROM provider_keys")
+    .get() as { n: number };
+  if (hasKeys.n > 0) return;
+
+  const rows = db
+    .prepare("SELECT id, api_keys, disabled_api_keys FROM providers")
+    .all() as Array<{
+    id: string;
+    api_keys: string;
+    disabled_api_keys: string | null;
+  }>;
+
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO provider_keys
+       (id, provider_id, credential, cred_hash, enabled, metadata, label, created_at, updated_at)
+     VALUES (@id, @provider_id, @credential, @cred_hash, @enabled, '{}', NULL, @now, @now)`,
+  );
+
+  const now = new Date().toISOString();
+
+  const tx = db.transaction(() => {
+    for (const r of rows) {
+      let enabled: string[] = [];
+      let disabled: string[] = [];
+      try {
+        enabled = JSON.parse(r.api_keys || "[]");
+      } catch {
+        /* ignore corrupt JSON */
+      }
+      try {
+        disabled = JSON.parse(r.disabled_api_keys || "[]");
+      } catch {
+        /* ignore */
+      }
+      for (const key of enabled) {
+        if (!key || typeof key !== "string") continue;
+        insert.run({
+          id: crypto.randomBytes(4).toString("hex"),
+          provider_id: r.id,
+          credential: key,
+          cred_hash: crypto
+            .createHash("sha256")
+            .update(key)
+            .digest("hex")
+            .slice(0, 32),
+          enabled: 1,
+          now,
+        });
+      }
+      for (const key of disabled) {
+        if (!key || typeof key !== "string") continue;
+        insert.run({
+          id: crypto.randomBytes(4).toString("hex"),
+          provider_id: r.id,
+          credential: key,
+          cred_hash: crypto
+            .createHash("sha256")
+            .update(key)
+            .digest("hex")
+            .slice(0, 32),
+          enabled: 0,
+          now,
+        });
+      }
+    }
+  });
+  tx();
+}
+
+// Drop the plaintext key_full column from api_keys. The full key is only
+// returned in-memory on creation, never needs to be re-read from the DB.
+function migrateApiKeysDropFull(db: DB): void {
+  if (!hasColumn(db, "api_keys", "key_full")) return;
+
+  db.exec("PRAGMA foreign_keys=OFF;");
+  const tx = db.transaction(() => {
+    db.exec(`
+      CREATE TABLE api_keys_new (
+        id             TEXT PRIMARY KEY,
+        name           TEXT,
+        key_prefix     TEXT NOT NULL,
+        key_hash       TEXT NOT NULL UNIQUE,
+        user_id        TEXT REFERENCES users(id) ON DELETE SET NULL,
+        tokens_per_day INTEGER,
+        enabled        INTEGER NOT NULL DEFAULT 1,
+        last_used_at   TEXT,
+        created_at     TEXT NOT NULL
+      );
+      INSERT INTO api_keys_new
+        (id, name, key_prefix, key_hash, user_id, tokens_per_day, enabled, last_used_at, created_at)
+        SELECT id, name, key_prefix, key_hash, user_id, tokens_per_day, enabled, last_used_at, created_at
+        FROM api_keys;
+      DROP TABLE api_keys;
+      ALTER TABLE api_keys_new RENAME TO api_keys;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+      CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+    `);
   });
   tx();
   db.exec("PRAGMA foreign_keys=ON;");

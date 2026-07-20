@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { normalizeOpenAIReasoning, toOpenAIEffort } from "./openai-reasoning";
+import { messagesRequestToChat } from "../converters/chat-messages";
 
 // --- toOpenAIEffort ---------------------------------------------------------
 
@@ -87,6 +88,137 @@ test("Chat: no-op when reasoning_effort is absent", () => {
   const before = JSON.stringify(body);
   normalizeOpenAIReasoning(body);
   assert.equal(JSON.stringify(body), before);
+});
+
+// --- GLM / Z.AI reasoning_effort --------------------------------------------
+
+const GLM_CONTEXT = { catalogId: "glm-coding" };
+
+test("GLM-5.2 preserves documented positive efforts and enables thinking", () => {
+  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+    const body: Record<string, unknown> = {
+      model: "glm-5.2",
+      messages: [{ role: "user", content: "hi" }],
+      reasoning_effort: effort,
+      thinking: { clear_thinking: false },
+    };
+    normalizeOpenAIReasoning(body, GLM_CONTEXT);
+    assert.equal(body.reasoning_effort, effort);
+    assert.deepEqual(body.thinking, {
+      clear_thinking: false,
+      type: "enabled",
+    });
+  }
+});
+
+test("GLM-5.2 normalizes effort aliases without GPT clamping", () => {
+  const cases = [
+    ["maximum", "max"],
+    ["x-high", "xhigh"],
+    ["extra_high", "xhigh"],
+    ["highest", "high"],
+  ] as const;
+  for (const [input, expected] of cases) {
+    const body: Record<string, unknown> = {
+      model: "glm-5.2",
+      messages: [],
+      reasoning_effort: input,
+    };
+    normalizeOpenAIReasoning(body, GLM_CONTEXT);
+    assert.equal(body.reasoning_effort, expected);
+    assert.deepEqual(body.thinking, { type: "enabled" });
+  }
+});
+
+test("GLM minimal/none aliases disable thinking and remove effort", () => {
+  for (const effort of ["minimal", "none", "min", "lowest"]) {
+    const body: Record<string, unknown> = {
+      model: "glm-5.2",
+      messages: [],
+      reasoning_effort: effort,
+      thinking: { clear_thinking: false },
+    };
+    normalizeOpenAIReasoning(body, GLM_CONTEXT);
+    assert.equal(body.reasoning_effort, undefined);
+    assert.deepEqual(body.thinking, {
+      clear_thinking: false,
+      type: "disabled",
+    });
+  }
+});
+
+test("GLM explicit thinking disable wins over a positive effort", () => {
+  const body: Record<string, unknown> = {
+    model: "glm-5.2",
+    messages: [],
+    reasoning_effort: "max",
+    thinking: { type: "disabled", clear_thinking: false },
+  };
+  normalizeOpenAIReasoning(body, GLM_CONTEXT);
+  assert.equal(body.reasoning_effort, undefined);
+  assert.deepEqual(body.thinking, {
+    type: "disabled",
+    clear_thinking: false,
+  });
+});
+
+test("pre-5.2 GLM translates effort to thinking toggle but strips unsupported field", () => {
+  const enabled: Record<string, unknown> = {
+    model: "glm-5.1",
+    messages: [],
+    reasoning_effort: "high",
+  };
+  normalizeOpenAIReasoning(enabled, GLM_CONTEXT);
+  assert.equal(enabled.reasoning_effort, undefined);
+  assert.deepEqual(enabled.thinking, { type: "enabled" });
+
+  const disabled: Record<string, unknown> = {
+    model: "glm-4.7",
+    messages: [],
+    reasoning_effort: "none",
+  };
+  normalizeOpenAIReasoning(disabled, GLM_CONTEXT);
+  assert.equal(disabled.reasoning_effort, undefined);
+  assert.deepEqual(disabled.thinking, { type: "disabled" });
+});
+
+test("GLM request without effort preserves native thinking config", () => {
+  const body: Record<string, unknown> = {
+    model: "glm-5.2",
+    messages: [],
+    thinking: { type: "enabled", clear_thinking: false },
+  };
+  normalizeOpenAIReasoning(body, GLM_CONTEXT);
+  assert.deepEqual(body.thinking, {
+    type: "enabled",
+    clear_thinking: false,
+  });
+});
+
+test("GLM-named model outside Z.AI keeps generic OpenAI clamping", () => {
+  const body: Record<string, unknown> = {
+    model: "glm-5.2",
+    messages: [],
+    reasoning_effort: "max",
+  };
+  normalizeOpenAIReasoning(body, { catalogId: "openrouter" });
+  assert.equal(body.reasoning_effort, "high");
+  assert.equal(body.thinking, undefined);
+});
+
+test("Messages conversion preserves large budget as GLM max before final normalization", () => {
+  const converted = messagesRequestToChat({
+    model: "glm-5.2",
+    messages: [{ role: "user", content: "hi" }],
+    max_tokens: 100000,
+    thinking: { type: "enabled", budget_tokens: 70000 },
+  });
+  assert.equal(converted.reasoning_effort, "max");
+  normalizeOpenAIReasoning(converted as Record<string, unknown>, GLM_CONTEXT);
+  assert.equal(converted.reasoning_effort, "max");
+  assert.deepEqual((converted as Record<string, unknown>).thinking, {
+    type: "enabled",
+  });
 });
 
 // --- normalizeOpenAIReasoning (Responses) ------------------------------------

@@ -7,6 +7,10 @@
 // protocol-correct stream the client parses normally.
 
 import type { Response } from "express";
+import {
+  ANTHROPIC_PING_EVENT,
+  ANTHROPIC_PING_INTERVAL_MS,
+} from "../gateway/sse-ping";
 
 function writeEvent(res: Response, event: string, data: unknown): void {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
@@ -40,27 +44,28 @@ export interface SseHeartbeat {
 export function startSseHeartbeat(
   res: Response,
   intervalMs: number,
+  anthropic = false,
 ): SseHeartbeat {
-  // Disabled (interval <= 0) or the response is already committed to a
-  // non-streaming body — nothing to keep alive.
-  if (intervalMs <= 0 || res.headersSent) {
+  // Anthropic Messages pings are protocol events on a mandatory 15-second
+  // cadence. Other SSE dialects retain the configurable generic keepalive.
+  const actualInterval = anthropic ? ANTHROPIC_PING_INTERVAL_MS : intervalMs;
+  if (actualInterval <= 0 || res.headersSent) {
     return { stop() {} };
   }
   openSse(res);
-  // Flush headers so the client sees the 200 + content-type right away, rather
-  // than waiting for the first byte of body — some proxies start their idle
-  // timer only after headers, others only after first data, so we do both.
-  res.write(": ok\n\n");
+  // Emit once the request has been accepted and processing starts, before the
+  // buffered web-tool loop can spend time waiting on upstream work.
+  res.write(anthropic ? ANTHROPIC_PING_EVENT : ": ok\n\n");
 
   let stopped = false;
   const timer = setInterval(() => {
     if (stopped || res.writableEnded) return;
     try {
-      res.write(": ping\n\n");
+      res.write(anthropic ? ANTHROPIC_PING_EVENT : ": ping\n\n");
     } catch {
       /* client gone — the loop's own error handling will settle */
     }
-  }, intervalMs);
+  }, actualInterval);
   // Don't let the heartbeat keep the process alive on its own.
   if (timer && typeof timer === "object" && "unref" in timer) timer.unref();
 

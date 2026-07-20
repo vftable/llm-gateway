@@ -35,7 +35,8 @@ import { agentFor } from "../../gateway/proxy-agent";
 import { shortId } from "../../gateway/engine-support/utils";
 import type { Logger } from "../../logger";
 import { getSettings } from "../../repo/settings";
-import type { ProviderLike } from "./types";
+import { listEnabledCredentials } from "../../repo/provider-keys";
+import { type ProviderLike, providerLikeFrom } from "./types";
 
 // Mask a key to head…tail; never surface the raw secret to the dashboard.
 export function maskKey(key: string): string {
@@ -337,6 +338,7 @@ function probeModels(
 function makeModelsCtx(
   p: ProviderLike,
   format: ModelsFormat,
+  apiKeyOverride?: string | null,
 ): Omit<ModelsCtx, "provider"> {
   const basePath = p.basePath || "";
   const modelsPath = p.modelsPath || "/v1/models";
@@ -346,14 +348,16 @@ function makeModelsCtx(
       basePath,
       typeof target === "string" ? target : modelsPath,
     );
+  const apiKey =
+    apiKeyOverride !== undefined ? apiKeyOverride : (p.apiKeys[0] ?? null);
   return {
     baseUrl: p.baseUrl,
     basePath,
     modelsPath,
     resolve,
     url: resolve(),
-    headers: modelsRequestHeaders(p),
-    apiKey: p.apiKeys[0] ?? null,
+    headers: modelsRequestHeaders(p, apiKey ?? undefined),
+    apiKey,
     format,
     transport: modelsTransport(p),
   };
@@ -365,11 +369,14 @@ function makeModelsCtx(
 // Returns the universal UpstreamModel[].
 export async function fetchProviderModels(
   p: Provider,
+  db: DB,
 ): Promise<UpstreamModel[]> {
   const adapter = adapterForProvider(p);
+  const keys = listEnabledCredentials(db, p.id);
+  const pl = providerLikeFrom(p, keys);
   return adapter.fetchModels({
     provider: p,
-    ...makeModelsCtx(p, adapter.nativeFormat),
+    ...makeModelsCtx(pl, adapter.nativeFormat),
   });
 }
 
@@ -407,10 +414,9 @@ function adapterRequestTransport(p: Provider): AdapterRequest {
 // route handler must never guess it.
 function makeTestModelCtx(
   p: Provider,
+  apiKey: string | null,
 ): Omit<TestModelCtx, "provider" | "model"> {
   const basePath = p.basePath || "";
-  // Same disambiguation as the engine's own makeResolve(): a WireKind is one of
-  // the three literal kind strings; anything else is a literal path segment.
   const resolve: ResolveUrl = (target) =>
     composeUrl(
       p.baseUrl,
@@ -421,13 +427,14 @@ function makeTestModelCtx(
           ? endpointPathFor(p, target)
           : target,
     );
+  const pl = providerLikeFrom(p, apiKey ? [apiKey] : []);
   return {
     baseUrl: p.baseUrl,
     basePath,
     resolve,
     url: resolve(),
-    headers: modelsRequestHeaders(p),
-    apiKey: p.apiKeys[0] ?? null,
+    headers: modelsRequestHeaders(pl, apiKey ?? undefined),
+    apiKey,
     request: adapterRequestTransport(p),
   };
 }
@@ -450,10 +457,11 @@ export async function testProviderModel(
   ownTransforms?: ModelTransformConfig[],
 ): Promise<TestModelResult> {
   const adapter = adapterForProvider(p);
+  const keys = db ? listEnabledCredentials(db, p.id) : [];
   return adapter.testModel({
     provider: p,
     model: upstreamId,
-    ...makeTestModelCtx(p),
+    ...makeTestModelCtx(p, keys[0] ?? null),
     logStage: makeLogStage(db, logger, p.id),
     ownTransforms,
   });
@@ -576,6 +584,7 @@ export async function testProviderAdhoc(
 // URL()`.
 function makeTestProviderCtx(
   p: Provider,
+  keys: string[],
   keyOverride?: string,
 ): Omit<TestProviderCtx, "provider"> {
   const basePath = p.basePath || "";
@@ -589,13 +598,14 @@ function makeTestProviderCtx(
           ? endpointPathFor(p, target)
           : target,
     );
-  const apiKey = keyOverride ?? p.apiKeys[0] ?? null;
+  const apiKey = keyOverride ?? keys[0] ?? null;
+  const pl = providerLikeFrom(p, apiKey ? [apiKey] : []);
   return {
     baseUrl: p.baseUrl,
     basePath,
     resolve,
     url: resolve(),
-    headers: modelsRequestHeaders(p, keyOverride),
+    headers: modelsRequestHeaders(pl, keyOverride),
     apiKey,
     request: adapterRequestTransport(p),
   };
@@ -612,6 +622,7 @@ function makeTestProviderCtx(
 // which key a result belongs to regardless of which adapter answered.
 export async function testSavedProvider(
   p: Provider,
+  db: DB,
   keyUsed?: string,
 ): Promise<{
   ok: boolean;
@@ -622,7 +633,8 @@ export async function testSavedProvider(
   keyMask?: string;
 }> {
   const adapter = adapterForProvider(p);
-  const ctx = makeTestProviderCtx(p, keyUsed);
+  const keys = listEnabledCredentials(db, p.id);
+  const ctx = makeTestProviderCtx(p, keys, keyUsed);
   const result = await adapter.testProvider({ provider: p, ...ctx });
   return { ...result, keyMask: ctx.apiKey ? maskKey(ctx.apiKey) : undefined };
 }

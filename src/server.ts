@@ -18,6 +18,7 @@ import type { GatewayRouter } from "./gateway/router";
 import type { AdminAuth } from "./auth/admin-auth";
 import { adminRouter } from "./admin/routes";
 import type { BroadcastFn } from "./admin/routes/types";
+import type { KeySyncService } from "./services/key-sync";
 
 export function createServerApp(
   db: DB,
@@ -26,6 +27,7 @@ export function createServerApp(
   auth: AdminAuth,
   opts: { webDistDir: string; corsOrigin: string | null },
   broadcast?: BroadcastFn,
+  keySyncService?: KeySyncService,
 ): Express {
   const app = express();
 
@@ -56,7 +58,10 @@ export function createServerApp(
   }
 
   // Admin API.
-  app.use("/api", adminRouter(db, logger, router, auth, broadcast));
+  app.use(
+    "/api",
+    adminRouter(db, logger, router, auth, broadcast, keySyncService),
+  );
 
   // Gateway /v1 surface.
   router.register(app);

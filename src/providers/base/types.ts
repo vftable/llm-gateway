@@ -60,6 +60,8 @@ export interface BuildCtx {
   body: Record<string, unknown>;
   /** API key selected by the proxy key-health logic (null = none). */
   apiKey: string | null;
+  /** Structured metadata attached to the selected provider key. */
+  keyMetadata: Readonly<Record<string, string>>;
   clientFmt: WireFmt;
   providerFmt: WireFmt;
   /** The wire kind this hop routes through. */
@@ -98,6 +100,8 @@ export interface UsageCtx {
   provider: Provider;
   /** Raw API key for this row — use it to query the provider's usage endpoint. */
   apiKey: string;
+  /** Structured metadata attached to this provider key. */
+  keyMetadata: Readonly<Record<string, string>>;
   /** Masked key (head…tail) — safe for logs/labels; never surface the raw key. */
   mask: string;
   /** Whether this key is operator-enabled (false = disabled, still reported). */
