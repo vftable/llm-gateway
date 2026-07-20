@@ -134,13 +134,14 @@ export function AddProviderDialog({
   };
 
   const runTest = async () => {
-    if (!tpl) return;
+    if (!tpl || apiKeys.length === 0) return;
     setTesting(true);
     setProbe(null);
+    const key = apiKeys[Math.floor(Math.random() * apiKeys.length)];
     try {
       const r = await api.testProviderConfig({
         baseUrl: baseUrl.trim(),
-        apiKey: apiKeys[0],
+        apiKey: key,
         authScheme: tpl.defaults.authScheme ?? "bearer",
         basePath: basePath.trim(),
         modelsPath: tpl.defaults.modelsPath ?? "/v1/models",

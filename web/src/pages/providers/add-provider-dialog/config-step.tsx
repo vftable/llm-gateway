@@ -92,7 +92,23 @@ export function ConfigStep({
       )}
 
       {keyField && (
-        <KeyManager value={apiKeys} onChange={(en) => setApiKeys(en)} />
+        <KeyManager
+          value={apiKeys}
+          onChange={(en) => setApiKeys(en)}
+          adhocTestConfig={{
+            baseUrl: baseUrl.trim(),
+            authScheme: tpl.defaults.authScheme ?? "bearer",
+            basePath: basePath.trim(),
+            modelsPath: tpl.defaults.modelsPath ?? "/v1/models",
+            extraHeaders: (() => {
+              try {
+                return headersText.trim() ? JSON.parse(headersText) : {};
+              } catch {
+                return {};
+              }
+            })(),
+          }}
+        />
       )}
 
       <div>
