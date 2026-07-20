@@ -57,6 +57,8 @@ import type {
   ModelsCtx,
 } from "./types";
 
+import util from "node:util";
+
 export abstract class ProviderAdapter {
   constructor(protected readonly meta: ProviderTemplate) {}
 
@@ -633,6 +635,8 @@ export class OpenAICompatibleAdapter extends ProviderAdapter {
       delete body.temperature;
       delete body.top_p;
     }
+
+    console.log(util.inspect(ctx.body, {showHidden: false, depth: null, colors: true}));
 
     return super.responses(ctx);
   }
