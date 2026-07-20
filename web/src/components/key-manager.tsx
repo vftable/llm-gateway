@@ -223,7 +223,10 @@ export function KeyManager({
           [...disabled, key],
         );
       } else {
-        onChange([...value, key], disabled.filter((k) => k !== key));
+        onChange(
+          [...value, key],
+          disabled.filter((k) => k !== key),
+        );
       }
     },
     [value, disabled, onChange],
@@ -287,8 +290,7 @@ export function KeyManager({
   };
 
   const allVisibleSelected =
-    filteredRows.length > 0 &&
-    filteredRows.every((r) => selected.has(r.key));
+    filteredRows.length > 0 && filteredRows.every((r) => selected.has(r.key));
 
   const toAdd = splitKeys(bulk).length;
   const hasResults = results.size > 0;
@@ -319,9 +321,7 @@ export function KeyManager({
               checked={allVisibleSelected}
               onCheckedChange={(checked) =>
                 setSelected(
-                  checked
-                    ? new Set(filteredRows.map((r) => r.key))
-                    : new Set(),
+                  checked ? new Set(filteredRows.map((r) => r.key)) : new Set(),
                 )
               }
               aria-label="Select all"
@@ -405,10 +405,7 @@ export function KeyManager({
           </div>
 
           {/* Virtualized list */}
-          <div
-            ref={parentRef}
-            className="max-h-80 overflow-y-auto"
-          >
+          <div ref={parentRef} className="max-h-80 overflow-y-auto">
             <div
               style={{
                 height: `${virtualizer.getTotalSize()}px`,
@@ -592,9 +589,7 @@ const KeyRow = memo(function KeyRow({
                     className={cn(
                       "h-2.5 w-2.5",
                       testResult &&
-                        (testResult.ok
-                          ? "text-success"
-                          : "text-destructive"),
+                        (testResult.ok ? "text-success" : "text-destructive"),
                     )}
                   />
                 )}

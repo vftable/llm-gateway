@@ -3,7 +3,10 @@
 // Normalizes reasoning fields on Chat and Responses request bodies bound for
 // an OpenAI-compatible provider:
 //
-//   - effort: cast to OpenAI's valid set (low | medium | high)
+//   - effort: cast to OpenAI's valid set, model-aware clamping
+//       older models: low | medium | high
+//       GPT-5 family: + xhigh
+//       GPT-5.6+:     + max
 //   - summary: default to "detailed" when effort is present but summary is
 //     absent, so reasoning summaries are always returned
 //   - input reasoning items: strip encrypted_content (provider-specific,
@@ -13,37 +16,70 @@
 // Runs as an all-provider default (DEFAULT_TRANSFORMS), tagged "chat" and
 // "responses", gated on providerFmt so it only fires for OpenAI-compatible hops.
 
-const OPENAI_EFFORTS = ["low", "medium", "high"] as const;
+const OPENAI_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 type OpenAIEffort = (typeof OPENAI_EFFORTS)[number];
 
-export function toOpenAIEffort(value: unknown): OpenAIEffort | undefined {
+// GPT-5.6+ supports max; GPT-5 family supports up to xhigh; older models cap at high.
+const GPT56_RE = /^gpt-?5[\.\-]?[6-9]/i;
+const GPT5_RE = /^gpt-?5/i;
+
+function maxEffortForModel(model: string | undefined): OpenAIEffort {
+  if (!model) return "high";
+  if (GPT56_RE.test(model)) return "max";
+  if (GPT5_RE.test(model)) return "xhigh";
+  return "high";
+}
+
+const EFFORT_RANK: Record<OpenAIEffort, number> = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  xhigh: 3,
+  max: 4,
+};
+
+export function clampEffortForModel(
+  effort: OpenAIEffort,
+  model?: string,
+): OpenAIEffort {
+  const cap = maxEffortForModel(model);
+  return EFFORT_RANK[effort] <= EFFORT_RANK[cap] ? effort : cap;
+}
+
+export function toOpenAIEffort(
+  value: unknown,
+  model?: string,
+): OpenAIEffort | undefined {
   if (typeof value !== "string") return undefined;
   const v = value.toLowerCase();
 
+  let mapped: OpenAIEffort | undefined;
+
   if (v === "low" || v === "min" || v === "minimal" || v === "lowest")
-    return "low";
-
-  if (v === "medium") return "medium";
-
-  if (
-    v === "high" ||
+    mapped = "low";
+  else if (v === "medium") mapped = "medium";
+  else if (v === "high" || v === "highest") mapped = "high";
+  else if (
     v === "xhigh" ||
-    v === "max" ||
-    v === "maximum" ||
-    v === "highest" ||
     v === "x-high" ||
     v === "extra-high" ||
     v === "extra_high"
   )
-    return "high";
+    mapped = "xhigh";
+  else if (v === "max" || v === "maximum") mapped = "max";
 
-  return undefined;
+  if (!mapped) return undefined;
+  return clampEffortForModel(mapped, model);
 }
 
-export function budgetToLevel(budget: number): OpenAIEffort {
-  if (budget <= 4096) return "low";
-  if (budget <= 16384) return "medium";
-  return "high";
+export function budgetToLevel(budget: number, model?: string): OpenAIEffort {
+  let level: OpenAIEffort;
+  if (budget <= 4096) level = "low";
+  else if (budget <= 16384) level = "medium";
+  else if (budget <= 32768) level = "high";
+  else if (budget <= 65536) level = "xhigh";
+  else level = "max";
+  return clampEffortForModel(level, model);
 }
 
 export function normalizeOpenAIReasoning(
@@ -66,7 +102,8 @@ function normalizeChatReasoning(
 
   if (body.reasoning_effort === undefined) return body;
 
-  const casted = toOpenAIEffort(body.reasoning_effort);
+  const model = typeof body.model === "string" ? body.model : undefined;
+  const casted = toOpenAIEffort(body.reasoning_effort, model);
   if (casted) body.reasoning_effort = casted;
 
   return body;
@@ -78,9 +115,11 @@ function normalizeResponsesReasoning(
   const reasoning = body.reasoning as
     { effort?: unknown; summary?: unknown; [k: string]: unknown } | undefined;
 
+  const model = typeof body.model === "string" ? body.model : undefined;
+
   if (reasoning && typeof reasoning === "object") {
     if (reasoning.effort !== undefined) {
-      const casted = toOpenAIEffort(reasoning.effort);
+      const casted = toOpenAIEffort(reasoning.effort, model);
       if (casted) reasoning.effort = casted;
 
       if (reasoning.summary === undefined) {

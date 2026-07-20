@@ -4,28 +4,49 @@ import { normalizeOpenAIReasoning, toOpenAIEffort } from "./openai-reasoning";
 
 // --- toOpenAIEffort ---------------------------------------------------------
 
-test("toOpenAIEffort maps Anthropic-only values to the closest OpenAI level", () => {
-  assert.equal(toOpenAIEffort("xhigh"), "high");
-  assert.equal(toOpenAIEffort("max"), "high");
-  assert.equal(toOpenAIEffort("maximum"), "high");
-  assert.equal(toOpenAIEffort("highest"), "high");
-  assert.equal(toOpenAIEffort("x-high"), "high");
-  assert.equal(toOpenAIEffort("extra-high"), "high");
-  assert.equal(toOpenAIEffort("minimal"), "low");
-  assert.equal(toOpenAIEffort("min"), "low");
-  assert.equal(toOpenAIEffort("lowest"), "low");
+test("toOpenAIEffort maps aliases to canonical levels for GPT-5.6", () => {
+  assert.equal(toOpenAIEffort("highest", "gpt-5.6"), "high");
+  assert.equal(toOpenAIEffort("xhigh", "gpt-5.6"), "xhigh");
+  assert.equal(toOpenAIEffort("x-high", "gpt-5.6"), "xhigh");
+  assert.equal(toOpenAIEffort("extra-high", "gpt-5.6"), "xhigh");
+  assert.equal(toOpenAIEffort("max", "gpt-5.6"), "max");
+  assert.equal(toOpenAIEffort("maximum", "gpt-5.6"), "max");
+  assert.equal(toOpenAIEffort("minimal", "gpt-5.6"), "low");
+  assert.equal(toOpenAIEffort("min", "gpt-5.6"), "low");
+  assert.equal(toOpenAIEffort("lowest", "gpt-5.6"), "low");
 });
 
-test("toOpenAIEffort passes through valid OpenAI values unchanged", () => {
-  assert.equal(toOpenAIEffort("low"), "low");
-  assert.equal(toOpenAIEffort("medium"), "medium");
+test("toOpenAIEffort clamps xhigh/max to high for older models", () => {
+  assert.equal(toOpenAIEffort("xhigh", "gpt-4o"), "high");
+  assert.equal(toOpenAIEffort("max", "gpt-4o"), "high");
+  assert.equal(toOpenAIEffort("max", "o1"), "high");
+});
+
+test("toOpenAIEffort clamps max to xhigh for GPT-5 (non-5.6)", () => {
+  assert.equal(toOpenAIEffort("xhigh", "gpt-5"), "xhigh");
+  assert.equal(toOpenAIEffort("max", "gpt-5"), "xhigh");
+  assert.equal(toOpenAIEffort("max", "gpt-5-pro"), "xhigh");
+});
+
+test("toOpenAIEffort defaults to high cap when model is unknown", () => {
+  assert.equal(toOpenAIEffort("xhigh"), "high");
+  assert.equal(toOpenAIEffort("max"), "high");
   assert.equal(toOpenAIEffort("high"), "high");
 });
 
+test("toOpenAIEffort passes through valid values unchanged", () => {
+  assert.equal(toOpenAIEffort("low", "gpt-5.6"), "low");
+  assert.equal(toOpenAIEffort("medium", "gpt-5.6"), "medium");
+  assert.equal(toOpenAIEffort("high", "gpt-5.6"), "high");
+  assert.equal(toOpenAIEffort("xhigh", "gpt-5"), "xhigh");
+  assert.equal(toOpenAIEffort("max", "gpt-5.6"), "max");
+});
+
 test("toOpenAIEffort is case-insensitive", () => {
-  assert.equal(toOpenAIEffort("HIGH"), "high");
-  assert.equal(toOpenAIEffort("XHIGH"), "high");
-  assert.equal(toOpenAIEffort("Medium"), "medium");
+  assert.equal(toOpenAIEffort("HIGH", "gpt-5.6"), "high");
+  assert.equal(toOpenAIEffort("XHIGH", "gpt-5.6"), "xhigh");
+  assert.equal(toOpenAIEffort("MAX", "gpt-5.6"), "max");
+  assert.equal(toOpenAIEffort("Medium", "gpt-5.6"), "medium");
 });
 
 test("toOpenAIEffort returns undefined for non-string / unknown values", () => {
@@ -44,7 +65,7 @@ test("Chat: normalizes reasoning_effort and strips _reasoning_summary", () => {
     _reasoning_summary: "detailed",
   };
   normalizeOpenAIReasoning(body);
-  assert.equal(body.reasoning_effort, "high");
+  assert.equal(body.reasoning_effort, "xhigh");
   assert.equal(body._reasoning_summary, undefined);
 });
 
@@ -72,14 +93,25 @@ test("Chat: no-op when reasoning_effort is absent", () => {
 
 test("Responses: normalizes reasoning.effort and defaults reasoning.summary", () => {
   const body: Record<string, unknown> = {
-    model: "gpt-5",
+    model: "gpt-5.6",
     input: "hi",
     reasoning: { effort: "max" },
   };
   normalizeOpenAIReasoning(body);
   const r = body.reasoning as { effort: unknown; summary: unknown };
-  assert.equal(r.effort, "high");
+  assert.equal(r.effort, "max");
   assert.equal(r.summary, "detailed");
+});
+
+test("Responses: clamps max to xhigh for GPT-5", () => {
+  const body: Record<string, unknown> = {
+    model: "gpt-5",
+    input: "hi",
+    reasoning: { effort: "max" },
+  };
+  normalizeOpenAIReasoning(body);
+  const r = body.reasoning as { effort: unknown };
+  assert.equal(r.effort, "xhigh");
 });
 
 test("Responses: preserves explicit reasoning.summary", () => {

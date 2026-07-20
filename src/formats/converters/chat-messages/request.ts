@@ -114,6 +114,7 @@ export function messagesRequestToChat(
   const reasoning = body.reasoning as { effort?: unknown } | undefined;
   const thinking = body.thinking as
     { type?: string; budget_tokens?: number; display?: string } | undefined;
+  const targetModel = typeof out.model === "string" ? out.model : undefined;
   let rawEffort: unknown =
     oc?.effort ?? body.reasoning_effort ?? reasoning?.effort;
   if (rawEffort === undefined && thinking && typeof thinking === "object") {
@@ -122,14 +123,14 @@ export function messagesRequestToChat(
         typeof thinking.budget_tokens === "number" &&
         thinking.budget_tokens > 0
       ) {
-        rawEffort = budgetToLevel(thinking.budget_tokens);
+        rawEffort = budgetToLevel(thinking.budget_tokens, targetModel);
       } else {
         rawEffort = "high";
       }
     }
   }
   if (rawEffort !== undefined) {
-    out.reasoning_effort = toOpenAIEffort(rawEffort) ?? rawEffort;
+    out.reasoning_effort = toOpenAIEffort(rawEffort, targetModel) ?? rawEffort;
   }
 
   // thinking.display -> _reasoning_summary (gateway-internal)
