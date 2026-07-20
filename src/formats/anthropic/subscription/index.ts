@@ -154,6 +154,31 @@ export const subscriptionRequestStack: RequestTransform[] = [
 
   onRequest(
     "messages",
+    "claude-code:normalize-device-id",
+    (body, ctx) => {
+      if (!subscriptionActive(ctx)) return body;
+
+      const meta = body.metadata as Record<string, unknown> | undefined;
+      if (!meta) return body;
+
+      const parsed = parseAnthropicUserId(meta.user_id);
+      if (!parsed) return body;
+
+      parsed.device_id = DEFAULT_USER_IDENTITY.device_id;
+      parsed.account_uuid = DEFAULT_USER_IDENTITY.account_uuid;
+      meta.user_id = JSON.stringify(parsed);
+      return body;
+    },
+    {
+      label: "Normalize device ID",
+      blurb:
+        "Replace client-supplied device_id and account_uuid in metadata.user_id with gateway defaults.",
+      group: GROUP,
+    },
+  ),
+
+  onRequest(
+    "messages",
     "claude-code:oauth-billing",
     (body, ctx) => {
       if (!subscriptionActive(ctx)) return body;
