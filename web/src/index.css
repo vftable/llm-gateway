@@ -46,6 +46,7 @@
   --color-border: var(--border);
   --color-destructive: var(--destructive);
   --color-success: var(--success);
+  --color-warning: var(--warning);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -94,6 +95,12 @@
      (162, the app's other green) but a touch deeper + lower chroma so it holds
      up as body text, not just a chart fill. */
   --success: oklch(0.55 0.105 162);
+  /* "Approaching limit" usage-bar fill. Dimmer + redder than Tailwind's stock
+     amber-500 (oklch(0.769 0.188 70.08)) — pulled toward --destructive's hue
+     (27) and down in lightness/chroma so it reads as a real warning next to
+     amber's cheerier yellow, without being as alarming as full destructive
+     red. */
+  --warning: oklch(0.62 0.16 42);
   --border: oklch(0.922 0.008 70);
   --input: oklch(0.922 0.008 70);
   --ring: oklch(0.708 0.012 70);
@@ -136,6 +143,9 @@
      chroma-trimmed for dark-background legibility (mirrors how --destructive
      itself shifts light->dark). */
   --success: oklch(0.72 0.1 162);
+  /* See --warning in :root — same dim-vs-amber, redder-than-amber intent,
+     lightened for dark-background legibility. */
+  --warning: oklch(0.68 0.15 42);
   --border: oklch(0.92 0.005 70 / 9%);
   --input: oklch(0.92 0.005 70 / 13%);
   --ring: oklch(0.5 0.008 70);

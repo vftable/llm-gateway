@@ -488,7 +488,7 @@ const KeyUsageRow = memo(function KeyUsageRow({
                           over
                             ? "h-full rounded-full bg-destructive"
                             : warn
-                              ? "h-full rounded-full bg-amber-500"
+                              ? "h-full rounded-full bg-warning"
                               : "h-full rounded-full bg-primary"
                         }
                         style={{ width: `${pct}%` }}

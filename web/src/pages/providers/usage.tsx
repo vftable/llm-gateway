@@ -388,7 +388,7 @@ function UsageBar({ window: w }: { window: ProviderKeyUsageWindow }) {
   const pct = w.limit > 0 ? Math.min(100, (w.used / w.limit) * 100) : 0;
   // Warn/critical color as the window fills.
   const tone =
-    pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-amber-500" : "bg-primary";
+    pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-warning" : "bg-primary";
   return (
     <div>
       <div className="mb-1.5 flex items-baseline justify-between gap-2 text-xs">
