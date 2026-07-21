@@ -42,6 +42,12 @@ import {
 } from "@/components/ui/tooltip";
 
 const ROW_HEIGHT = 56;
+// h-8 (32px) + border-b (1px) — the sticky header row now lives inside the
+// same scrollable element as the virtualized rows (see the table markup
+// below), so it occupies real space there. Passed to useVirtualizer as
+// scrollMargin so its visible-range math accounts for that leading offset
+// instead of measuring purely from the scroll container's own top.
+const HEADER_HEIGHT = 33;
 // Mirrors the exposed-model chain table's proportions: fixed-width control
 // columns bookend a single flexible column, so content reads left-to-right
 // instead of clumping against the right edge. The checkbox column matches
@@ -207,6 +213,7 @@ export function ProviderKeyManager({
     getScrollElement: () => parentRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 20,
+    scrollMargin: HEADER_HEIGHT,
   });
 
   const testKey = useCallback(
@@ -472,57 +479,64 @@ export function ProviderKeyManager({
           <EmptyState msg="No keys match your search" />
         ) : (
           <div className="min-w-0" role="table" aria-label="Provider keys">
-            <div
-              role="row"
-              className={cn(
-                GRID,
-                "sticky top-0 z-10 h-8 items-center border-b border-border bg-muted/30 px-4 text-xs font-medium text-muted-foreground",
-              )}
-            >
-              <div role="columnheader" className="flex justify-start pr-2">
-                <Checkbox
-                  checked={allVisibleSelected}
-                  onCheckedChange={(checked) => toggleAllVisible(!!checked)}
-                  aria-label="Select all visible keys"
-                />
-              </div>
-              <div role="columnheader" className="truncate">
-                Key
-              </div>
-              <div role="columnheader" className="hidden truncate md:block">
-                Tags
-              </div>
-              <div role="columnheader" className="truncate">
-                Status
-              </div>
-              <div role="columnheader" className="truncate">
-                Active
+            {/* Both rowgroups live INSIDE the same scrollable element (not as
+                a sibling of it) so header and body are always subject to the
+                exact same content-box width. If the header were a sibling of
+                this scroller instead, the scrollbar that appears once there
+                are enough rows to need one would shrink only the body's
+                width, shifting every column after the flexible Key/Tags
+                track — Status, Active, Success, Errors, Actions — out of
+                alignment with the header above it. Sticky positioning keeps
+                the header pinned to the top of this scroll container. */}
+            <div ref={parentRef} className="max-h-[28rem] overflow-y-auto">
+              <div role="rowgroup">
+                <div
+                  role="row"
+                  className={cn(
+                    GRID,
+                    "sticky top-0 z-10 h-8 items-center border-b border-border bg-muted/30 px-4 text-xs font-medium text-muted-foreground",
+                  )}
+                >
+                  <div role="columnheader" className="flex justify-start pr-2">
+                    <Checkbox
+                      checked={allVisibleSelected}
+                      onCheckedChange={(checked) => toggleAllVisible(!!checked)}
+                      aria-label="Select all visible keys"
+                    />
+                  </div>
+                  <div role="columnheader" className="truncate">
+                    Key
+                  </div>
+                  <div role="columnheader" className="hidden truncate md:block">
+                    Tags
+                  </div>
+                  <div role="columnheader" className="truncate">
+                    Status
+                  </div>
+                  <div role="columnheader" className="truncate">
+                    Active
+                  </div>
+                  <div
+                    role="columnheader"
+                    className="hidden truncate text-right md:block"
+                    title="Successful hits (2xx)"
+                  >
+                    Success
+                  </div>
+                  <div
+                    role="columnheader"
+                    className="hidden truncate text-right md:block"
+                    title="Failed hits — non-2xx status, including timeouts and bad requests"
+                  >
+                    Errors
+                  </div>
+                  <div role="columnheader" className="text-right">
+                    Actions
+                  </div>
+                </div>
               </div>
               <div
-                role="columnheader"
-                className="hidden truncate text-right md:block"
-                title="Successful hits (2xx)"
-              >
-                Success
-              </div>
-              <div
-                role="columnheader"
-                className="hidden truncate text-right md:block"
-                title="Failed hits — non-2xx status, including timeouts and bad requests"
-              >
-                Errors
-              </div>
-              <div role="columnheader" className="text-right">
-                Actions
-              </div>
-            </div>
-            <div
-              ref={parentRef}
-              role="rowgroup"
-              className="max-h-[28rem] overflow-y-auto"
-            >
-              <div
-                role="presentation"
+                role="rowgroup"
                 style={{
                   height: `${virtualizer.getTotalSize()}px`,
                   position: "relative",
@@ -540,7 +554,13 @@ export function ProviderKeyManager({
                         left: 0,
                         width: "100%",
                         height: `${virtualRow.size}px`,
-                        transform: `translateY(${virtualRow.start}px)`,
+                        // virtualRow.start is in scrollMargin-inclusive
+                        // coordinates (relative to this scroll container's
+                        // own top, header included); the sizer div above
+                        // already starts right after the header in normal
+                        // flow, so subtract HEADER_HEIGHT back out to get
+                        // the offset relative to the sizer's own top.
+                        transform: `translateY(${virtualRow.start - HEADER_HEIGHT}px)`,
                       }}
                     >
                       <ProviderKeyRow
