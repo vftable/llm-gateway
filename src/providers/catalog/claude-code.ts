@@ -32,7 +32,6 @@ import {
   unifiedRateLimitToUsageWindows,
   unifiedStatusMessage,
 } from "../../services/anthropic-unified-usage";
-import fs from "node:fs";
 
 class ClaudeCodeAdapter extends AnthropicCompatibleAdapter {
   requestTransforms(p: Provider): RequestTransform[] {
