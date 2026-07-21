@@ -300,7 +300,7 @@ test("Responses: strips encrypted_content from reasoning input items", () => {
   assert.equal(reasoning.encrypted_content, undefined);
 });
 
-test("Responses: converts summary text to content blocks on reasoning input items", () => {
+test("Responses: preserves summary but never forwards reasoning content", () => {
   const body: Record<string, unknown> = {
     model: "gpt-5",
     input: [
@@ -319,7 +319,8 @@ test("Responses: converts summary text to content blocks on reasoning input item
   normalizeOpenAIReasoning(body);
   const items = body.input as Array<Record<string, unknown>>;
   const reasoning = items[0];
-  assert.deepEqual(reasoning.content, [
+  assert.equal(reasoning.content, undefined);
+  assert.deepEqual(reasoning.summary, [
     { type: "summary_text", text: "step one" },
     { type: "summary_text", text: "step two" },
   ]);
@@ -352,7 +353,8 @@ test("Responses: sanitizes reasoning items even when reasoning config is absent"
   normalizeOpenAIReasoning(body);
   const items = body.input as Array<Record<string, unknown>>;
   assert.equal(items[0].encrypted_content, undefined);
-  assert.deepEqual(items[0].content, [
+  assert.equal(items[0].content, undefined);
+  assert.deepEqual(items[0].summary, [
     { type: "summary_text", text: "thought" },
   ]);
 });
@@ -376,7 +378,7 @@ test("Responses: GPT-5.6 strips content from reasoning input items, keeps summar
   const items = body.input as Array<Record<string, unknown>>;
   const r = items[0];
   assert.equal(r.content, undefined);
-  assert.equal(r.encrypted_content, "gAAAA_opaque");
+  assert.equal(r.encrypted_content, undefined);
   assert.deepEqual(r.summary, [{ type: "summary_text", text: "thought" }]);
 });
 
@@ -396,10 +398,32 @@ test("Responses: GPT-5.6-sol also strips content from reasoning input items", ()
   normalizeOpenAIReasoning(body);
   const items = body.input as Array<Record<string, unknown>>;
   assert.equal(items[0].content, undefined);
-  assert.equal(items[0].encrypted_content, "gAAAA_blob");
+  assert.equal(items[0].encrypted_content, undefined);
 });
 
-test("Responses: GPT-5 (non-5.6) still copies summary to content", () => {
+test("Responses: codex-auto-review always strips content and preserves summary", () => {
+  const body: Record<string, unknown> = {
+    model: "codex-auto-review",
+    input: [
+      {
+        type: "reasoning",
+        id: "rs_review",
+        encrypted_content: "provider-specific",
+        summary: [{ type: "summary_text", text: "review summary" }],
+        content: [{ type: "summary_text", text: "private reasoning" }],
+      },
+    ],
+  };
+  normalizeOpenAIReasoning(body);
+  const item = (body.input as Array<Record<string, unknown>>)[0];
+  assert.equal(item.content, undefined);
+  assert.equal(item.encrypted_content, undefined);
+  assert.deepEqual(item.summary, [
+    { type: "summary_text", text: "review summary" },
+  ]);
+});
+
+test("Responses: GPT-5 strips content and encrypted_content, keeps summary", () => {
   const body: Record<string, unknown> = {
     model: "gpt-5",
     input: [
@@ -415,5 +439,6 @@ test("Responses: GPT-5 (non-5.6) still copies summary to content", () => {
   normalizeOpenAIReasoning(body);
   const items = body.input as Array<Record<string, unknown>>;
   assert.equal(items[0].encrypted_content, undefined);
-  assert.deepEqual(items[0].content, [{ type: "summary_text", text: "step" }]);
+  assert.equal(items[0].content, undefined);
+  assert.deepEqual(items[0].summary, [{ type: "summary_text", text: "step" }]);
 });

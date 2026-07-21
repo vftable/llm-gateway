@@ -224,42 +224,22 @@ function stripAnthropicMetadata(body: Record<string, unknown>): void {
   }
 }
 
-// Sanitize reasoning input items for cross-provider forwarding.
-// GPT-5.6+ only accepts encrypted_content — strip content entirely, keep
-// only summary. Older models don't support encrypted thinking, so strip
-// encrypted_content and copy summary text into content instead.
+// Sanitize reasoning input items for cross-provider forwarding. Raw content
+// and provider-specific encrypted_content are never forwarded; summary is the
+// only portable reasoning prose, for every model including codex-auto-review.
 function sanitizeReasoningInputItems(
   body: Record<string, unknown>,
-  model: string | undefined,
+  _model: string | undefined,
 ): void {
   const input = body.input;
   if (!Array.isArray(input)) return;
-
-  const gpt56 = isGpt56Plus(model);
 
   for (const item of input) {
     if (!item || typeof item !== "object" || item.type !== "reasoning")
       continue;
 
     const r = item as Record<string, unknown>;
-
-    if (gpt56) {
-      delete r.content;
-    } else {
-      delete r.encrypted_content;
-
-      const summary = r.summary as
-        Array<{ type?: string; text?: string }> | undefined;
-
-      if (Array.isArray(summary) && summary.length) {
-        const texts = summary
-          .filter((s) => typeof s.text === "string" && s.text)
-          .map((s) => ({ type: "summary_text", text: s.text }));
-
-        if (texts.length) {
-          r.content = texts;
-        }
-      }
-    }
+    delete r.content;
+    delete r.encrypted_content;
   }
 }

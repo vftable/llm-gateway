@@ -231,12 +231,17 @@ internal `_reasoning_summary` field through the Chat pivot.
   (any summary mode maps to Anthropic's summarized thinking display).
 - **Messages → Chat:** `thinking.display: "summarized"` → `_reasoning_summary: "auto"`.
 
-### R12 — `encrypted_content` on reasoning items  (round-trip)
-Reasoning output items carry an opaque `encrypted_content` blob for multi-turn
-continuity. The gateway preserves this through the Chat pivot as a
-`_encrypted_content` field on each `reasoning_details` entry, and restores it
-when converting back to Responses output items. Each reasoning item is preserved
-as a separate output item (not collapsed into one).
+### R12 — Reasoning input-item sanitization
+
+For Responses **input** items with `type:"reasoning"`, the gateway always
+deletes both `content` and provider-specific `encrypted_content` before
+forwarding. Only `summary` is preserved as portable reasoning prose. This
+applies to every model, including `codex-auto-review`.
+
+Reasoning **output** items can still carry an opaque `encrypted_content` blob
+for multi-turn continuity. The converter preserves this through the Chat pivot
+as `_encrypted_content` on each `reasoning_details` entry and restores it when
+converting back to Responses output items. Each reasoning item remains separate.
 
 ---
 
