@@ -4,12 +4,16 @@
 // ("estimate") until an adapter wires a real upstream usage query. The refresh
 // button (top-right) re-runs every adapter's keyUsage() live.
 //
-// Layout: a CSS-columns "bento" masonry — cards are sized to their own content
-// (a provider with 1 key sits short; one with many keys runs tall) and flow
-// into whichever column has room next, instead of a strict row grid where
-// every card in a row is stretched to match the tallest. Column-balancing is
-// native to `columns-*` (no JS masonry library needed); each card gets
-// `break-inside-avoid` so a browser never slices one across two columns.
+// Layout: a hand-rolled masonry — cards are sized to their own content (a
+// provider with 1 key sits short; one with many keys runs tall), and are
+// greedily packed into N independent flex columns (shortest-column-first, by
+// an estimated weight) so columns stay visually balanced. Neither CSS
+// alternative gets this right with only a handful of very unevenly sized
+// cards: `columns-*` fills one column top-to-bottom before moving to the
+// next (easily stranding two tall cards together while the rest sit short),
+// and a plain `grid` forces every card in a row to share the row's height
+// (sized to the tallest card), leaving dead space under the shorter ones.
+// Independent columns avoid both.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
@@ -37,6 +41,64 @@ import { cn, fmtNum, fmtTokens } from "@/lib/utils";
 
 const KEYS_PER_PAGE = 10;
 
+// Tracks how many masonry columns fit the viewport, mirroring the
+// `sm`/`xl` Tailwind breakpoints (640px / 1280px) this page used as a CSS
+// grid before. Re-evaluated on resize so dragging the window across a
+// breakpoint re-balances the columns.
+function useColumnCount(): number {
+  const getCount = () =>
+    window.innerWidth >= 1280 ? 3 : window.innerWidth >= 640 ? 2 : 1;
+  const [count, setCount] = useState(getCount);
+  useEffect(() => {
+    const onResize = () => setCount(getCount());
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return count;
+}
+
+// Rough rendered-height proxy for a provider card, used only to balance
+// masonry columns — doesn't need to be pixel-accurate, just proportional.
+// Mirrors ProviderUsageCard's structure: header, optional search bar, one
+// KeyUsageBlock per visible key (paginated, so capped at KEYS_PER_PAGE), and
+// pagination controls.
+function estimateWeight(report: ProviderUsageReport): number {
+  const HEADER = 70;
+  const SEARCH = report.keys.length > KEYS_PER_PAGE ? 40 : 0;
+  const PAGINATION = report.keys.length > KEYS_PER_PAGE ? 40 : 0;
+  const visibleKeys = report.keys.slice(0, KEYS_PER_PAGE);
+  const keysWeight = visibleKeys.reduce((sum, key) => {
+    let w = 40; // key mask row + block padding
+    if (key.message) w += 30;
+    w += key.windows.length * 46;
+    return sum + w;
+  }, 0);
+  return HEADER + SEARCH + PAGINATION + keysWeight;
+}
+
+// Greedily assigns each report to whichever column currently carries the
+// least estimated weight (shortest-column-first bin packing), preserving
+// each column's internal top-to-bottom order.
+function packColumns(
+  reports: ProviderUsageReport[],
+  columnCount: number,
+): ProviderUsageReport[][] {
+  const columns: ProviderUsageReport[][] = Array.from(
+    { length: columnCount },
+    () => [],
+  );
+  const weights = new Array(columnCount).fill(0);
+  for (const report of reports) {
+    let shortest = 0;
+    for (let i = 1; i < columnCount; i++) {
+      if (weights[i] < weights[shortest]) shortest = i;
+    }
+    columns[shortest].push(report);
+    weights[shortest] += estimateWeight(report);
+  }
+  return columns;
+}
+
 export default function ProviderUsage() {
   const [reports, setReports] = useState<ProviderUsageReport[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -60,6 +122,12 @@ export default function ProviderUsage() {
   const totalKeys = useMemo(
     () => (reports ?? []).reduce((n, r) => n + r.keys.length, 0),
     [reports],
+  );
+
+  const columnCount = useColumnCount();
+  const columns = useMemo(
+    () => (reports ? packColumns(reports, columnCount) : []),
+    [reports, columnCount],
   );
 
   return (
@@ -94,10 +162,12 @@ export default function ProviderUsage() {
       ) : reports.length === 0 ? (
         <EmptyState msg="No providers yet. Add one to see its key usage." />
       ) : (
-        <div className="columns-1 gap-4 sm:columns-2 xl:columns-3">
-          {reports.map((r) => (
-            <div key={r.providerId} className="mb-4 break-inside-avoid">
-              <ProviderUsageCard report={r} />
+        <div className="flex items-start gap-4">
+          {columns.map((col, i) => (
+            <div key={i} className="flex min-w-0 flex-1 flex-col gap-4">
+              {col.map((r) => (
+                <ProviderUsageCard key={r.providerId} report={r} />
+              ))}
             </div>
           ))}
         </div>
@@ -108,21 +178,19 @@ export default function ProviderUsage() {
 
 function UsageSkeleton() {
   return (
-    <div className="columns-1 gap-4 sm:columns-2 xl:columns-3">
+    <div className="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="mb-4 break-inside-avoid">
-          <Card className="gap-4">
-            <div className="flex items-center gap-2.5">
-              <Skeleton className="size-8 shrink-0 rounded-full" />
-              <div className="flex-1 space-y-1.5">
-                <Skeleton className="h-3.5 w-2/3" />
-                <Skeleton className="h-2.5 w-1/3" />
-              </div>
+        <Card key={i} className="gap-4">
+          <div className="flex items-center gap-2.5">
+            <Skeleton className="size-8 shrink-0 rounded-full" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-3.5 w-2/3" />
+              <Skeleton className="h-2.5 w-1/3" />
             </div>
-            <Skeleton className="h-16 w-full rounded-lg" />
-            {i % 2 === 0 && <Skeleton className="h-16 w-full rounded-lg" />}
-          </Card>
-        </div>
+          </div>
+          <Skeleton className="h-16 w-full rounded-lg" />
+          {i % 2 === 0 && <Skeleton className="h-16 w-full rounded-lg" />}
+        </Card>
       ))}
     </div>
   );
