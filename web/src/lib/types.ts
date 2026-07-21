@@ -20,6 +20,15 @@ export interface KeyCount {
   total: number;
 }
 
+export interface ProviderKeyHealth {
+  usable: boolean;
+  dead: boolean;
+  rateLimitedUntil?: string;
+  lastErrorStatus?: number;
+  lastError?: string;
+  lastErrorAt?: string;
+}
+
 export interface ProviderKey {
   id: string;
   providerId: string;
@@ -27,6 +36,7 @@ export interface ProviderKey {
   credHash: string;
   enabled: boolean;
   metadata: Record<string, string>;
+  health?: ProviderKeyHealth;
   label: string | null;
   createdAt: string;
   updatedAt: string;

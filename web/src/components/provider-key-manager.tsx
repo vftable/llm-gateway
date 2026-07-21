@@ -41,9 +41,9 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 
-const ROW_HEIGHT = 52;
+const ROW_HEIGHT = 64;
 const GRID =
-  "grid gap-3 grid-cols-[40px_minmax(100px,1fr)_52px_120px] md:grid-cols-[40px_minmax(200px,1.5fr)_minmax(96px,0.55fr)_104px_72px_120px]";
+  "grid gap-3 grid-cols-[40px_minmax(100px,1fr)_92px_120px] md:grid-cols-[40px_minmax(200px,1.5fr)_minmax(96px,0.55fr)_104px_112px_120px]";
 
 type MetadataEntry = { key: string; value: string };
 
@@ -61,6 +61,22 @@ function uniqueKeys(raw: string): string[] {
 function mask(key: string): string {
   if (key.length <= 10) return `${key.slice(0, 2)}…`;
   return `${key.slice(0, 6)}…${key.slice(-4)}`;
+}
+
+function relativeTime(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms)) return "—";
+  const past = ms <= 0;
+  const abs = Math.abs(ms);
+  const min = Math.round(abs / 60000);
+  if (min < 1) return "now";
+  const unit =
+    min < 60
+      ? `${min}m`
+      : min < 24 * 60
+        ? `${Math.floor(min / 60)}h ${min % 60}m`
+        : `${Math.round(min / 60 / 24)}d`;
+  return past ? `${unit} ago` : `in ${unit}`;
 }
 
 function metadataEntries(metadata: Record<string, string>): MetadataEntry[] {
@@ -546,12 +562,28 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
   onRemove,
 }: ProviderKeyRowProps) {
   const metadata = Object.entries(key.metadata);
+  const dead = !!key.health?.dead;
+  const rateLimitedUntil = key.health?.rateLimitedUntil;
+  const healthTitle = [
+    key.health?.lastErrorStatus ? `Status ${key.health.lastErrorStatus}` : null,
+    key.health?.lastError,
+    key.health?.lastErrorAt
+      ? `Observed ${new Date(key.health.lastErrorAt).toLocaleString()}`
+      : null,
+    rateLimitedUntil
+      ? `Retry after ${new Date(rateLimitedUntil).toLocaleString()}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div
       className={cn(
         GRID,
-        "h-[52px] items-center border-b border-border/70 px-3 text-sm transition-colors hover:bg-muted/30",
+        "h-16 items-center border-b border-border/70 px-3 text-sm transition-colors hover:bg-muted/30",
         selected && "bg-primary/5",
+        dead && "bg-destructive/5",
+        rateLimitedUntil && !dead && "bg-warning/5",
         !key.enabled && "text-muted-foreground",
       )}
     >
@@ -634,20 +666,47 @@ const ProviderKeyRow = memo(function ProviderKeyRow({
         )}
       </div>
 
-      <div className="flex items-center justify-center">
-        <Switch
-          checked={key.enabled}
-          disabled={toggling}
-          onCheckedChange={(enabled) => onToggle(key.id, enabled)}
-          aria-label={`${key.enabled ? "Disable" : "Enable"} ${mask(key.credential)}`}
-          title={
-            toggling
-              ? "Saving key status"
-              : key.enabled
+      <div className="flex flex-col items-center justify-center gap-1">
+        {dead ? (
+          <Badge
+            variant="destructive"
+            className="max-w-full"
+            title={healthTitle}
+          >
+            Auth failed
+          </Badge>
+        ) : rateLimitedUntil ? (
+          <Badge variant="warning" className="max-w-full" title={healthTitle}>
+            Limited {relativeTime(rateLimitedUntil)}
+          </Badge>
+        ) : (
+          <Switch
+            checked={key.enabled}
+            disabled={toggling}
+            onCheckedChange={(enabled) => onToggle(key.id, enabled)}
+            aria-label={`${key.enabled ? "Disable" : "Enable"} ${mask(key.credential)}`}
+            title={
+              toggling
+                ? "Saving key status"
+                : key.enabled
+                  ? "Active — click to disable"
+                  : "Disabled — click to enable"
+            }
+          />
+        )}
+        {(dead || rateLimitedUntil) && (
+          <Switch
+            checked={key.enabled}
+            disabled={toggling}
+            onCheckedChange={(enabled) => onToggle(key.id, enabled)}
+            aria-label={`${key.enabled ? "Disable" : "Enable"} ${mask(key.credential)}`}
+            title={
+              key.enabled
                 ? "Active — click to disable"
                 : "Disabled — click to enable"
-          }
-        />
+            }
+          />
+        )}
       </div>
 
       <div className="flex items-center justify-end gap-0.5">

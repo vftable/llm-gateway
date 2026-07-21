@@ -13,6 +13,7 @@ import {
   deleteKeySyncConfig,
 } from "../../repo/provider-keys";
 import { importKeysFromUrl } from "../../services/key-import";
+import { KeyHealthStore } from "../../gateway/key-health";
 import type { RouteCtx } from "./types";
 import {
   parseProviderKeyInput,
@@ -32,6 +33,30 @@ export function registerProviderKeyRoutes(ctx: RouteCtx): void {
     broadcast(["providers"], "provider:update");
   };
 
+  const withHealth = <T extends { providerId: string; credHash: string }>(
+    keys: T[],
+  ) => {
+    const health = new KeyHealthStore(db);
+    return keys.map((key) => {
+      const h = health.snapshot(key.providerId, key.credHash);
+      return {
+        ...key,
+        health: {
+          usable: h.usable,
+          dead: h.authFailed,
+          ...(h.rateLimitedUntilIso
+            ? { rateLimitedUntil: h.rateLimitedUntilIso }
+            : {}),
+          ...(h.lastErrorStatus !== null
+            ? { lastErrorStatus: h.lastErrorStatus }
+            : {}),
+          ...(h.lastError ? { lastError: h.lastError } : {}),
+          ...(h.lastErrorAt ? { lastErrorAt: h.lastErrorAt } : {}),
+        },
+      };
+    });
+  };
+
   // Guard: resolve provider or 404
   const withProvider = (id: string, res: import("express").Response) => {
     const p = getProvider(db, id);
@@ -48,7 +73,7 @@ export function registerProviderKeyRoutes(ctx: RouteCtx): void {
     const all = listProviderKeys(db, providerId);
     const keys =
       limit > 0 ? all.slice(offset, offset + limit) : all.slice(offset);
-    res.json({ keys, total: all.length, offset, limit });
+    res.json({ keys: withHealth(keys), total: all.length, offset, limit });
   });
 
   // --- create single key ---

@@ -295,11 +295,9 @@ function ProviderUsageCard({ report }: { report: ProviderUsageReport }) {
 export function KeyUsageBlock({ usage }: { usage: ProviderKeyUsage }) {
   const health = usage.health;
   const rateLimited = !!health?.rateLimitedUntil;
-  const healthNote = health?.dead
-    ? "Dead key — auth failed"
-    : rateLimited
-      ? `Rate-limited — ${resetLabel(health.rateLimitedUntil!)}`
-      : null;
+  const healthNote = rateLimited
+    ? `Rate-limited — ${resetLabel(health.rateLimitedUntil!)}`
+    : null;
   return (
     <div
       className={cn(
@@ -324,7 +322,6 @@ export function KeyUsageBlock({ usage }: { usage: ProviderKeyUsage }) {
           {usage.keyMask}
         </span>
         <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          {health?.dead && <Badge variant="destructive">Dead</Badge>}
           {rateLimited && !health?.dead && (
             <Badge variant="warning">
               Limited {relativeTime(health.rateLimitedUntil!)}

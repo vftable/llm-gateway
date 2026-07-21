@@ -112,20 +112,20 @@ export async function buildUsageReport(
     }),
   );
   const visibleKeys = keys.filter((key) => {
-    // Operator-disabled keys stay hidden, but runtime-dead/rate-limited keys are
-    // shown with their health/error state so operators can see why a provider fell
-    // through the fallback chain. Their adapters still skip live usage queries
-    // because `enabled` is false.
-    const hasHealthState = !!(
-      key.health?.dead ||
-      key.health?.rateLimitedUntil ||
-      key.health?.lastError
-    );
-    if (!key.enabled && !hasHealthState) return false;
+    // Dead/auth-failed keys don't belong in the usage dashboard — they are shown
+    // in the provider Keys table where operators manage credentials. Rate-limited
+    // keys stay visible because their usage/quota windows are still relevant.
+    if (key.health?.dead) return false;
+    const hasUsageHealthState = !!key.health?.rateLimitedUntil;
+    if (!key.enabled && !hasUsageHealthState) return false;
     // Passive Claude Code usage is meaningful only after a real request has
     // produced unified quota headers; hide unrecorded rows to avoid clutter unless
-    // the row explains an actual health problem.
-    if (p.catalogId === "claude-code" && key.unavailable && !hasHealthState)
+    // the row explains an active rate-limit cooldown.
+    if (
+      p.catalogId === "claude-code" &&
+      key.unavailable &&
+      !hasUsageHealthState
+    )
       return false;
     return true;
   });
