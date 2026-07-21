@@ -36,6 +36,10 @@ export function isModelSamplingStripped(model: string): boolean {
 export const FABLE_RE = /claude-fable/i;
 export const MYTHOS_RE = /claude-mythos(?!.*preview)/i;
 export const MYTHOS_PREVIEW_RE = /claude-mythos.*preview/i;
+/** The shared premium-quota class: Anthropic reports both Fable and Mythos
+ * usage in the unified `7d_oi` window. Keep the internal/UI class label
+ * "fable" for backwards compatibility, but use this predicate for routing. */
+export const FABLE_MYTHOS_RE = /claude-(?:fable|mythos)/i;
 export const OPUS_47_PLUS_RE = /claude-opus-4-([7-9]|\d{2,})/i;
 export const OPUS_46_RE = /claude-opus-4-6/i;
 export const SONNET_5_PLUS_RE = /claude-sonnet-([5-9]|\d{2,})(?:-|$)/i;

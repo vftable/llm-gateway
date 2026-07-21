@@ -19,13 +19,14 @@ import type { AdminAuth } from "./auth/admin-auth";
 import { adminRouter } from "./admin/routes";
 import type { BroadcastFn } from "./admin/routes/types";
 import type { KeySyncService } from "./services/key-sync";
+import type { BootstrapConfig } from "./config";
 
 export function createServerApp(
   db: DB,
   logger: Logger,
   router: GatewayRouter,
   auth: AdminAuth,
-  opts: { webDistDir: string; corsOrigin: string | null },
+  opts: BootstrapConfig,
   broadcast?: BroadcastFn,
   keySyncService?: KeySyncService,
 ): Express {
@@ -60,7 +61,7 @@ export function createServerApp(
   // Admin API.
   app.use(
     "/api",
-    adminRouter(db, logger, router, auth, broadcast, keySyncService),
+    adminRouter(db, logger, router, auth, opts, broadcast, keySyncService),
   );
 
   // Gateway /v1 surface.

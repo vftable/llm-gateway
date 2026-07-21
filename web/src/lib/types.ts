@@ -573,6 +573,17 @@ export interface Settings {
   webToolsProvider: string;
   webProviderBaseUrl: string;
   webProviderApiKey: string;
+  disabledApiKeyMessage: string;
+  /** Read-only process-start configuration; edit config.json and restart. */
+  bootstrap?: {
+    port: number;
+    dataDir: string;
+    dbPath: string;
+    webDistDir: string;
+    sessionTtlHours: number;
+    corsOrigin: string | null;
+    configPath: string | null;
+  };
   /** Read-only: registered web-provider ids (for the picker). */
   webProviders?: string[];
 }

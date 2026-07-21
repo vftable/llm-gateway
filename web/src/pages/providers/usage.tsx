@@ -324,7 +324,7 @@ export function KeyUsageBlock({ usage }: { usage: ProviderKeyUsage }) {
         <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           {rateLimited && !health?.dead && (
             <Badge variant="warning">
-              Limited {relativeTime(health.rateLimitedUntil!)}
+              Resets {relativeTime(health.rateLimitedUntil!)}
             </Badge>
           )}
           {usage.expiresAt && <ExpiryBadge expiresAt={usage.expiresAt} />}

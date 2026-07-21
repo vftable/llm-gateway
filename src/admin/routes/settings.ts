@@ -17,7 +17,7 @@ import type { RouteCtx } from "./types";
 import { bad } from "./respond";
 
 export function registerSettingsRoutes(ctx: RouteCtx, auth: AdminAuth): void {
-  const { db, router, r, requireAdmin, broadcast } = ctx;
+  const { db, router, r, requireAdmin, broadcast, bootstrap } = ctx;
 
   // --- auth ---
   r.post("/auth/login", (req, res) => {
@@ -61,6 +61,16 @@ export function registerSettingsRoutes(ctx: RouteCtx, auth: AdminAuth): void {
       webToolsProvider: s.webToolsProvider,
       webProviderBaseUrl: s.webProviderBaseUrl,
       webProviderApiKey: s.webProviderApiKey,
+      disabledApiKeyMessage: s.disabledApiKeyMessage,
+      bootstrap: {
+        port: bootstrap.port,
+        dataDir: bootstrap.dataDir,
+        dbPath: bootstrap.dbPath,
+        webDistDir: bootstrap.webDistDir,
+        sessionTtlHours: bootstrap.sessionTtlMs / 3_600_000,
+        corsOrigin: bootstrap.corsOrigin,
+        configPath: bootstrap.configPath,
+      },
       // Registered web-provider ids the UI can pick from.
       webProviders: listWebProviders(),
     };
@@ -97,6 +107,15 @@ export function registerSettingsRoutes(ctx: RouteCtx, auth: AdminAuth): void {
       patch.webProviderBaseUrl = body.webProviderBaseUrl;
     if (typeof body.webProviderApiKey === "string")
       patch.webProviderApiKey = body.webProviderApiKey;
+    if (typeof body.disabledApiKeyMessage === "string") {
+      if (body.disabledApiKeyMessage.length > 2000)
+        return res.status(400).json({
+          error: {
+            message: "disabled API key message must be at most 2000 characters",
+          },
+        });
+      patch.disabledApiKeyMessage = body.disabledApiKeyMessage.trim();
+    }
     saveSettings(db, patch);
     router.reload();
     broadcast(["settings", "overview"], "settings:update");

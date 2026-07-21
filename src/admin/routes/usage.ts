@@ -15,11 +15,12 @@ import {
   getRequestLogDetail,
 } from "../../repo/request-logs";
 import { vacuumFreePages } from "../../db";
+import { clearAllUnifiedUsage } from "../../repo/provider-key-usage";
 import type { RouteCtx } from "./types";
 import { bad } from "./respond";
 
 export function registerUsageRoutes(ctx: RouteCtx): void {
-  const { db, logger, r, requireAdmin } = ctx;
+  const { db, logger, router, r, requireAdmin, broadcast } = ctx;
 
   // --- usage ---
   r.get("/usage", requireAdmin, (_req, res) =>
@@ -98,6 +99,19 @@ export function registerUsageRoutes(ctx: RouteCtx): void {
         throw new Error("day must be YYYY-MM-DD");
       const result = rebuildUsageFromLogs(db, day);
       logger.info("usage_rebuilt", { ...result, day: day ?? "all" });
+      res.json(result);
+    } catch (e) {
+      bad(res, e);
+    }
+  });
+
+  r.post("/maintenance/clear-rate-limits", requireAdmin, (_req, res) => {
+    try {
+      const cleared = router.clearAllRateLimits();
+      const unifiedUsageCleared = clearAllUnifiedUsage(db);
+      const result = { ...cleared, unifiedUsageCleared };
+      logger.info("rate_limits_cleared", result);
+      broadcast(["providers", "usage"], "maintenance:clear-rate-limits");
       res.json(result);
     } catch (e) {
       bad(res, e);

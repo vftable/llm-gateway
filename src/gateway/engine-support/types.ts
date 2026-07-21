@@ -117,6 +117,12 @@ export interface AttemptResult {
   rateLimitResetAt?: number;
   /** Header/source used to derive rateLimitMs (retry-after, ratelimit-reset, etc.). */
   rateLimitSource?: string;
+  /** Whether a 429 blocks the key globally or only one model class. */
+  rateLimitScope?: "global" | "model";
+  /** Model class affected when rateLimitScope is "model" (currently "fable"). */
+  rateLimitModelClass?: string;
+  /** Operator-facing explanation of the chosen cooldown scope. */
+  rateLimitReason?: string;
 }
 
 // Upstream-reported usage shape (subset of readResponseUsage's return).

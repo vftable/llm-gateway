@@ -94,6 +94,72 @@ test("rate-limited keys are skipped until cooldown expires", () => {
   }
 });
 
+test("model-scoped cooldown blocks Fable without blocking other models", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const clk = clock();
+    const store = new KeyHealthStore(db, clk.now);
+    store.markModelCooldown(p.id, hashKey("a"), "fable", 60_000, 429, "7d_oi");
+
+    assert.equal(
+      store.select(p.id, p.keys, "claude-fable-5", new Set())!.key,
+      "b",
+    );
+    assert.equal(store.usableCount(p.id, p.keys, "claude-fable-5"), 1);
+    assert.equal(store.usableCount(p.id, p.keys, "claude-mythos-5"), 1);
+    assert.equal(store.usableCount(p.id, p.keys, "claude-opus-4-8"), 2);
+    assert.equal(store.usableCount(p.id, p.keys), 2);
+    assert.equal(
+      store.nextReadyAt(p.id, ["a"], "claude-fable-5"),
+      clk.now() + 60_000,
+    );
+    assert.equal(store.nextReadyAt(p.id, ["a"], "claude-opus-4-8"), null);
+
+    // Persistence is part of the control path, not merely a UI snapshot.
+    const reloaded = new KeyHealthStore(db, clk.now);
+    assert.equal(
+      reloaded.select(p.id, p.keys, "claude-fable-5", new Set())!.key,
+      "b",
+    );
+    assert.equal(
+      reloaded.select(p.id, p.keys, "claude-opus-4-8", new Set())!.key,
+      "a",
+    );
+
+    clk.advance(60_001);
+    assert.equal(reloaded.usableCount(p.id, p.keys, "claude-fable-5"), 2);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("clearAllRateLimits resets live and persisted cooldowns but preserves auth failures", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b", "c"]);
+    const clk = clock();
+    const store = new KeyHealthStore(db, clk.now);
+    store.markRateLimited(p.id, hashKey("a"), 60_000, 429, "global");
+    store.markModelCooldown(p.id, hashKey("b"), "fable", 60_000, 429, "7d_oi");
+    store.markAuthFailed(p.id, hashKey("c"), 401, "bad key");
+
+    assert.equal(store.usableCount(p.id, p.keys, "claude-fable-5"), 0);
+    assert.deepEqual(store.clearAllRateLimits(), {
+      keysCleared: 1,
+      modelCooldownsCleared: 1,
+    });
+    assert.equal(store.usableCount(p.id, p.keys, "claude-fable-5"), 2);
+    assert.equal(store.snapshot(p.id, hashKey("c")).authFailed, true);
+
+    const reloaded = new KeyHealthStore(db, clk.now);
+    assert.equal(reloaded.usableCount(p.id, p.keys, "claude-fable-5"), 2);
+    assert.equal(reloaded.snapshot(p.id, hashKey("c")).authFailed, true);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test("auth-failed keys are skipped", () => {
   const db = openDatabase(":memory:");
   try {

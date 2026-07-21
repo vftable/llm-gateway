@@ -3,6 +3,7 @@ export {
   isModelPost45,
   isModelSamplingStripped,
   FABLE_RE,
+  FABLE_MYTHOS_RE,
   MYTHOS_RE,
   MYTHOS_PREVIEW_RE,
   OPUS_47_PLUS_RE,

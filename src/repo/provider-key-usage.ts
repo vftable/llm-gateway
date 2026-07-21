@@ -73,6 +73,10 @@ export function getUnifiedUsage(
   return row ? mapSnapshot(row) : null;
 }
 
+export function clearAllUnifiedUsage(db: DB): number {
+  return db.prepare("DELETE FROM provider_key_unified_usage").run().changes;
+}
+
 export function hasUnifiedUsage(
   db: DB,
   providerId: string,

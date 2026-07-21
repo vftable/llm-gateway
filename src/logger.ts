@@ -5,6 +5,20 @@ import type { Request, Response } from "express";
 
 type Meta = Record<string, unknown>;
 
+type HeaderValue = string | string[] | number | undefined;
+
+export interface UpstreamErrorInfo {
+  status: number;
+  provider: string;
+  upstreamModel: string;
+  path?: string | null;
+  keyMask?: string | null;
+  headers: Record<string, HeaderValue>;
+  body: string;
+  category?: string;
+  details?: Record<string, unknown>;
+}
+
 const isTTY = process.stdout.isTTY;
 
 const C = isTTY
@@ -115,6 +129,106 @@ function routeTag(url: string): string {
   return c("gray", pad("web", 4));
 }
 
+const SENSITIVE_HEADER_RE =
+  /(?:^|[-_])(?:authorization|auth|api[-_]?key|token|secret|credential|cookie)(?:$|[-_])/i;
+
+export function isSensitiveHeaderName(name: string): boolean {
+  const normalized = name.toLowerCase();
+  return (
+    normalized === "authorization" ||
+    normalized === "proxy-authorization" ||
+    normalized === "cookie" ||
+    normalized === "set-cookie" ||
+    SENSITIVE_HEADER_RE.test(normalized)
+  );
+}
+
+function prettyBody(
+  body: string,
+  headers: Record<string, HeaderValue>,
+): string {
+  const contentType = Object.entries(headers).find(
+    ([name]) => name.toLowerCase() === "content-type",
+  )?.[1];
+  const contentTypeText = Array.isArray(contentType)
+    ? contentType.join(", ")
+    : String(contentType ?? "");
+  const trimmed = body.trim();
+  if (!trimmed) return "<empty>";
+  const looksJson =
+    /(?:^|[+/.-])json(?:$|[; +.-])/i.test(contentTypeText) ||
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[");
+  if (looksJson) {
+    try {
+      return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+      // A provider can label malformed error text as JSON; preserve it verbatim.
+    }
+  }
+  return body;
+}
+
+function indentBlock(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .map((line) => `    ${line}`)
+    .join("\n");
+}
+
+function colorForStatus(status: number): keyof typeof C {
+  if (status >= 500) return "red";
+  if (status >= 400) return "yellow";
+  if (status >= 300) return "cyan";
+  return "gray";
+}
+
+export function formatUpstreamError(
+  info: UpstreamErrorInfo,
+  useColor = false,
+): string {
+  const color = (name: keyof typeof C, text: string) =>
+    useColor
+      ? `\x1b[${name === "red" ? 31 : name === "yellow" ? 33 : name === "cyan" ? 36 : 90}m${text}\x1b[0m`
+      : text;
+  const status = color(colorForStatus(info.status), String(info.status));
+  const category = info.category ? ` · ${info.category}` : "";
+  const context = [
+    `provider=${info.provider}`,
+    `model=${info.upstreamModel}`,
+    info.path ? `path=${info.path}` : null,
+    info.keyMask ? `key=${info.keyMask}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const headers = Object.entries(info.headers)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => {
+      const rendered = isSensitiveHeaderName(name)
+        ? "<redacted>"
+        : Array.isArray(value)
+          ? value.join(", ")
+          : String(value ?? "");
+      return `    ${name.toLowerCase()}: ${rendered}`;
+    });
+  const details = Object.entries(info.details ?? {}).map(
+    ([name, value]) =>
+      `    ${name}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
+  );
+  const border = color(colorForStatus(info.status), "─".repeat(72));
+  return [
+    border,
+    `${color(colorForStatus(info.status), "UPSTREAM NON-2XX")} ${status}${category}`,
+    `  ${context}`,
+    ...(details.length ? ["  Details", ...details] : []),
+    "  Response headers",
+    ...(headers.length ? headers : ["    <none>"]),
+    "  Response body",
+    indentBlock(prettyBody(info.body, info.headers)),
+    border,
+  ].join("\n");
+}
+
 export class Logger {
   info(message: string, meta?: Meta): void {
     this.write("INFO", message, meta);
@@ -130,6 +244,10 @@ export class Logger {
 
   debug(message: string, meta?: Meta): void {
     this.write("DEBUG", message, meta);
+  }
+
+  upstreamError(info: UpstreamErrorInfo): void {
+    process.stdout.write(`${formatUpstreamError(info, !!isTTY)}\n`);
   }
 
   // One line per transformation applied to a request/response. `dir` is

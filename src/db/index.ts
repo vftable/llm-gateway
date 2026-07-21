@@ -191,6 +191,20 @@ CREATE TABLE IF NOT EXISTS provider_key_health (
   PRIMARY KEY (provider_id, key_hash)
 );
 
+-- A quota cooldown that applies only to one model CLASS rather than the whole
+-- key. Claude Code uses this for the Fable-only 7d_oi subscription window: a
+-- key can be unavailable to Fable while still accepting Opus/Sonnet traffic.
+CREATE TABLE IF NOT EXISTS provider_key_model_cooldown (
+  provider_id       TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  key_hash          TEXT NOT NULL,
+  model_class       TEXT NOT NULL,
+  cooldown_until    INTEGER NOT NULL DEFAULT 0,
+  last_error_status INTEGER,
+  last_error        TEXT,
+  updated_at        TEXT NOT NULL,
+  PRIMARY KEY (provider_id, key_hash, model_class)
+);
+
 -- Learned (key, model) affinity: which key has served which model, and a
 -- rolling failure count used to evict a proven pairing after repeated failures.
 CREATE TABLE IF NOT EXISTS key_model_affinity (

@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import {
   Select,
@@ -24,10 +25,10 @@ import { cn, fmtNum } from "@/lib/utils";
 
 const SECTIONS = [
   { id: "models", label: "Models" },
-  { id: "limits", label: "Limits" },
-  { id: "webtools", label: "Web Tools" },
+  { id: "limits", label: "Runtime" },
+  { id: "webtools", label: "Integrations" },
   { id: "maintenance", label: "Maintenance" },
-  { id: "password", label: "Password" },
+  { id: "password", label: "Access" },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -73,6 +74,26 @@ export default function Settings() {
     }
   };
 
+  const clearRateLimits = async () => {
+    if (
+      !confirm(
+        "Clear all provider rate-limit cooldowns and cached quota snapshots? Auth-failed keys remain disabled.",
+      )
+    )
+      return;
+    setBusy("rate-limits");
+    try {
+      const r = await api.clearRateLimits();
+      toast.success(
+        `Cleared ${fmtNum(r.keysCleared)} key cooldown${r.keysCleared === 1 ? "" : "s"}, ${fmtNum(r.modelCooldownsCleared)} model cooldown${r.modelCooldownsCleared === 1 ? "" : "s"}, and ${fmtNum(r.unifiedUsageCleared)} quota snapshot${r.unifiedUsageCleared === 1 ? "" : "s"}`,
+      );
+    } catch (e) {
+      toast.error(e instanceof ApiError ? e.message : (e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   useEffect(() => {
     api
       .getSettings()
@@ -91,8 +112,13 @@ export default function Settings() {
   const save = async () => {
     setSaving(true);
     try {
+      const {
+        bootstrap: _bootstrap,
+        webProviders: _webProviders,
+        ...editable
+      } = s;
       await api.updateSettings({
-        ...s,
+        ...editable,
         exposeExempt: exempt
           .split(",")
           .map((x) => x.trim())
@@ -360,6 +386,28 @@ export default function Settings() {
               <div className="flex items-center justify-between gap-4 py-4">
                 <div className="min-w-0">
                   <div className="text-sm font-medium text-foreground">
+                    Clear all rate limits
+                  </div>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                    Make globally rate-limited keys and Fable/Mythos-scoped keys
+                    immediately eligible again, and discard cached upstream
+                    quota snapshots. Auth-failed keys stay disabled and must be
+                    handled from the Provider Keys page.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={clearRateLimits}
+                  disabled={busy !== null}
+                  className="shrink-0"
+                >
+                  {busy === "rate-limits" ? "Clearing…" : "Clear limits"}
+                </Button>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 py-4">
+                <div className="min-w-0">
+                  <div className="text-sm font-medium text-foreground">
                     Clear failed request logs
                   </div>
                   <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
@@ -403,33 +451,81 @@ export default function Settings() {
         )}
 
         {active === "password" && (
-          <div className="rounded-lg border border-border bg-card p-5">
-            <h2 className="font-heading text-lg font-medium text-foreground mb-4">
-              Admin Password
-            </h2>
-            <div className="flex items-end gap-3">
-              <div className="flex-1">
-                <Field label="New password">
-                  <Input
-                    type="password"
-                    value={pw}
-                    onChange={(e) => setPw(e.target.value)}
-                    placeholder="New password"
-                  />
-                </Field>
+          <div className="max-w-3xl space-y-5">
+            <FormSection
+              title="Gateway Access"
+              desc="Authentication behavior applied immediately to new requests."
+            >
+              <SettingRow
+                label="Disabled API key message"
+                hint="Returned to a client whose known gateway API key is disabled or revoked."
+              >
+                <Textarea
+                  value={s.disabledApiKeyMessage}
+                  onChange={(e) =>
+                    set("disabledApiKeyMessage", e.target.value.slice(0, 2000))
+                  }
+                  rows={3}
+                  maxLength={2000}
+                />
+              </SettingRow>
+            </FormSection>
+
+            <div className="rounded-lg border border-border bg-card p-5">
+              <h2 className="mb-4 font-heading text-lg font-medium text-foreground">
+                Admin Password
+              </h2>
+              <div className="flex items-end gap-3">
+                <div className="flex-1">
+                  <Field label="New password">
+                    <Input
+                      type="password"
+                      value={pw}
+                      onChange={(e) => setPw(e.target.value)}
+                      placeholder="New password"
+                    />
+                  </Field>
+                </div>
+                <Button onClick={changePw} disabled={pwSaving || !pw}>
+                  {pwSaving ? "Updating\u2026" : "Update Password"}
+                </Button>
               </div>
-              <Button onClick={changePw} disabled={pwSaving || !pw}>
-                {pwSaving ? "Updating\u2026" : "Update Password"}
-              </Button>
             </div>
-            <Separator className="my-4" />
+
+            {s.bootstrap && (
+              <FormSection
+                title="Server Configuration"
+                desc="Read from config.json at process start. Edit the file and restart the gateway to change these values."
+              >
+                {[
+                  ["Port", String(s.bootstrap.port)],
+                  ["Data directory", s.bootstrap.dataDir],
+                  ["Database path", s.bootstrap.dbPath],
+                  ["Web build directory", s.bootstrap.webDistDir],
+                  ["Admin session TTL", `${s.bootstrap.sessionTtlHours} hours`],
+                  ["CORS origin", s.bootstrap.corsOrigin || "\u2014"],
+                  ["Config file", s.bootstrap.configPath || "\u2014"],
+                ].map(([label, value]) => (
+                  <SettingRow key={label} label={label}>
+                    <span
+                      className="block min-w-0 truncate text-right font-mono text-xs text-muted-foreground"
+                      title={value}
+                    >
+                      {value}
+                    </span>
+                  </SettingRow>
+                ))}
+              </FormSection>
+            )}
+
+            <Separator />
             <p className="text-xs leading-relaxed text-muted-foreground">
               The gateway listens on{" "}
-              <code className="text-primary font-medium">/v1/*</code> for LLM
-              traffic (OpenAI + Anthropic compatible) and{" "}
-              <code className="text-primary font-medium">/api/*</code> for this
-              dashboard. Point your client (Claude Code, OpenAI SDK, ...) at
-              this server with a gateway API key.
+              <code className="font-medium text-primary">/v1/*</code> for LLM
+              traffic and{" "}
+              <code className="font-medium text-primary">/api/*</code> for this
+              dashboard. Provider credentials and client API keys are managed
+              from their dedicated pages and are intentionally omitted here.
             </p>
           </div>
         )}

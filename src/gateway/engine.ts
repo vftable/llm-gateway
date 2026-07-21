@@ -78,6 +78,8 @@ import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
 import { insertRequestLog } from "../repo/request-logs";
 import { upsertUnifiedUsage } from "../repo/provider-key-usage";
 import { filterUnifiedRateLimitHeaders } from "../services/anthropic-unified-usage";
+import { classifyAnthropicRateLimit } from "../services/anthropic-rate-limit-scope";
+import { logUpstreamNon2xx } from "./engine-support/log-upstream-error";
 import { captureRequest, packResponseSummary } from "./debug-capture";
 import type {
   ChainEntry,
@@ -122,6 +124,13 @@ export class ForwardingEngine {
   // web-tool loop, which writes a synthetic SSE response directly). 0 disables.
   get pingInterval(): number {
     return this.ssePingInterval;
+  }
+
+  clearAllRateLimits(): {
+    keysCleared: number;
+    modelCooldownsCleared: number;
+  } {
+    return this.keyHealth.clearAllRateLimits();
   }
 
   // Health-aware key pick using the SAME live rotation/health state a real
@@ -476,11 +485,13 @@ export class ForwardingEngine {
       const usable = this.keyHealth.usableCount(
         entry.provider.id,
         providerKeys,
+        entry.upstreamModel,
       );
       if (providerKeys.length > 0 && usable === 0) {
         const nextReadyAt = this.keyHealth.nextReadyAt(
           entry.provider.id,
           providerKeys,
+          entry.upstreamModel,
         );
         lastReason = nextReadyAt
           ? `all ${providerKeys.length} enabled key(s) rate-limited until ${new Date(nextReadyAt).toISOString()}`
@@ -537,13 +548,27 @@ export class ForwardingEngine {
             );
             this.disableDeadKey(entry.provider.id, pick.keyHash, result.status);
           } else if (result.status === 429) {
-            this.keyHealth.markRateLimited(
-              entry.provider.id,
-              pick.keyHash,
-              result.rateLimitMs ?? 60_000,
-              result.status,
-              result.reason ?? "upstream rate limited",
-            );
+            if (
+              result.rateLimitScope === "model" &&
+              result.rateLimitModelClass
+            ) {
+              this.keyHealth.markModelCooldown(
+                entry.provider.id,
+                pick.keyHash,
+                result.rateLimitModelClass,
+                result.rateLimitMs ?? 60_000,
+                result.status,
+                result.reason ?? "model-scoped upstream rate limit",
+              );
+            } else {
+              this.keyHealth.markRateLimited(
+                entry.provider.id,
+                pick.keyHash,
+                result.rateLimitMs ?? 60_000,
+                result.status,
+                result.reason ?? "upstream rate limited",
+              );
+            }
             this.keyHealth.recordFailure(
               entry.provider.id,
               pick.keyHash,
@@ -588,6 +613,7 @@ export class ForwardingEngine {
         const remainingUsable = this.keyHealth.usableCount(
           entry.provider.id,
           providerKeys,
+          entry.upstreamModel,
         );
         const exhaustedThisProvider =
           providerKeys.length > 0 && remainingUsable === 0;
@@ -904,32 +930,56 @@ export class ForwardingEngine {
     }
 
     if (RETRY_STATUS.has(status)) {
-      const errBody = await readErrorBody(upRes);
+      const errBody = await readErrorBody(upRes, MAX_BUFFER_BYTES);
       const rateLimitHint = status === 429 ? parseRateLimitHint(headers) : null;
-      this.logger.warn("upstream_retryable", {
+      const scope = classifyAnthropicRateLimit({
+        status,
+        catalogId: provider.catalogId,
+        upstreamModel,
+        headers,
+      });
+      const scopedResetAt =
+        scope.scope === "model" ? scope.resetAt : rateLimitHint?.resetAt;
+      const rateLimitMs = scopedResetAt
+        ? Math.max(0, scopedResetAt - Date.now())
+        : rateLimitHint?.ms;
+      logUpstreamNon2xx(this.logger, {
         status,
         provider: provider.id,
         upstreamModel,
         path: ctx.clientPath,
         keyMask: upstreamKey.mask,
+        headers,
         body: errBody,
-        ...(rateLimitHint
-          ? {
-              rateLimitMs: rateLimitHint.ms,
-              rateLimitResetAt: new Date(rateLimitHint.resetAt).toISOString(),
-              rateLimitSource: rateLimitHint.source,
-            }
-          : {}),
+        category:
+          scope.scope === "model" ? "Fable quota exhausted" : "retryable",
+        details: {
+          rateLimitScope: scope.scope,
+          rateLimitReason: scope.reason,
+          ...(rateLimitMs !== undefined ? { rateLimitMs } : {}),
+          ...(scopedResetAt
+            ? { rateLimitResetAt: new Date(scopedResetAt).toISOString() }
+            : {}),
+          ...(rateLimitHint ? { rateLimitSource: rateLimitHint.source } : {}),
+        },
       });
       return {
         committed: false,
         status,
         reason: `status ${status}: ${errBody.slice(0, 200)}`,
-        ...(rateLimitHint
+        rateLimitScope: scope.scope,
+        rateLimitReason: scope.reason,
+        ...(scope.scope === "model"
+          ? { rateLimitModelClass: scope.modelClass }
+          : {}),
+        ...(rateLimitMs !== undefined
           ? {
-              rateLimitMs: rateLimitHint.ms,
-              rateLimitResetAt: rateLimitHint.resetAt,
-              rateLimitSource: rateLimitHint.source,
+              rateLimitMs,
+              rateLimitResetAt: scopedResetAt,
+              rateLimitSource:
+                scope.scope === "model"
+                  ? "anthropic-ratelimit-unified-7d_oi-reset"
+                  : rateLimitHint?.source,
             }
           : {}),
       };
@@ -940,14 +990,16 @@ export class ForwardingEngine {
     // never forwarded) and fail this attempt over so forward()'s retry loop
     // can disable the key and pick another one, same as a rate limit.
     if (AUTH_FAIL_STATUS.has(status)) {
-      const errBody = await readErrorBody(upRes);
-      this.logger.warn("upstream_auth_failed", {
+      const errBody = await readErrorBody(upRes, MAX_BUFFER_BYTES);
+      logUpstreamNon2xx(this.logger, {
         status,
         provider: provider.id,
         upstreamModel,
         path: ctx.clientPath,
         keyMask: upstreamKey.mask,
+        headers,
         body: errBody,
+        category: "authentication failure",
       });
       return {
         committed: false,
@@ -957,13 +1009,16 @@ export class ForwardingEngine {
     }
 
     if (status < 200 || status >= 300) {
-      const errText = await readErrorBody(upRes);
-      this.logger.warn("upstream_non_2xx", {
+      const errText = await readErrorBody(upRes, MAX_BUFFER_BYTES);
+      logUpstreamNon2xx(this.logger, {
         status,
         provider: provider.id,
         upstreamModel,
         path: ctx.clientPath,
-        body: errText.slice(0, 2000),
+        keyMask: upstreamKey.mask,
+        headers,
+        body: errText,
+        category: "non-retryable",
       });
       if (!res.headersSent) {
         const out = filteredHeaders(headers, { stripEncoding: true });
@@ -1580,11 +1635,16 @@ export class ForwardingEngine {
           continue;
         }
       }
-      const usable = this.keyHealth.usableCount(entry.provider.id, turnKeys);
+      const usable = this.keyHealth.usableCount(
+        entry.provider.id,
+        turnKeys,
+        entry.upstreamModel,
+      );
       if (turnKeys.length > 0 && usable === 0) {
         const nextReadyAt = this.keyHealth.nextReadyAt(
           entry.provider.id,
           turnKeys,
+          entry.upstreamModel,
         );
         lastReason = nextReadyAt
           ? `all ${turnKeys.length} enabled key(s) rate-limited until ${new Date(nextReadyAt).toISOString()}`
@@ -1620,6 +1680,7 @@ export class ForwardingEngine {
         const remainingUsable = this.keyHealth.usableCount(
           entry.provider.id,
           turnKeys,
+          entry.upstreamModel,
         );
         const exhaustedThisProvider =
           turnKeys.length > 0 && remainingUsable === 0;
@@ -1779,30 +1840,62 @@ export class ForwardingEngine {
     }
 
     if (RETRY_STATUS.has(res.status)) {
-      const errBody = res.text.slice(0, 2000);
+      const errBody = res.text;
       const rateLimitHint =
         res.status === 429 ? parseRateLimitHint(res.headers) : null;
-      this.logger.warn("upstream_retryable", {
+      const scope = classifyAnthropicRateLimit({
+        status: res.status,
+        catalogId: provider.catalogId,
+        upstreamModel,
+        headers: res.headers,
+      });
+      const scopedResetAt =
+        scope.scope === "model" ? scope.resetAt : rateLimitHint?.resetAt;
+      const rateLimitMs = scopedResetAt
+        ? Math.max(0, scopedResetAt - Date.now())
+        : rateLimitHint?.ms;
+      logUpstreamNon2xx(this.logger, {
         status: res.status,
         provider: provider.id,
         upstreamModel,
+        path: ctx.clientPath,
+        keyMask: pick ? maskProviderKey(pick.key) : null,
+        headers: res.headers,
         body: errBody,
-        ...(rateLimitHint
-          ? {
-              rateLimitMs: rateLimitHint.ms,
-              rateLimitResetAt: new Date(rateLimitHint.resetAt).toISOString(),
-              rateLimitSource: rateLimitHint.source,
-            }
-          : {}),
+        category:
+          scope.scope === "model"
+            ? "Fable quota exhausted web-tool turn"
+            : "retryable web-tool turn",
+        details: {
+          rateLimitScope: scope.scope,
+          rateLimitReason: scope.reason,
+          ...(rateLimitMs !== undefined ? { rateLimitMs } : {}),
+          ...(scopedResetAt
+            ? { rateLimitResetAt: new Date(scopedResetAt).toISOString() }
+            : {}),
+          ...(rateLimitHint ? { rateLimitSource: rateLimitHint.source } : {}),
+        },
       });
-      if (pick && res.status === 429)
-        this.keyHealth.markRateLimited(
-          provider.id,
-          pick.keyHash,
-          rateLimitHint?.ms ?? 60_000,
-          res.status,
-          `status ${res.status}: ${errBody.slice(0, 200)}`,
-        );
+      if (pick && res.status === 429) {
+        if (scope.scope === "model")
+          this.keyHealth.markModelCooldown(
+            provider.id,
+            pick.keyHash,
+            scope.modelClass,
+            rateLimitMs ?? 60_000,
+            res.status,
+            `status ${res.status}: ${errBody.slice(0, 200)}`,
+          );
+        else
+          this.keyHealth.markRateLimited(
+            provider.id,
+            pick.keyHash,
+            rateLimitMs ?? 60_000,
+            res.status,
+            `status ${res.status}: ${errBody.slice(0, 200)}`,
+          );
+        this.keyHealth.recordFailure(provider.id, pick.keyHash, upstreamModel);
+      }
       return {
         ok: false,
         status: res.status,
@@ -1812,6 +1905,18 @@ export class ForwardingEngine {
     }
     if (res.status < 200 || res.status >= 300) {
       const authFailed = AUTH_FAIL_STATUS.has(res.status);
+      logUpstreamNon2xx(this.logger, {
+        status: res.status,
+        provider: provider.id,
+        upstreamModel,
+        path: ctx.clientPath,
+        keyMask: pick ? maskProviderKey(pick.key) : null,
+        headers: res.headers,
+        body: res.text,
+        category: authFailed
+          ? "authentication failure web-tool turn"
+          : "non-retryable web-tool turn",
+      });
       if (pick && authFailed) {
         this.keyHealth.markAuthFailed(
           provider.id,

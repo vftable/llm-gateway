@@ -71,10 +71,7 @@ function main(): void {
     logger,
     router,
     auth,
-    {
-      webDistDir: bootstrap.webDistDir,
-      corsOrigin: bootstrap.corsOrigin,
-    },
+    bootstrap,
     broadcast,
     keySyncService,
   );

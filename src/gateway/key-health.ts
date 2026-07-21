@@ -26,6 +26,7 @@
 
 import crypto from "crypto";
 import type { Database as DB } from "better-sqlite3";
+import { FABLE_MYTHOS_RE } from "../formats/model-version";
 
 // HTTP statuses that mark a key rate-limited / auth-failed. (Retryable statuses
 // live in the engine; these two sets drive key health specifically.)
@@ -68,6 +69,12 @@ export interface RateLimitHint {
   ms: number;
   resetAt: number;
   source: string;
+}
+
+interface ModelCooldownRow {
+  cooldownUntil: number;
+  lastErrorStatus: number | null;
+  lastError: string | null;
 }
 
 // Hash a raw key to a stable short id (never persist the raw key here).
@@ -177,6 +184,7 @@ export class KeyHealthStore {
   private affinity = new Map<string, Set<string>>(); // `${providerId}|${keyHash}` -> proven models
   private affinityFails = new Map<string, number>(); // `${providerId}|${keyHash}|${model}` -> fails
   private sticky = new Map<string, string>(); // `${providerId}|${model}` -> keyHash
+  private modelCooldowns = new Map<string, ModelCooldownRow>();
   private loaded = new Set<string>(); // providerIds hydrated from DB
 
   constructor(
@@ -191,6 +199,40 @@ export class KeyHealthStore {
 
   private mk(providerId: string, model: string): string {
     return `${providerId}|${model}`;
+  }
+
+  private modelClass(model: string | null | undefined): string | null {
+    // Both families consume the unified 7d_oi quota. Keep the stored class name
+    // "fable" so existing UI/status language and persisted rows stay stable.
+    return model && FABLE_MYTHOS_RE.test(model) ? "fable" : null;
+  }
+
+  private ck(providerId: string, keyHash: string, modelClass: string): string {
+    return `${providerId}|${keyHash}|${modelClass}`;
+  }
+
+  private modelCooldownUntil(
+    providerId: string,
+    keyHash: string,
+    model: string | null | undefined,
+  ): number {
+    const modelClass = this.modelClass(model);
+    if (!modelClass) return 0;
+    return (
+      this.modelCooldowns.get(this.ck(providerId, keyHash, modelClass))
+        ?.cooldownUntil ?? 0
+    );
+  }
+
+  private readyAt(
+    providerId: string,
+    keyHash: string,
+    model: string | null | undefined,
+  ): number {
+    return Math.max(
+      this.getHealth(providerId, keyHash).rateLimitedUntil,
+      this.modelCooldownUntil(providerId, keyHash, model),
+    );
   }
 
   // Lazily hydrate a provider's health + affinity from SQLite on first use.
@@ -242,6 +284,26 @@ export class KeyHealthStore {
         .all(providerId) as Array<{ model: string; key_hash: string }>;
       for (const r of srows)
         this.sticky.set(this.mk(providerId, r.model), r.key_hash);
+      const crows = this.db
+        .prepare(
+          "SELECT key_hash, model_class, cooldown_until, last_error_status, last_error FROM provider_key_model_cooldown WHERE provider_id = ?",
+        )
+        .all(providerId) as Array<{
+        key_hash: string;
+        model_class: string;
+        cooldown_until: number;
+        last_error_status: number | null;
+        last_error: string | null;
+      }>;
+      for (const r of crows)
+        this.modelCooldowns.set(
+          this.ck(providerId, r.key_hash, r.model_class),
+          {
+            cooldownUntil: r.cooldown_until,
+            lastErrorStatus: r.last_error_status,
+            lastError: r.last_error,
+          },
+        );
     } catch {
       /* health is best-effort; a read failure just means an empty slate */
     }
@@ -314,7 +376,9 @@ export class KeyHealthStore {
     const isFresh = (i: number) => {
       const h = this.getHealth(providerId, hashes[i]);
       return (
-        !tried.has(hashes[i]) && !h.authFailed && h.rateLimitedUntil <= now
+        !tried.has(hashes[i]) &&
+        !h.authFailed &&
+        this.readyAt(providerId, hashes[i], model) <= now
       );
     };
 
@@ -349,8 +413,8 @@ export class KeyHealthStore {
     );
     if (untried.length) {
       const best = untried.reduce((a, b) =>
-        this.getHealth(providerId, hashes[a]).rateLimitedUntil <=
-        this.getHealth(providerId, hashes[b]).rateLimitedUntil
+        this.readyAt(providerId, hashes[a], model) <=
+        this.readyAt(providerId, hashes[b], model)
           ? a
           : b,
       );
@@ -472,6 +536,70 @@ export class KeyHealthStore {
     this.persistHealth(providerId, keyHash);
   }
 
+  // Cool down one model class without taking the key away from unrelated
+  // traffic. Used for Claude Code's Fable-only 7d_oi quota window.
+  markModelCooldown(
+    providerId: string,
+    keyHash: string,
+    modelClass: string,
+    ms: number,
+    status = RATE_LIMIT_STATUS,
+    error: string | null = null,
+  ): void {
+    if (ms <= 0) return;
+    const row: ModelCooldownRow = {
+      cooldownUntil: this.now() + ms,
+      lastErrorStatus: status,
+      lastError: error ? error.slice(0, 500) : null,
+    };
+    this.modelCooldowns.set(this.ck(providerId, keyHash, modelClass), row);
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO provider_key_model_cooldown
+             (provider_id, key_hash, model_class, cooldown_until, last_error_status, last_error, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(provider_id, key_hash, model_class) DO UPDATE SET
+             cooldown_until=excluded.cooldown_until,
+             last_error_status=excluded.last_error_status,
+             last_error=excluded.last_error,
+             updated_at=excluded.updated_at`,
+        )
+        .run(
+          providerId,
+          keyHash,
+          modelClass,
+          row.cooldownUntil,
+          row.lastErrorStatus,
+          row.lastError,
+          new Date(this.now()).toISOString(),
+        );
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  clearAllRateLimits(): {
+    keysCleared: number;
+    modelCooldownsCleared: number;
+  } {
+    const clear = this.db.transaction(() => {
+      const keysCleared = this.db
+        .prepare(
+          "UPDATE provider_key_health SET rate_limited_until = 0, updated_at = ? WHERE rate_limited_until > 0",
+        )
+        .run(new Date(this.now()).toISOString()).changes;
+      const modelCooldownsCleared = this.db
+        .prepare("DELETE FROM provider_key_model_cooldown")
+        .run().changes;
+      return { keysCleared, modelCooldownsCleared };
+    });
+    const result = clear();
+    for (const health of this.health.values()) health.rateLimitedUntil = 0;
+    this.modelCooldowns.clear();
+    return result;
+  }
+
   // Disable a key after an auth failure and drop its affinity.
   markAuthFailed(
     providerId: string,
@@ -554,13 +682,18 @@ export class KeyHealthStore {
   // How many keys are currently usable (not auth-failed, not cooling down).
   // Used by the engine to bound per-provider attempts so a rate-limited key can
   // fail over to a healthy one within a single request.
-  usableCount(providerId: string, keys: string[]): number {
+  usableCount(
+    providerId: string,
+    keys: string[],
+    model: string | null = null,
+  ): number {
     if (!keys.length) return 0;
     this.ensureLoaded(providerId);
     const now = this.now();
     return keys.filter((key) => {
-      const h = this.getHealth(providerId, hashKey(key));
-      return !h.authFailed && h.rateLimitedUntil <= now;
+      const keyHash = hashKey(key);
+      const h = this.getHealth(providerId, keyHash);
+      return !h.authFailed && this.readyAt(providerId, keyHash, model) <= now;
     }).length;
   }
 
@@ -588,13 +721,25 @@ export class KeyHealthStore {
     return keyHashes.map((h) => this.snapshot(providerId, h));
   }
 
-  nextReadyAt(providerId: string, keys: string[]): number | null {
+  nextReadyAt(
+    providerId: string,
+    keys: string[],
+    model: string | null = null,
+  ): number | null {
     if (!keys.length) return null;
     this.ensureLoaded(providerId);
+    const now = this.now();
     const candidates = keys
-      .map((key) => this.getHealth(providerId, hashKey(key)))
-      .filter((h) => !h.authFailed && h.rateLimitedUntil > this.now())
-      .map((h) => h.rateLimitedUntil);
+      .map((key) => {
+        const keyHash = hashKey(key);
+        const health = this.getHealth(providerId, keyHash);
+        return health.authFailed
+          ? null
+          : this.readyAt(providerId, keyHash, model);
+      })
+      .filter(
+        (readyAt): readyAt is number => readyAt !== null && readyAt > now,
+      );
     return candidates.length ? Math.min(...candidates) : null;
   }
 

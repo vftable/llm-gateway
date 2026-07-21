@@ -394,4 +394,10 @@ export const api = {
       `/api/maintenance/clear-logs?scope=${scope}`,
       json("POST"),
     ),
+  clearRateLimits: () =>
+    req<{
+      keysCleared: number;
+      modelCooldownsCleared: number;
+      unifiedUsageCleared: number;
+    }>("/api/maintenance/clear-rate-limits", json("POST")),
 };

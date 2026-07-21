@@ -30,6 +30,7 @@ function quietLogger(): Logger {
   (l as unknown as { write: () => void }).write = noop;
   (l as unknown as { request: () => void }).request = noop;
   (l as unknown as { transform: () => void }).transform = noop;
+  (l as unknown as { upstreamError: () => void }).upstreamError = noop;
   return l;
 }
 
@@ -1289,6 +1290,110 @@ test("forward() falls over to the next provider once every key on the first is d
     );
     assert.equal(state.statusCode || 200, 200);
     assert.ok(aliveHit, "the second provider in the chain must have served it");
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("Claude Code 7d_oi exhaustion cools a key for Fable without blocking Opus", async () => {
+  let fableHits = 0;
+  let opusHits = 0;
+  const reset = Math.floor((Date.now() + 60_000) / 1000);
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      const chunks: Buffer[] = [];
+      // request body has already been consumed by resume(); route by a counter:
+      // first hit is the Fable request, second is Opus.
+      if (fableHits === 0) {
+        fableHits++;
+        res.writeHead(429, {
+          "content-type": "application/json",
+          "retry-after": "60",
+          "anthropic-ratelimit-unified-status": "rate_limited",
+          "anthropic-ratelimit-unified-5h-status": "allowed",
+          "anthropic-ratelimit-unified-5h-utilization": "0.2",
+          "anthropic-ratelimit-unified-7d-status": "allowed",
+          "anthropic-ratelimit-unified-7d-utilization": "0.4",
+          "anthropic-ratelimit-unified-7d_oi-status": "rejected",
+          "anthropic-ratelimit-unified-7d_oi-utilization": "1",
+          "anthropic-ratelimit-unified-7d_oi-reset": String(reset),
+        });
+        res.end(
+          JSON.stringify({ error: { message: "Fable quota exhausted" } }),
+        );
+        void chunks;
+        return;
+      }
+      opusHits++;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "ok", usage: {} }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc-scope",
+      name: "cc-scope",
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKeys: ["key-1"],
+      catalogId: "claude-code",
+      authScheme: "bearer",
+      retryAttempts: 1,
+      retryIntervalMs: 1,
+    });
+    const fable = createModel(db, {
+      alias: "fable-client",
+      type: "anthropic",
+      providers: [{ providerId: "cc-scope", upstreamModel: "claude-fable-5" }],
+    });
+    const opus = createModel(db, {
+      alias: "opus-client",
+      type: "anthropic",
+      providers: [{ providerId: "cc-scope", upstreamModel: "claude-opus-4-8" }],
+    });
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+
+    const fableRes = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      fableRes.res as never,
+      ctxFor(getModel(db, fable.id)!, {
+        model: "fable-client",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
+    assert.equal(fableRes.state.statusCode, 502);
+
+    const health = new KeyHealthStore(db);
+    assert.equal(
+      health.usableCount("cc-scope", ["key-1"], "claude-fable-5"),
+      0,
+    );
+    assert.equal(
+      health.usableCount("cc-scope", ["key-1"], "claude-opus-4-8"),
+      1,
+    );
+
+    const opusRes = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      opusRes.res as never,
+      ctxFor(getModel(db, opus.id)!, {
+        model: "opus-client",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
+    assert.equal(opusRes.state.statusCode || 200, 200);
+    assert.equal(opusHits, 1);
   } finally {
     closeDatabase(db);
     await new Promise<void>((r) => server.close(() => r()));

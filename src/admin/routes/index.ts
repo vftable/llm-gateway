@@ -14,6 +14,7 @@ import type { GatewayRouter } from "../../gateway/router";
 import type { AdminAuth } from "../../auth/admin-auth";
 import { adminAuthMiddleware } from "../../auth/admin-auth";
 import type { KeySyncService } from "../../services/key-sync";
+import type { BootstrapConfig } from "../../config";
 import type { RouteCtx, BroadcastFn } from "./types";
 import { registerSettingsRoutes } from "./settings";
 import { registerProviderRoutes } from "./providers";
@@ -29,6 +30,7 @@ export function adminRouter(
   logger: Logger,
   router: GatewayRouter,
   auth: AdminAuth,
+  bootstrap: BootstrapConfig,
   broadcast?: BroadcastFn,
   keySyncService?: KeySyncService,
 ): Router {
@@ -41,6 +43,7 @@ export function adminRouter(
     r,
     requireAdmin,
     broadcast: broadcast ?? noop,
+    bootstrap,
     keySyncService,
   };
 
