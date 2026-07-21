@@ -9,7 +9,8 @@ export function logUpstreamNon2xx(
     upstreamModel: string;
     path?: string | null;
     keyMask?: string | null;
-    headers:
+    requestHeaders: Record<string, string | string[] | undefined>;
+    responseHeaders:
       IncomingHttpHeaders | Record<string, string | string[] | undefined>;
     body: string;
     category?: string;
@@ -18,6 +19,7 @@ export function logUpstreamNon2xx(
 ): void {
   logger.upstreamError({
     ...input,
-    headers: { ...input.headers },
+    requestHeaders: { ...input.requestHeaders },
+    responseHeaders: { ...input.responseHeaders },
   });
 }

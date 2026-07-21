@@ -13,10 +13,15 @@ const base = {
 test("formatUpstreamError expands JSON, sorts headers, and redacts secrets", () => {
   const output = formatUpstreamError({
     ...base,
-    headers: {
+    requestHeaders: {
+      Authorization: "Bearer request-secret",
+      "x-api-key": "request-key",
+      "anthropic-version": "2023-06-01",
+    },
+    responseHeaders: {
       "x-request-id": "req_123",
       "set-cookie": ["session=secret", "other=secret"],
-      Authorization: "Bearer secret",
+      Authorization: "Bearer response-secret",
       "content-type": "application/json; charset=utf-8",
       "anthropic-ratelimit-unified-7d_oi-status": "rejected",
     },
@@ -27,9 +32,16 @@ test("formatUpstreamError expands JSON, sorts headers, and redacts secrets", () 
 
   assert.match(output, /UPSTREAM NON-2XX 429 · rate limited/);
   assert.match(output, /provider=claude-code · model=claude-fable-5/);
+  assert.match(output, /Request headers\n/);
+  assert.match(output, /anthropic-version: 2023-06-01/);
   assert.match(output, /authorization: <redacted>/);
+  assert.match(output, /x-api-key: <redacted>/);
+  assert.match(output, /Response headers\n/);
   assert.match(output, /set-cookie: <redacted>/);
-  assert.doesNotMatch(output, /Bearer secret|session=secret/);
+  assert.doesNotMatch(
+    output,
+    /request-secret|request-key|response-secret|session=secret/,
+  );
   assert.match(output, /anthropic-ratelimit-unified-7d_oi-status: rejected/);
   assert.match(output, /\n      "error": \{/);
   assert.ok(
@@ -44,7 +56,8 @@ test("formatUpstreamError preserves malformed JSON and large bodies", () => {
   const output = formatUpstreamError({
     ...base,
     status: 400,
-    headers: { "content-type": "application/json" },
+    requestHeaders: {},
+    responseHeaders: { "content-type": "application/json" },
     body,
   });
   assert.match(output, new RegExp(largeTail));
@@ -53,7 +66,12 @@ test("formatUpstreamError preserves malformed JSON and large bodies", () => {
 
 test("formatUpstreamError can emit ANSI structure colors", () => {
   const output = formatUpstreamError(
-    { ...base, headers: {}, body: "plain\ntext" },
+    {
+      ...base,
+      requestHeaders: {},
+      responseHeaders: {},
+      body: "plain\ntext",
+    },
     true,
   );
   assert.match(output, /\x1b\[/);

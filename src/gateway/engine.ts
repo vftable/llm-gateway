@@ -849,6 +849,7 @@ export class ForwardingEngine {
             route,
             startedAt,
             attemptCtx,
+            headers,
             { hash: keyHash, mask: keyMask },
           ).then(resolve, (err) =>
             resolve({ committed: false, reason: err.message }),
@@ -905,6 +906,7 @@ export class ForwardingEngine {
     route: Route,
     startedAt: number,
     attemptCtx: TransformCtx,
+    requestHeaders: Record<string, string | string[] | undefined>,
     upstreamKey: { hash: string | null; mask: string | null },
   ): Promise<AttemptResult> {
     const status = upRes.statusCode || 502;
@@ -952,7 +954,8 @@ export class ForwardingEngine {
         upstreamModel,
         path: ctx.clientPath,
         keyMask: upstreamKey.mask,
-        headers,
+        requestHeaders,
+        responseHeaders: headers,
         body: errBody,
         category:
           scope.scope === "model" ? "Fable quota exhausted" : "retryable",
@@ -1000,7 +1003,8 @@ export class ForwardingEngine {
         upstreamModel,
         path: ctx.clientPath,
         keyMask: upstreamKey.mask,
-        headers,
+        requestHeaders,
+        responseHeaders: headers,
         body: errBody,
         category: "authentication failure",
       });
@@ -1019,7 +1023,8 @@ export class ForwardingEngine {
         upstreamModel,
         path: ctx.clientPath,
         keyMask: upstreamKey.mask,
-        headers,
+        requestHeaders,
+        responseHeaders: headers,
         body: errText,
         category: "non-retryable",
       });
@@ -1868,7 +1873,8 @@ export class ForwardingEngine {
         upstreamModel,
         path: ctx.clientPath,
         keyMask: pick ? maskProviderKey(pick.key) : null,
-        headers: res.headers,
+        requestHeaders: headers,
+        responseHeaders: res.headers,
         body: errBody,
         category:
           scope.scope === "model"
@@ -1924,7 +1930,8 @@ export class ForwardingEngine {
         upstreamModel,
         path: ctx.clientPath,
         keyMask: pick ? maskProviderKey(pick.key) : null,
-        headers: res.headers,
+        requestHeaders: headers,
+        responseHeaders: res.headers,
         body: res.text,
         category: authFailed
           ? "authentication failure web-tool turn"

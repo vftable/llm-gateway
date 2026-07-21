@@ -13,7 +13,8 @@ export interface UpstreamErrorInfo {
   upstreamModel: string;
   path?: string | null;
   keyMask?: string | null;
-  headers: Record<string, HeaderValue>;
+  requestHeaders: Record<string, HeaderValue>;
+  responseHeaders: Record<string, HeaderValue>;
   body: string;
   category?: string;
   details?: Record<string, unknown>;
@@ -201,16 +202,19 @@ export function formatUpstreamError(
   ]
     .filter(Boolean)
     .join(" · ");
-  const headers = Object.entries(info.headers)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, value]) => {
-      const rendered = isSensitiveHeaderName(name)
-        ? "<redacted>"
-        : Array.isArray(value)
-          ? value.join(", ")
-          : String(value ?? "");
-      return `    ${name.toLowerCase()}: ${rendered}`;
-    });
+  const formatHeaders = (headers: Record<string, HeaderValue>) =>
+    Object.entries(headers)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, value]) => {
+        const rendered = isSensitiveHeaderName(name)
+          ? "<redacted>"
+          : Array.isArray(value)
+            ? value.join(", ")
+            : String(value ?? "");
+        return `    ${name.toLowerCase()}: ${rendered}`;
+      });
+  const requestHeaders = formatHeaders(info.requestHeaders);
+  const responseHeaders = formatHeaders(info.responseHeaders);
   const details = Object.entries(info.details ?? {}).map(
     ([name, value]) =>
       `    ${name}: ${typeof value === "string" ? value : JSON.stringify(value)}`,
@@ -221,10 +225,12 @@ export function formatUpstreamError(
     `${color(colorForStatus(info.status), "UPSTREAM NON-2XX")} ${status}${category}`,
     `  ${context}`,
     ...(details.length ? ["  Details", ...details] : []),
+    "  Request headers",
+    ...(requestHeaders.length ? requestHeaders : ["    <none>"]),
     "  Response headers",
-    ...(headers.length ? headers : ["    <none>"]),
+    ...(responseHeaders.length ? responseHeaders : ["    <none>"]),
     "  Response body",
-    indentBlock(prettyBody(info.body, info.headers)),
+    indentBlock(prettyBody(info.body, info.responseHeaders)),
     border,
   ].join("\n");
 }
