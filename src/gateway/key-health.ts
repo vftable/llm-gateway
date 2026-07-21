@@ -112,7 +112,7 @@ function delayHint(ms: number, source: string, now: number): RateLimitHint {
 // (epoch ms) -> x-ratelimit-reset / x-rate-limit-reset (usually epoch seconds)
 // -> ratelimit-reset (RFC delay seconds) -> anthropic-ratelimit-unified-reset
 // (epoch seconds; Anthropic's own unified-quota reset, sent on a 429 from
-// their 5h/7d subscription limiter — see services/anthropic-unified-usage.ts)
+// their 5h/7d subscription limiter — see services/anthropic/unified-usage.ts)
 // -> default 60s.
 export function parseRateLimitHint(
   headers: Record<string, string | string[] | undefined>,

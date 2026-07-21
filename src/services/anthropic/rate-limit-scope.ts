@@ -1,8 +1,8 @@
-import { FABLE_MYTHOS_RE } from "../formats/model-version";
+import { FABLE_MYTHOS_RE } from "../../formats/model-version";
 import {
   parseUnifiedRateLimitHeaders,
   type UnifiedRateLimitWindow,
-} from "./anthropic-unified-usage";
+} from "./unified-usage";
 
 export type RateLimitScope =
   | {

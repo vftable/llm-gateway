@@ -1,10 +1,10 @@
 // Anthropic accepts at most four cache_control breakpoints per request.
 //
 // Client-supplied breakpoints, family defaults, adapter transforms, and
-// per-model transforms all compose before the Anthropic request-hook stack, so
-// the final request can exceed that ceiling even when each source is valid in
-// isolation. This final-boundary limiter deterministically preserves the four
-// most useful stable-prefix breakpoints and removes every other occurrence.
+// per-model transforms can each add valid markers whose combined request exceeds
+// that ceiling. AnthropicCompatibleAdapter invokes this at the true final body
+// boundary, immediately before key ordering and serialization, so no later
+// transform can reintroduce an excess breakpoint.
 
 import type { AnthropicMessagesRequest } from "../../pipeline";
 
@@ -53,14 +53,16 @@ function collectNested(
  * Enforce Anthropic's maximum of four cache_control breakpoints.
  *
  * Priority is deterministic:
- *   1. top-level cache_control
- *   2. the last system block
- *   3. the last tool
+ *   1. the last system block
+ *   2. the last tool definition
+ *   3. the newest assistant turn's last tool_use block
  *   4. the last message content block
- *   5. remaining breakpoints, newest/deepest first
+ *   5. explicit top-level cache_control
+ *   6. remaining breakpoints, newest/deepest first
  *
- * The first four are exactly the stable-prefix positions used by Anthropic's
- * prompt-caching guidance and by the built-in anthropic-cache transform.
+ * The assistant tool_use + latest user-tail pair keeps a complete tool exchange
+ * inside the growing cached prefix. Top-level auto-caching is retained when a
+ * preferred manual position is absent, but yields when all four are present.
  */
 export function limitAnthropicCacheControl(
   body: AnthropicMessagesRequest,
@@ -70,15 +72,34 @@ export function limitAnthropicCacheControl(
   const slots: Slot[] = [];
   const seen = new Set<Bag>();
 
-  addSlot(slots, seen, body as Bag, 500);
+  addSlot(slots, seen, body as Bag, 100);
 
   if (Array.isArray(body.system) && body.system.length > 0)
-    addSlot(slots, seen, body.system[body.system.length - 1], 400);
+    addSlot(slots, seen, body.system[body.system.length - 1], 500);
 
   if (Array.isArray(body.tools) && body.tools.length > 0)
-    addSlot(slots, seen, body.tools[body.tools.length - 1], 300);
+    addSlot(slots, seen, body.tools[body.tools.length - 1], 400);
 
   if (Array.isArray(body.messages) && body.messages.length > 0) {
+    // Prefer the newest assistant tool-use anchor. Together with the following
+    // user/tool-result tail this keeps the complete tool exchange cached.
+    outer: for (let i = body.messages.length - 1; i >= 0; i--) {
+      const message = body.messages[i];
+      if (message?.role !== "assistant" || !Array.isArray(message.content))
+        continue;
+      for (let j = message.content.length - 1; j >= 0; j--) {
+        const block = message.content[j];
+        if (
+          isBag(block) &&
+          block.type === "tool_use" &&
+          "cache_control" in block
+        ) {
+          addSlot(slots, seen, block, 300);
+          break outer;
+        }
+      }
+    }
+
     const last = body.messages[body.messages.length - 1];
     if (Array.isArray(last?.content) && last.content.length > 0) {
       for (let i = last.content.length - 1; i >= 0; i--) {

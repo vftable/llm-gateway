@@ -41,6 +41,7 @@ import type {
   WireRequest,
 } from "../../formats/wire";
 import { ORDERED_KEYS } from "../../formats/anthropic/hooks/sanitize-request";
+import { limitAnthropicCacheControl } from "../../formats/anthropic/hooks/cache-control-limiter";
 import { endpointPathFor, resolveKind } from "./url";
 import { fetchModelList, normalizeModels, minimalProbeBody } from "./models";
 import type {
@@ -684,6 +685,9 @@ export class OpenAICompatibleAdapter extends ProviderAdapter {
 function orderAnthropicKeys(
   body: AnthropicMessagesRequest,
 ): AnthropicMessagesRequest {
+  // True final Messages boundary: every client/family/adapter/model transform has
+  // already run, so no later stage can reintroduce a fifth cache breakpoint.
+  limitAnthropicCacheControl(body);
   const ordered: Record<string, unknown> = {};
   for (const key of ORDERED_KEYS) {
     if (key in body) ordered[key] = body[key as keyof AnthropicMessagesRequest];

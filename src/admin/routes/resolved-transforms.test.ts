@@ -39,7 +39,6 @@ test("Anthropic-native provider: builtin hooks + thinking + family defaults, no 
       "anthropic:sanitize-request",
       "anthropic:thinking-mode",
       "anthropic:thinking-config",
-      "anthropic:cache-control-limit",
     ],
   );
 
@@ -64,7 +63,7 @@ test("builtin stages carry label/blurb/group display metadata", () => {
   const r = resolveProviderTransforms(provider());
   const builtinReq = r.request.filter((s) => s.source === "builtin");
 
-  // Every one of the four Anthropic request hooks declares label+blurb (see
+  // Every Anthropic request hook declares label+blurb (see
   // formats/anthropic/hooks/stack.ts) and shares the same group, so the UI
   // can collapse them into one row.
   for (const s of builtinReq) {

@@ -77,8 +77,9 @@ import { listProviders } from "../repo/providers";
 import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
 import { insertRequestLog } from "../repo/request-logs";
 import { upsertUnifiedUsage } from "../repo/provider-key-usage";
-import { filterUnifiedRateLimitHeaders } from "../services/anthropic-unified-usage";
-import { classifyAnthropicRateLimit } from "../services/anthropic-rate-limit-scope";
+import { filterUnifiedRateLimitHeaders } from "../services/anthropic/unified-usage";
+import { classifyAnthropicRateLimit } from "../services/anthropic/rate-limit-scope";
+import { isClaudeCodeUsageCreditsError } from "../services/anthropic/usage-credits";
 import { logUpstreamNon2xx } from "./engine-support/log-upstream-error";
 import { captureRequest, packResponseSummary } from "./debug-capture";
 import type {
@@ -100,6 +101,7 @@ import {
   filteredHeaders,
   finalizeResponseHeaders,
   seedResponseHeaders,
+  bareResponseHeaders,
   readErrorBody,
   decompressStream,
   sleep,
@@ -547,6 +549,9 @@ export class ForwardingEngine {
               result.reason ?? `upstream auth failed (${result.status})`,
             );
             this.disableDeadKey(entry.provider.id, pick.keyHash, result.status);
+          } else if (result.status === 429 && result.usageCreditsRequired) {
+            // This key lacks credits for this request shape; it is not unhealthy
+            // or cooling down. The tried set still excludes it for this request.
           } else if (result.status === 429) {
             if (
               result.rateLimitScope === "model" &&
@@ -630,20 +635,22 @@ export class ForwardingEngine {
             : `all ${providerKeys.length} enabled key(s) dead/unavailable`;
         }
         const more = attempt < attempts && !exhaustedThisProvider;
-        this.logger.warn("provider_attempt_failed", {
-          provider: entry.provider.id,
-          attempt: `${attempt}/${attempts}`,
-          model: entry.upstreamModel,
-          reason: lastReason,
-          remainingUsableKeys: remainingUsable,
-          failover: more
-            ? "retry"
-            : entry === chain[chain.length - 1]
-              ? "exhausted"
-              : "next-provider",
-        });
+        if (!result.usageCreditsRequired)
+          this.logger.warn("provider_attempt_failed", {
+            provider: entry.provider.id,
+            attempt: `${attempt}/${attempts}`,
+            model: entry.upstreamModel,
+            reason: lastReason,
+            remainingUsableKeys: remainingUsable,
+            failover: more
+              ? "retry"
+              : entry === chain[chain.length - 1]
+                ? "exhausted"
+                : "next-provider",
+          });
         if (exhaustedThisProvider) break;
-        if (more) await sleep(entry.provider.retryIntervalMs);
+        if (more && !result.usageCreditsRequired)
+          await sleep(entry.provider.retryIntervalMs);
       }
     }
 
@@ -912,10 +919,8 @@ export class ForwardingEngine {
     const status = upRes.statusCode || 502;
     const headers = upRes.headers || {};
 
-    // Claude Code quota headers are useful on successes AND failures (especially
-    // 429), so capture before any status branch or body handling. Best-effort:
-    // observability must never affect forwarding/failover.
-    if (provider.catalogId === "claude-code" && upstreamKey.hash) {
+    const captureClaudeUsage = () => {
+      if (provider.catalogId !== "claude-code" || !upstreamKey.hash) return;
       try {
         const unified = filterUnifiedRateLimitHeaders(headers);
         if (Object.keys(unified).length)
@@ -932,10 +937,26 @@ export class ForwardingEngine {
           err: (err as Error).message,
         });
       }
-    }
+    };
 
     if (RETRY_STATUS.has(status)) {
       const errBody = await readErrorBody(upRes, MAX_BUFFER_BYTES);
+      if (
+        isClaudeCodeUsageCreditsError({
+          status,
+          catalogId: provider.catalogId,
+          upstreamModel,
+          body: errBody,
+        })
+      )
+        return {
+          committed: false,
+          status,
+          reason: "Claude Code key lacks long-context usage credits",
+          usageCreditsRequired: true,
+        };
+
+      captureClaudeUsage();
       const rateLimitHint = status === 429 ? parseRateLimitHint(headers) : null;
       const scope = classifyAnthropicRateLimit({
         status,
@@ -991,6 +1012,8 @@ export class ForwardingEngine {
       };
     }
 
+    captureClaudeUsage();
+
     // Auth failure (bad/revoked key): don't commit this to the client — the
     // key is dead, not the request. Read the body (for logging/reason only,
     // never forwarded) and fail this attempt over so forward()'s retry loop
@@ -1029,7 +1052,11 @@ export class ForwardingEngine {
         category: "non-retryable",
       });
       if (!res.headersSent) {
-        const out = filteredHeaders(headers, { stripEncoding: true });
+        const seeded = filteredHeaders(headers, { stripEncoding: true });
+        const out =
+          provider.catalogId === "claude-code"
+            ? bareResponseHeaders(seeded)
+            : seeded;
         const buf = Buffer.from(errText, "utf8");
         out["content-length"] = String(buf.length);
         res.writeHead(status, out);
@@ -1082,7 +1109,14 @@ export class ForwardingEngine {
         debugResponse: usage.debugResponse ?? null,
       };
     }
-    this.pipeThrough(upRes, res, status, headers, route.clientFmt);
+    this.pipeThrough(
+      upRes,
+      res,
+      status,
+      headers,
+      route.clientFmt,
+      provider.catalogId === "claude-code",
+    );
     return {
       committed: true,
       status,
@@ -1124,7 +1158,11 @@ export class ForwardingEngine {
         });
       return s.create(attemptCtx);
     });
-    const out = finalizeResponseHeaders(attemptCtx.respHeaders, {
+    const clientHeaders =
+      provider.catalogId === "claude-code"
+        ? bareResponseHeaders(attemptCtx.respHeaders)
+        : attemptCtx.respHeaders;
+    const out = finalizeResponseHeaders(clientHeaders, {
       contentType: route.convert ? "text/event-stream" : undefined,
       sse: true,
     });
@@ -1380,7 +1418,13 @@ export class ForwardingEngine {
     try {
       parsed = JSON.parse(stripped.toString("utf8")) as Record<string, unknown>;
     } catch {
-      this.sendRaw(res, status, headers, stripped);
+      this.sendRaw(
+        res,
+        status,
+        headers,
+        stripped,
+        provider.catalogId === "claude-code",
+      );
       return {};
     }
 
@@ -1414,12 +1458,22 @@ export class ForwardingEngine {
       this.logger.warn("response_conversion_failed", {
         err: (err as Error).message,
       });
-      this.sendRaw(res, status, headers, stripped);
+      this.sendRaw(
+        res,
+        status,
+        headers,
+        stripped,
+        provider.catalogId === "claude-code",
+      );
       return { ...actual, debugResponse };
     }
 
     const out = Buffer.from(JSON.stringify(outBody), "utf8");
-    const outHeaders = finalizeResponseHeaders(attemptCtx.respHeaders, {
+    const clientHeaders =
+      provider.catalogId === "claude-code"
+        ? bareResponseHeaders(attemptCtx.respHeaders)
+        : attemptCtx.respHeaders;
+    const outHeaders = finalizeResponseHeaders(clientHeaders, {
       contentLength: out.length,
       contentType: route.convert ? "application/json" : undefined,
     });
@@ -1436,8 +1490,10 @@ export class ForwardingEngine {
     status: number,
     headers: IncomingMessage["headers"],
     clientFmt: Route["clientFmt"],
+    bareHeaders = false,
   ): void {
-    const out = filteredHeaders(headers);
+    const seeded = filteredHeaders(headers);
+    const out = bareHeaders ? bareResponseHeaders(seeded) : seeded;
     res.on("error", (err: Error) =>
       this.logger.warn("client_res_error", { err: err.message }),
     );
@@ -1537,6 +1593,7 @@ export class ForwardingEngine {
     status: number,
     headers: IncomingMessage["headers"],
     buf: Buffer,
+    bareHeaders = false,
   ): void {
     if (res.headersSent) {
       try {
@@ -1546,7 +1603,8 @@ export class ForwardingEngine {
       }
       return;
     }
-    const out = seedResponseHeaders(headers, { stripEncoding: true });
+    const seeded = seedResponseHeaders(headers, { stripEncoding: true });
+    const out = bareHeaders ? bareResponseHeaders(seeded) : seeded;
     out["content-length"] = String(buf.length);
     res.writeHead(status, out);
     res.end(buf);
@@ -1715,7 +1773,7 @@ export class ForwardingEngine {
           });
           break;
         }
-        if (r.retryable && attempt < attempts)
+        if (r.retryable && attempt < attempts && !r.usageCreditsRequired)
           await sleep(entry.provider.retryIntervalMs);
         else if (!r.retryable) break; // move to next provider
       }
@@ -1733,7 +1791,13 @@ export class ForwardingEngine {
     tried: Set<string>,
   ): Promise<
     | { ok: true; body: Record<string, unknown>; usage: StreamUsageLike }
-    | { ok: false; status: number; reason: string; retryable: boolean }
+    | {
+        ok: false;
+        status: number;
+        reason: string;
+        retryable: boolean;
+        usageCreditsRequired?: boolean;
+      }
   > {
     // Health-aware key pick for the (non-streaming) web-tool turn. Each turn is
     // a fresh selection so a rate-limited/auth-failed key is skipped. Picked up
@@ -1833,7 +1897,8 @@ export class ForwardingEngine {
       };
     }
 
-    if (provider.catalogId === "claude-code" && pick) {
+    const captureClaudeUsage = () => {
+      if (provider.catalogId !== "claude-code" || !pick) return;
       try {
         const unified = filterUnifiedRateLimitHeaders(res.headers);
         if (Object.keys(unified).length)
@@ -1850,10 +1915,27 @@ export class ForwardingEngine {
           err: (err as Error).message,
         });
       }
-    }
+    };
 
     if (RETRY_STATUS.has(res.status)) {
       const errBody = res.text;
+      if (
+        isClaudeCodeUsageCreditsError({
+          status: res.status,
+          catalogId: provider.catalogId,
+          upstreamModel,
+          body: errBody,
+        })
+      )
+        return {
+          ok: false,
+          status: res.status,
+          reason: "Claude Code key lacks long-context usage credits",
+          retryable: true,
+          usageCreditsRequired: true,
+        };
+
+      captureClaudeUsage();
       const rateLimitHint =
         res.status === 429 ? parseRateLimitHint(res.headers) : null;
       const scope = classifyAnthropicRateLimit({
@@ -1922,6 +2004,8 @@ export class ForwardingEngine {
         retryable: true,
       };
     }
+
+    captureClaudeUsage();
     if (res.status < 200 || res.status >= 300) {
       const authFailed = AUTH_FAIL_STATUS.has(res.status);
       logUpstreamNon2xx(this.logger, {

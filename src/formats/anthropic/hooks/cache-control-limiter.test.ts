@@ -84,6 +84,58 @@ test("cache-control limiter keeps stable-prefix breakpoints and removes every ex
   );
 });
 
+test("cache-control limiter prefers dual tool-turn anchors over excess top-level markers", () => {
+  const assistantTool = {
+    type: "tool_use",
+    id: "tool-1",
+    name: "lookup",
+    input: {},
+    cache_control: cc(),
+  };
+  const userTail = {
+    type: "tool_result",
+    tool_use_id: "tool-1",
+    content: "ok",
+    cache_control: cc(),
+  };
+  const body: AnthropicMessagesRequest = {
+    cache_control: cc(),
+    system: [{ type: "text", text: "system", cache_control: cc() }],
+    tools: [{ name: "lookup", cache_control: cc() }],
+    messages: [
+      { role: "assistant", content: [assistantTool] },
+      { role: "user", content: [userTail] },
+    ],
+  };
+
+  limitAnthropicCacheControl(body);
+
+  assert.equal(countCacheControl(body), 4);
+  assert.equal(body.cache_control, undefined);
+  assert.ok((body.system as Array<Record<string, unknown>>)[0].cache_control);
+  assert.ok((body.tools as Array<Record<string, unknown>>)[0].cache_control);
+  assert.ok(assistantTool.cache_control);
+  assert.ok(userTail.cache_control);
+});
+
+test("cache-control limiter counts null and malformed marker properties", () => {
+  const extras = [
+    { type: "text", text: "one", cache_control: null },
+    { type: "text", text: "two", cache_control: "bad" },
+    { type: "text", text: "three", cache_control: 1 },
+    { type: "text", text: "four", cache_control: cc() },
+    { type: "text", text: "five", cache_control: cc() },
+  ];
+  const body = {
+    messages: [{ role: "user", content: extras }],
+  } as unknown as AnthropicMessagesRequest;
+
+  limitAnthropicCacheControl(body);
+
+  assert.equal(countCacheControl(body), 4);
+  assert.equal("cache_control" in extras[0], false);
+});
+
 test("cache-control limiter is idempotent", () => {
   const body: AnthropicMessagesRequest = {
     cache_control: cc(),

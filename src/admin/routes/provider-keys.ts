@@ -15,6 +15,7 @@ import {
 import { importKeysFromUrl } from "../../services/key-import";
 import { keyStats } from "../../repo/request-logs";
 import { KeyHealthStore } from "../../gateway/key-health";
+import type { Response } from "express";
 import type { RouteCtx } from "./types";
 import {
   parseProviderKeyInput,
@@ -59,7 +60,7 @@ export function registerProviderKeyRoutes(ctx: RouteCtx): void {
   };
 
   // Guard: resolve provider or 404
-  const withProvider = (id: string, res: import("express").Response) => {
+  const withProvider = (id: string, res: Response) => {
     const p = getProvider(db, id);
     if (!p) res.status(404).json({ error: { message: "provider not found" } });
     return p;

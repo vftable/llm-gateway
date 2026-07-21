@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { finalizeResponseHeaders, seedResponseHeaders } from "./utils";
+import {
+  bareResponseHeaders,
+  finalizeResponseHeaders,
+  seedResponseHeaders,
+} from "./utils";
 
 test("seedResponseHeaders lowercases names, strips hop-by-hop and preserves arrays", () => {
   const headers = seedResponseHeaders({
@@ -21,6 +25,26 @@ test("seedResponseHeaders lowercases names, strips hop-by-hop and preserves arra
       { stripEncoding: true },
     ),
     { "x-test": "ok" },
+  );
+});
+
+test("bareResponseHeaders removes provider metadata and keeps representation headers", () => {
+  assert.deepEqual(
+    bareResponseHeaders({
+      "content-type": "application/json",
+      "content-length": "12",
+      "content-encoding": "gzip",
+      "x-request-id": "req-secret",
+      "anthropic-ratelimit-unified-status": "allowed",
+      "x-ratelimit-remaining": "99",
+      "cf-ray": "infra-secret",
+      "set-cookie": ["account=secret"],
+    }),
+    {
+      "content-type": "application/json",
+      "content-length": "12",
+      "content-encoding": "gzip",
+    },
   );
 });
 

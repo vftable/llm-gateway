@@ -33,7 +33,6 @@ const BASE = [
   "anthropic:sanitize-request",
   "anthropic:thinking-mode",
   "anthropic:thinking-config",
-  "anthropic:cache-control-limit",
 ];
 
 function hookCtx(over: Partial<TransformCtx> = {}): TransformCtx {

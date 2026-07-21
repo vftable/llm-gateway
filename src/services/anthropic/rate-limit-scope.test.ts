@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyAnthropicRateLimit } from "./anthropic-rate-limit-scope";
+import { classifyAnthropicRateLimit } from "./rate-limit-scope";
 
 const now = 1_700_000_000_000;
 const reset = Math.floor((now + 3_600_000) / 1000);

@@ -279,7 +279,7 @@ test("Claude Code captures unified usage headers for the selected key", async ()
       new ThinkingConverter(),
       0,
     );
-    const { res } = mockRes();
+    const { res, state } = mockRes();
     await engine.forward(
       { method: "POST", headers: {} } as never,
       res as never,
@@ -294,6 +294,13 @@ test("Claude Code captures unified usage headers for the selected key", async ()
       ),
     );
     const snapshot = getUnifiedUsage(db, "cc", credHash("sk-ant-captured"));
+    assert.equal(state.headers["content-type"], "application/json");
+    assert.equal(state.headers["content-length"] !== undefined, true);
+    assert.equal(state.headers["request-id"], undefined);
+    assert.equal(
+      state.headers["anthropic-ratelimit-unified-status"],
+      undefined,
+    );
     assert.equal(snapshot?.httpStatus, 200);
     assert.equal(
       snapshot?.headers["anthropic-ratelimit-unified-5h-utilization"],
@@ -733,6 +740,90 @@ test("streaming: primes a ping on connect + surfaces upstream error as SSE event
       "expected a terminal error event",
     );
     assert.equal(listRequestLogs(db)[0]?.upstreamKeyMask, "k…");
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("Claude Code streaming responses expose only bare SSE headers", async () => {
+  const server = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "request-id": "req-secret",
+      "anthropic-ratelimit-unified-status": "allowed",
+      "x-ratelimit-remaining": "99",
+      "cf-ray": "infra-secret",
+      "set-cookie": "account=secret",
+    });
+    res.end(
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-6","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n' +
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    );
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc-stream-headers",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKeys: ["key"],
+      catalogId: "claude-code",
+      authScheme: "bearer",
+      retryAttempts: 1,
+    });
+    const created = createModel(db, {
+      alias: "claude-stream",
+      type: "anthropic",
+      providers: [
+        {
+          providerId: "cc-stream-headers",
+          upstreamModel: "claude-sonnet-4-6",
+        },
+      ],
+    });
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const { res, state } = streamRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      {
+        ...ctxFor(
+          getModel(db, created.id)!,
+          {
+            model: "claude-stream",
+            max_tokens: 16,
+            stream: true,
+            messages: [{ role: "user", content: "hi" }],
+          },
+          "/v1/messages",
+        ),
+        isStream: true,
+      },
+    );
+    await new Promise<void>((resolve) => {
+      if (res.writableFinished) return resolve();
+      res.once("finish", resolve);
+    });
+    assert.equal(state.headers["content-type"], "text/event-stream");
+    assert.equal(state.headers["cache-control"], "no-cache, no-transform");
+    assert.equal(state.headers["x-accel-buffering"], "no");
+    assert.equal(state.headers["request-id"], undefined);
+    assert.equal(
+      state.headers["anthropic-ratelimit-unified-status"],
+      undefined,
+    );
+    assert.equal(state.headers["x-ratelimit-remaining"], undefined);
+    assert.equal(state.headers["cf-ray"], undefined);
+    assert.equal(state.headers["set-cookie"], undefined);
   } finally {
     closeDatabase(db);
     await new Promise<void>((r) => server.close(() => r()));
@@ -1290,6 +1381,198 @@ test("forward() falls over to the next provider once every key on the first is d
     );
     assert.equal(state.statusCode || 200, 200);
     assert.ok(aliveHit, "the second provider in the chain must have served it");
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("Claude Code Sonnet 4.6 rotates immediately past a key without long-context usage credits", async () => {
+  const seenKeys: string[] = [];
+  const server = http.createServer((req, res) => {
+    const auth = String(req.headers.authorization);
+    seenKeys.push(auth);
+    req.resume();
+    req.on("end", () => {
+      if (auth === "Bearer key-1") {
+        res.writeHead(429, {
+          "content-type": "application/json",
+          "retry-after": "60",
+          "request-id": "req-secret",
+          "anthropic-ratelimit-unified-status": "rate_limited",
+        });
+        res.end(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "rate_limit_error",
+              message: "Usage credits are required for long context requests.",
+            },
+            request_id: "req-secret",
+          }),
+        );
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "request-id": "success-secret",
+        "anthropic-ratelimit-unified-status": "allowed",
+        "x-ratelimit-remaining": "99",
+      });
+      res.end(JSON.stringify({ id: "ok", content: [], usage: {} }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc-credits",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKeys: ["key-1", "key-2"],
+      catalogId: "claude-code",
+      authScheme: "bearer",
+      retryAttempts: 1,
+      retryIntervalMs: 5_000,
+    });
+    const created = createModel(db, {
+      alias: "claude-sonnet",
+      type: "anthropic",
+      providers: [
+        { providerId: "cc-credits", upstreamModel: "claude-sonnet-4-6" },
+      ],
+    });
+    const logger = quietLogger();
+    const warnings: string[] = [];
+    let upstreamErrors = 0;
+    logger.warn = (message: string) => warnings.push(message);
+    logger.upstreamError = () => {
+      upstreamErrors++;
+    };
+    const engine = new ForwardingEngine(db, logger, new ThinkingConverter(), 0);
+    const { res, state } = mockRes();
+    const started = Date.now();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(
+        getModel(db, created.id)!,
+        {
+          model: "claude-sonnet",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hi" }],
+        },
+        "/v1/messages",
+      ),
+    );
+    assert.equal(state.statusCode || 200, 200);
+    assert.deepEqual(seenKeys, ["Bearer key-1", "Bearer key-2"]);
+    assert.ok(Date.now() - started < 1_000, "must not wait retryIntervalMs");
+    assert.equal(upstreamErrors, 0);
+    assert.equal(warnings.includes("provider_attempt_failed"), false);
+    assert.equal(
+      new KeyHealthStore(db).usableCount(
+        "cc-credits",
+        ["key-1", "key-2"],
+        "claude-sonnet-4-6",
+      ),
+      2,
+    );
+    assert.equal(state.headers["request-id"], undefined);
+    assert.equal(
+      state.headers["anthropic-ratelimit-unified-status"],
+      undefined,
+    );
+    assert.equal(state.headers["x-ratelimit-remaining"], undefined);
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("Claude Code Sonnet 4.6 bounds all-keys-without-credits retries without logging or cooldown", async () => {
+  const seenKeys: string[] = [];
+  const server = http.createServer((req, res) => {
+    seenKeys.push(String(req.headers.authorization));
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(429, {
+        "content-type": "application/json",
+        "retry-after": "60",
+      });
+      res.end(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message: "Usage credits are required for long context requests.",
+          },
+          request_id: "req-secret",
+        }),
+      );
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc-no-credits",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKeys: ["key-1", "key-2"],
+      catalogId: "claude-code",
+      authScheme: "bearer",
+      retryAttempts: 1,
+      retryIntervalMs: 5_000,
+    });
+    const created = createModel(db, {
+      alias: "claude-sonnet",
+      type: "anthropic",
+      providers: [
+        {
+          providerId: "cc-no-credits",
+          upstreamModel: "claude-sonnet-4-6",
+        },
+      ],
+    });
+    const logger = quietLogger();
+    const warnings: string[] = [];
+    let upstreamErrors = 0;
+    logger.warn = (message: string) => warnings.push(message);
+    logger.upstreamError = () => {
+      upstreamErrors++;
+    };
+    const engine = new ForwardingEngine(db, logger, new ThinkingConverter(), 0);
+    const { res, state } = mockRes();
+    const started = Date.now();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(
+        getModel(db, created.id)!,
+        {
+          model: "claude-sonnet",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hi" }],
+        },
+        "/v1/messages",
+      ),
+    );
+    assert.equal(state.statusCode, 502);
+    assert.deepEqual(seenKeys, ["Bearer key-1", "Bearer key-2"]);
+    assert.ok(Date.now() - started < 1_000, "must not wait retryIntervalMs");
+    assert.equal(upstreamErrors, 0);
+    assert.equal(warnings.includes("provider_attempt_failed"), false);
+    assert.equal(
+      new KeyHealthStore(db).usableCount(
+        "cc-no-credits",
+        ["key-1", "key-2"],
+        "claude-sonnet-4-6",
+      ),
+      2,
+    );
   } finally {
     closeDatabase(db);
     await new Promise<void>((r) => server.close(() => r()));

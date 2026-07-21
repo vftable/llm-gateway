@@ -1,9 +1,10 @@
 // Claude Code subscription transform stacks — request, response, and stream.
 //
 // Wired into the ClaudeCodeAdapter via requestTransforms/responseTransforms/
-// streamTransforms overrides (see providers/catalog/claude-code.ts). Each
-// hook is gated on `ctx.provider.catalogId === "claude-code"` so the stages
-// are no-ops when composed into a non-subscription route.
+// streamTransforms overrides (see providers/catalog/claude-code.ts). Billing
+// and cch finalization run separately in the adapter builder after every request
+// transform. Each hook is gated on `ctx.provider.catalogId === "claude-code"`
+// so the stages are no-ops when composed into a non-subscription route.
 
 import type {
   AnthropicMessagesRequest,
@@ -35,6 +36,7 @@ import {
 } from "./billing";
 import { scrubAnchorsInPlace } from "./classifier-scrub";
 import { normalizeToolNames, ensureCcDecoyTools } from "./tool-normalization";
+import { limitAnthropicCacheControl } from "../hooks/cache-control-limiter";
 
 const GROUP = "claude-code-hooks";
 const TOOL_RENAME_KEY = "toolRenameMap";
@@ -61,7 +63,9 @@ import {
   type UserIdentity,
 } from "../../session-id";
 
-function ensureMetadataUserId(body: AnthropicMessagesRequest): UserIdentity {
+export function ensureMetadataUserId(
+  body: AnthropicMessagesRequest,
+): UserIdentity {
   const meta = (body.metadata ?? {}) as Record<string, unknown>;
   body.metadata = meta;
 
@@ -70,6 +74,36 @@ function ensureMetadataUserId(body: AnthropicMessagesRequest): UserIdentity {
 
   meta.user_id = JSON.stringify(DEFAULT_USER_IDENTITY);
   return DEFAULT_USER_IDENTITY;
+}
+
+/** Finalize a Claude Code body after every request transform has run.
+ * Cache markers are limited before the placeholder body is serialized so the
+ * cch attests to the exact cache layout sent on the wire. */
+export function finalizeClaudeCodeRequest(body: AnthropicMessagesRequest): {
+  body: AnthropicMessagesRequest;
+  billingHeader: string;
+  sessionId: string;
+} {
+  limitAnthropicCacheControl(body);
+  const userId = ensureMetadataUserId(body);
+  const version = CC_VERSION;
+  const suffix = computeVersionSuffix(extractFirstUserText(body), version);
+  const placeholderValue = `cc_version=${version}.${suffix}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${CCH_PLACEHOLDER};`;
+  const placeholderSystem = buildSystemArray(
+    body.system,
+    buildBillingBlock(placeholderValue),
+  );
+  const placeholderBody = buildFinalBody(body, placeholderSystem);
+  const cch = computeCchForBody(serializeBody(placeholderBody), version);
+  const billingHeader = `cc_version=${version}.${suffix}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${cch};`;
+  const finalSystem = placeholderSystem.map((block, index) =>
+    index === 0 ? buildBillingBlock(billingHeader) : block,
+  );
+  return {
+    body: buildFinalBody(body, finalSystem),
+    billingHeader,
+    sessionId: userId.session_id,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -179,51 +213,6 @@ export const subscriptionRequestStack: RequestTransform[] = [
       label: "Normalize device ID",
       blurb:
         "Normalize device_id and set account_uuid from the selected key's metadata when available, falling back to gateway defaults.",
-      group: GROUP,
-    },
-  ),
-
-  onRequest(
-    "messages",
-    "claude-code:oauth-billing",
-    (body, ctx) => {
-      if (!subscriptionActive(ctx)) return body;
-
-      const userId = ensureMetadataUserId(body);
-      if (ctx.headers)
-        ctx.headers["x-claude-code-session-id"] = userId.session_id;
-
-      const version = CC_VERSION;
-      const firstUserText = extractFirstUserText(body);
-      const suffix = computeVersionSuffix(firstUserText, version);
-
-      // Build with placeholder cch to get the serialized body for hashing.
-      const placeholderValue = `cc_version=${version}.${suffix}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${CCH_PLACEHOLDER};`;
-      const placeholderSystem = buildSystemArray(
-        body.system,
-        buildBillingBlock(placeholderValue),
-      );
-
-      const placeholderBody = buildFinalBody(body, placeholderSystem);
-      const serialized = serializeBody(placeholderBody);
-
-      const cch = computeCchForBody(serialized, version);
-
-      // Rebuild with the real cch.
-      const finalValue = `cc_version=${version}.${suffix}; cc_entrypoint=${CC_ENTRYPOINT}; cch=${cch};`;
-      const finalSystem = placeholderSystem.map((block, i) =>
-        i === 0 ? buildBillingBlock(finalValue) : block,
-      );
-
-      replaceBody(body, buildFinalBody(body, finalSystem));
-      if (ctx.headers) ctx.headers["x-anthropic-billing-header"] = finalValue;
-
-      return body;
-    },
-    {
-      label: "OAuth billing/attestation",
-      blurb:
-        "Rebuild system[] into Claude Code's ordering and inject valid billing/attestation headers.",
       group: GROUP,
     },
   ),

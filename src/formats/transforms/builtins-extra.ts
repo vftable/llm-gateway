@@ -47,11 +47,12 @@ function looksOpenAIShaped(body: Json): boolean {
   return false;
 }
 
-// Add a cache_control breakpoint to the last system block, the last tool, and
-// the last message's last content block — the stable-prefix positions Anthropic
-// recommends. Stays within the 4-breakpoint limit (3 here). No-op on a body that
-// isn't Anthropic-shaped (including a body that positively looks OpenAI-shaped —
-// see looksOpenAIShaped).
+// Add cache_control breakpoints to the last system block, last tool, newest
+// assistant turn's last tool_use, and last message's last content block. The
+// assistant tool-use + user-tail pair keeps the complete tool exchange inside
+// the growing cached prefix. The final adapter boundary enforces Anthropic's
+// four-breakpoint ceiling after every transform has run. No-op on a body that
+// positively looks OpenAI-shaped (see looksOpenAIShaped).
 export function anthropicCache(ttlRaw: string): BodyXform {
   const ttl = ttlRaw === "1h" ? "1h" : "5m";
   const mark = (b: Block): void => {
@@ -74,14 +75,35 @@ export function anthropicCache(ttlRaw: string): BodyXform {
       const tools = body.tools as Block[];
       mark(tools[tools.length - 1]);
     }
-    // messages: last message's last non-thinking content block.
     if (Array.isArray(body.messages) && body.messages.length) {
-      const msgs = body.messages as Array<{ content?: unknown }>;
+      const msgs = body.messages as Array<{
+        role?: unknown;
+        content?: unknown;
+      }>;
+
+      // Dual-turn anchor: mark only the newest assistant turn's last tool_use.
+      // This includes the preceding thinking/text/tool calls in the cached prefix
+      // while avoiding one additional breakpoint for every historical turn.
+      outer: for (let i = msgs.length - 1; i >= 0; i--) {
+        const message = msgs[i];
+        if (message?.role !== "assistant" || !Array.isArray(message.content))
+          continue;
+        const blocks = message.content as Block[];
+        for (let j = blocks.length - 1; j >= 0; j--) {
+          if (blocks[j]?.type === "tool_use") {
+            mark(blocks[j]);
+            break outer;
+          }
+        }
+      }
+
+      // Latest message tail: preserve the existing incremental-conversation
+      // breakpoint, skipping signed/opaque thinking blocks.
       const last = msgs[msgs.length - 1];
       if (Array.isArray(last?.content) && last.content.length) {
         const blocks = last.content as Block[];
         for (let i = blocks.length - 1; i >= 0; i--) {
-          const t = blocks[i].type;
+          const t = blocks[i]?.type;
           if (t !== "thinking" && t !== "redacted_thinking") {
             mark(blocks[i]);
             break;

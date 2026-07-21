@@ -9,8 +9,8 @@
 
 import {
   AnthropicCompatibleAdapter,
-  BuildCtx,
-  BuiltRequest,
+  type BuildCtx,
+  type BuiltRequest,
   type UsageCtx,
   type KeyUsageResult,
 } from "../base";
@@ -19,7 +19,9 @@ import type {
   ResponseTransform,
   StreamTransform,
 } from "../../formats/pipeline";
+import type { AnthropicMessagesRequest } from "../../formats/wire";
 import {
+  finalizeClaudeCodeRequest,
   subscriptionRequestStack,
   subscriptionResponseStack,
   subscriptionStreamStack,
@@ -31,7 +33,7 @@ import {
   parseUnifiedRateLimitHeaders,
   unifiedRateLimitToUsageWindows,
   unifiedStatusMessage,
-} from "../../services/anthropic-unified-usage";
+} from "../../services/anthropic/unified-usage";
 
 class ClaudeCodeAdapter extends AnthropicCompatibleAdapter {
   requestTransforms(p: Provider): RequestTransform[] {
@@ -47,7 +49,12 @@ class ClaudeCodeAdapter extends AnthropicCompatibleAdapter {
   }
 
   messages(ctx: BuildCtx): BuiltRequest {
-    const built = super.messages(ctx);
+    const finalized = finalizeClaudeCodeRequest(
+      ctx.body as AnthropicMessagesRequest,
+    );
+    ctx.headers["x-claude-code-session-id"] = finalized.sessionId;
+    ctx.headers["x-anthropic-billing-header"] = finalized.billingHeader;
+    const built = super.messages({ ...ctx, body: finalized.body });
     built.url = withBetaQuery(built.url);
     return built;
   }

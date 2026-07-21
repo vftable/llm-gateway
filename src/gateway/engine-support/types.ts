@@ -123,6 +123,9 @@ export interface AttemptResult {
   rateLimitModelClass?: string;
   /** Operator-facing explanation of the chosen cooldown scope. */
   rateLimitReason?: string;
+  /** Claude Code key lacks long-context usage credits. Rotate immediately
+   * without logging, cooling, or recording a key-health failure. */
+  usageCreditsRequired?: boolean;
 }
 
 // Upstream-reported usage shape (subset of readResponseUsage's return).

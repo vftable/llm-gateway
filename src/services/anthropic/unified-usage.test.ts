@@ -5,7 +5,7 @@ import {
   parseUnifiedRateLimitHeaders,
   unifiedRateLimitToUsageWindows,
   unifiedStatusMessage,
-} from "./anthropic-unified-usage";
+} from "./unified-usage";
 
 const HEADERS = {
   date: "Tue, 21 Jul 2026 01:58:48 GMT",

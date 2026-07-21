@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  AnthropicCompatibleAdapter,
   OpenAICompatibleAdapter,
   type BuildCtx,
   type BuiltRequest,
@@ -110,6 +111,56 @@ test("default builder forwards the composed request verbatim", () => {
   assert.equal(built.url, ctx.url);
   assert.deepEqual(built.headers, ctx.headers);
   assert.strictEqual(built.body, ctx.body); // same object, untouched
+});
+
+test("Anthropic builder enforces four final cache breakpoints with dual-turn anchors", () => {
+  const adapter = new AnthropicCompatibleAdapter({
+    id: "anthropic-test",
+    label: "Anthropic",
+    blurb: "test",
+    brand: "anthropic",
+    defaults: { format: "anthropic", endpoints: ["messages"] },
+    fields: [],
+  });
+  const cc = { type: "ephemeral" as const };
+  const assistantTool = {
+    type: "tool_use",
+    id: "tool-1",
+    name: "lookup",
+    input: {},
+    cache_control: cc,
+  };
+  const userTail = {
+    type: "tool_result",
+    tool_use_id: "tool-1",
+    content: "ok",
+    cache_control: cc,
+  };
+  const ctx = buildCtx({
+    provider: provider({ catalogId: "anthropic", format: "anthropic" }),
+    model: "claude-opus-4-8",
+    clientFmt: "messages",
+    providerFmt: "messages",
+    endpointKind: "messages",
+    forwardPath: "/v1/messages",
+    body: {
+      cache_control: cc,
+      system: [{ type: "text", text: "system", cache_control: cc }],
+      tools: [{ name: "lookup", input_schema: {}, cache_control: cc }],
+      messages: [
+        { role: "assistant", content: [assistantTool] },
+        { role: "user", content: [userTail] },
+      ],
+    },
+  });
+
+  const built = adapter.buildFor("messages", ctx);
+  const text = JSON.stringify(built.body);
+
+  assert.equal((text.match(/"cache_control"/g) ?? []).length, 4);
+  assert.equal(built.body.cache_control, undefined);
+  assert.ok(assistantTool.cache_control);
+  assert.ok(userTail.cache_control);
 });
 
 test("baseUrl + formats getters reflect the template", () => {

@@ -163,6 +163,18 @@ export function seedResponseHeaders(
   return out;
 }
 
+/** Keep only representation/framing headers needed to deliver an upstream body.
+ * Provider request, quota, account, key, and infrastructure metadata must not
+ * cross this boundary. */
+export function bareResponseHeaders(
+  headers: Record<string, string | string[]>,
+): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  for (const name of ["content-type", "content-length", "content-encoding"])
+    if (headers[name] !== undefined) out[name] = headers[name];
+  return out;
+}
+
 /** Reassert response framing invariants after hooks mutate respHeaders. */
 export function finalizeResponseHeaders(
   headers: Record<string, string | string[]>,

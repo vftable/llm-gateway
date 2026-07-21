@@ -178,6 +178,52 @@ test("anthropic-cache marks the last system block, last tool, last message", () 
   });
 });
 
+test("anthropic-cache adds dual assistant tool-use and user-tail anchors", () => {
+  const body = apply(
+    "anthropic-cache",
+    { ttl: "1h" },
+    {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "signed", signature: "sig" },
+            { type: "tool_use", id: "old", name: "old", input: {} },
+          ],
+        },
+        {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "old" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_use", id: "a", name: "a", input: {} },
+            { type: "tool_use", id: "b", name: "b", input: {} },
+          ],
+        },
+        { role: "user", content: [{ type: "tool_result", tool_use_id: "b" }] },
+      ],
+    },
+  );
+  const messages = body.messages as Array<{
+    content: Array<Record<string, unknown>>;
+  }>;
+
+  assert.equal(messages[0].content[0].cache_control, undefined);
+  assert.equal(messages[0].content[1].cache_control, undefined);
+  assert.equal(messages[2].content[0].cache_control, undefined);
+  assert.deepEqual(messages[2].content[1].cache_control, {
+    type: "ephemeral",
+    ttl: "1h",
+  });
+  assert.deepEqual(messages[3].content[0].cache_control, {
+    type: "ephemeral",
+    ttl: "1h",
+  });
+  assert.equal(messages[0].content[0].signature, "sig");
+});
+
 test("anthropic-cache defaults ttl to 5m (no ttl field emitted)", () => {
   const body = apply("anthropic-cache", {}, { system: "hi" });
   const sys = body.system as Array<Record<string, unknown>>;

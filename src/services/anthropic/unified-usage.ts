@@ -1,4 +1,4 @@
-import type { ProviderKeyUsageWindow } from "../types";
+import type { ProviderKeyUsageWindow } from "../../types";
 
 export type HeaderTable = Record<string, string | string[] | undefined>;
 
