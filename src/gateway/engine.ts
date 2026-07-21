@@ -573,12 +573,14 @@ export class ForwardingEngine {
               entry.provider.id,
               pick.keyHash,
               entry.upstreamModel,
+              result.status,
             );
           } else if (!result.committed) {
             this.keyHealth.recordFailure(
               entry.provider.id,
               pick.keyHash,
               entry.upstreamModel,
+              result.status,
             );
           }
         }
@@ -621,6 +623,7 @@ export class ForwardingEngine {
           const nextReadyAt = this.keyHealth.nextReadyAt(
             entry.provider.id,
             providerKeys,
+            entry.upstreamModel,
           );
           lastReason = nextReadyAt
             ? `all ${providerKeys.length} enabled key(s) rate-limited until ${new Date(nextReadyAt).toISOString()}`
@@ -1665,6 +1668,7 @@ export class ForwardingEngine {
         entry.provider.retryAttempts,
         Math.min(usable || 1, turnKeys.length || 1),
       );
+      const tried = new Set<string>();
       for (let attempt = 1; attempt <= attempts; attempt++) {
         const r = await this.runOneTurnAttempt(
           req,
@@ -1673,6 +1677,7 @@ export class ForwardingEngine {
           entry.upstreamModel,
           route,
           messagesBody,
+          tried,
         );
         if (r.ok) return r;
         lastReason = r.reason;
@@ -1688,6 +1693,7 @@ export class ForwardingEngine {
           const nextReadyAt = this.keyHealth.nextReadyAt(
             entry.provider.id,
             turnKeys,
+            entry.upstreamModel,
           );
           lastReason = nextReadyAt
             ? `all ${turnKeys.length} enabled key(s) rate-limited until ${new Date(nextReadyAt).toISOString()}`
@@ -1719,6 +1725,7 @@ export class ForwardingEngine {
     upstreamModel: string,
     route: Route,
     messagesBody: Record<string, unknown>,
+    tried: Set<string>,
   ): Promise<
     | { ok: true; body: Record<string, unknown>; usage: StreamUsageLike }
     | { ok: false; status: number; reason: string; retryable: boolean }
@@ -1731,8 +1738,9 @@ export class ForwardingEngine {
       provider.id,
       turnKeys,
       upstreamModel,
-      new Set(),
+      tried,
     );
+    if (pick) tried.add(pick.keyHash);
     const key = pick?.key ?? null;
     const keyMetadata = pick
       ? (getProviderKeyByHash(this.db, provider.id, pick.keyHash)?.metadata ??
@@ -1894,7 +1902,12 @@ export class ForwardingEngine {
             res.status,
             `status ${res.status}: ${errBody.slice(0, 200)}`,
           );
-        this.keyHealth.recordFailure(provider.id, pick.keyHash, upstreamModel);
+        this.keyHealth.recordFailure(
+          provider.id,
+          pick.keyHash,
+          upstreamModel,
+          res.status,
+        );
       }
       return {
         ok: false,

@@ -215,6 +215,17 @@ CREATE TABLE IF NOT EXISTS key_model_affinity (
   PRIMARY KEY (provider_id, key_hash, model)
 );
 
+-- Learned quota/access class for a key. "base" combines Sonnet/Opus/Haiku;
+-- "fable" combines Fable/Mythos. It is only a fallback preference when no
+-- exact-model sticky/affinity match exists, preserving exact-model cache state.
+CREATE TABLE IF NOT EXISTS key_class_affinity (
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  key_hash    TEXT NOT NULL,
+  model_class TEXT NOT NULL,
+  fails       INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider_id, key_hash, model_class)
+);
+
 -- The single "sticky" key currently preferred for a (provider, model) pair —
 -- the last key that successfully served this model. Selection prefers this
 -- exact key over round-robin/affinity-pool picking so repeat requests reuse

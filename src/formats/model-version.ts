@@ -32,6 +32,19 @@ export function isModelSamplingStripped(model: string): boolean {
   return SAMPLING_STRIPPED_RE.test(model);
 }
 
+export type ModelClass = "base" | "fable";
+
+/** Coarse Claude quota/access class used for key-routing affinity. Fable and
+ * Mythos share premium 7d_oi; Sonnet, Opus, and Haiku share normal limits. */
+export function modelClassOf(
+  model: string | null | undefined,
+): ModelClass | null {
+  if (!model) return null;
+  if (FABLE_MYTHOS_RE.test(model)) return "fable";
+  if (BASE_MODEL_RE.test(model)) return "base";
+  return null;
+}
+
 // --- per-family matchers (used by thinking-mode) --------------------------
 export const FABLE_RE = /claude-fable/i;
 export const MYTHOS_RE = /claude-mythos(?!.*preview)/i;
@@ -40,6 +53,7 @@ export const MYTHOS_PREVIEW_RE = /claude-mythos.*preview/i;
  * usage in the unified `7d_oi` window. Keep the internal/UI class label
  * "fable" for backwards compatibility, but use this predicate for routing. */
 export const FABLE_MYTHOS_RE = /claude-(?:fable|mythos)/i;
+export const BASE_MODEL_RE = /claude-(?:sonnet|opus|haiku)(?:-|$)/i;
 export const OPUS_47_PLUS_RE = /claude-opus-4-([7-9]|\d{2,})/i;
 export const OPUS_46_RE = /claude-opus-4-6/i;
 export const SONNET_5_PLUS_RE = /claude-sonnet-([5-9]|\d{2,})(?:-|$)/i;

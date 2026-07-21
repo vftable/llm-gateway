@@ -363,7 +363,7 @@ export function KeyUsageBlock({ usage }: { usage: ProviderKeyUsage }) {
           )}
           {usage.message && <div>{usage.message}</div>}
           {health?.lastError && (
-            <div className="truncate" title={health.lastError}>
+            <div className="truncate font-mono" title={health.lastError}>
               {health.lastErrorStatus ? `${health.lastErrorStatus}: ` : ""}
               {health.lastError}
             </div>

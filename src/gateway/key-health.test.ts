@@ -160,6 +160,78 @@ test("clearAllRateLimits resets live and persisted cooldowns but preserves auth 
   }
 });
 
+test("base affinity is shared across Sonnet, Opus, and Haiku", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const store = new KeyHealthStore(db);
+    store.recordSuccess(p.id, hashKey("b"), "claude-sonnet-5");
+    assert.equal(
+      store.select(p.id, p.keys, "claude-opus-4-8", new Set())!.key,
+      "b",
+    );
+    assert.equal(
+      store.select(p.id, p.keys, "claude-haiku-4-5", new Set())!.key,
+      "b",
+    );
+    const reloaded = new KeyHealthStore(db);
+    assert.equal(
+      reloaded.select(p.id, p.keys, "claude-opus-4-7", new Set())!.key,
+      "b",
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("premium affinity is isolated but can overflow to base", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const store = new KeyHealthStore(db);
+    // Only base access is known on b; premium must not prefer it as evidence.
+    store.recordSuccess(p.id, hashKey("b"), "claude-sonnet-5");
+    assert.equal(
+      store.select(p.id, p.keys, "claude-fable-5", new Set())!.key,
+      "a",
+    );
+
+    // Premium success on a is valid overflow for a base model when no fresh
+    // base-proven key is available, but fresh base proof still ranks first.
+    store.recordSuccess(p.id, hashKey("a"), "claude-fable-5");
+    store.markRateLimited(p.id, hashKey("b"), 60_000);
+    assert.equal(
+      store.select(p.id, p.keys, "claude-opus-4-8", new Set())!.key,
+      "a",
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("Fable 429 evicts premium class evidence without removing base evidence", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const store = new KeyHealthStore(db, Date.now, 3);
+    store.recordSuccess(p.id, hashKey("a"), "claude-opus-4-8");
+    store.recordSuccess(p.id, hashKey("a"), "claude-fable-5");
+    store.recordSuccess(p.id, hashKey("b"), "claude-mythos-5");
+    store.recordFailure(p.id, hashKey("a"), "claude-fable-5", 429);
+
+    assert.equal(
+      store.select(p.id, p.keys, "claude-mythos-5", new Set())!.key,
+      "b",
+    );
+    assert.equal(
+      store.select(p.id, p.keys, "claude-sonnet-5", new Set())!.key,
+      "a",
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test("auth-failed keys are skipped", () => {
   const db = openDatabase(":memory:");
   try {

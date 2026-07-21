@@ -4,6 +4,8 @@ export {
   isModelSamplingStripped,
   FABLE_RE,
   FABLE_MYTHOS_RE,
+  BASE_MODEL_RE,
+  modelClassOf,
   MYTHOS_RE,
   MYTHOS_PREVIEW_RE,
   OPUS_47_PLUS_RE,

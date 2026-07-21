@@ -26,7 +26,7 @@
 
 import crypto from "crypto";
 import type { Database as DB } from "better-sqlite3";
-import { FABLE_MYTHOS_RE } from "../formats/model-version";
+import { modelClassOf } from "../formats/model-version";
 
 // HTTP statuses that mark a key rate-limited / auth-failed. (Retryable statuses
 // live in the engine; these two sets drive key health specifically.)
@@ -184,6 +184,8 @@ export class KeyHealthStore {
   private affinity = new Map<string, Set<string>>(); // `${providerId}|${keyHash}` -> proven models
   private affinityFails = new Map<string, number>(); // `${providerId}|${keyHash}|${model}` -> fails
   private sticky = new Map<string, string>(); // `${providerId}|${model}` -> keyHash
+  private classAffinity = new Map<string, Set<string>>();
+  private classAffinityFails = new Map<string, number>();
   private modelCooldowns = new Map<string, ModelCooldownRow>();
   private loaded = new Set<string>(); // providerIds hydrated from DB
 
@@ -201,10 +203,10 @@ export class KeyHealthStore {
     return `${providerId}|${model}`;
   }
 
-  private modelClass(model: string | null | undefined): string | null {
-    // Both families consume the unified 7d_oi quota. Keep the stored class name
-    // "fable" so existing UI/status language and persisted rows stay stable.
-    return model && FABLE_MYTHOS_RE.test(model) ? "fable" : null;
+  private cooldownClass(model: string | null | undefined): string | null {
+    // Only premium 7d_oi has a model-scoped cooldown. Base models use the
+    // global provider-key cooldown even though they share class affinity.
+    return modelClassOf(model) === "fable" ? "fable" : null;
   }
 
   private ck(providerId: string, keyHash: string, modelClass: string): string {
@@ -216,7 +218,7 @@ export class KeyHealthStore {
     keyHash: string,
     model: string | null | undefined,
   ): number {
-    const modelClass = this.modelClass(model);
+    const modelClass = this.cooldownClass(model);
     if (!modelClass) return 0;
     return (
       this.modelCooldowns.get(this.ck(providerId, keyHash, modelClass))
@@ -276,6 +278,21 @@ export class KeyHealthStore {
         if (!this.affinity.has(k)) this.affinity.set(k, new Set());
         this.affinity.get(k)!.add(r.model);
         this.affinityFails.set(`${k}|${r.model}`, r.fails);
+      }
+      const classRows = this.db
+        .prepare(
+          "SELECT key_hash, model_class, fails FROM key_class_affinity WHERE provider_id = ?",
+        )
+        .all(providerId) as Array<{
+        key_hash: string;
+        model_class: string;
+        fails: number;
+      }>;
+      for (const r of classRows) {
+        const k = this.hk(providerId, r.key_hash);
+        if (!this.classAffinity.has(k)) this.classAffinity.set(k, new Set());
+        this.classAffinity.get(k)!.add(r.model_class);
+        this.classAffinityFails.set(`${k}|${r.model_class}`, r.fails);
       }
       const srows = this.db
         .prepare(
@@ -400,6 +417,28 @@ export class KeyHealthStore {
           this.affinity.get(this.hk(providerId, hashes[i]))?.has(model),
         );
         if (proven.length) return this.rrPick(providerId, proven, keys, hashes);
+
+        const modelClass = modelClassOf(model);
+        if (modelClass) {
+          const classProven = fresh.filter((i) =>
+            this.classAffinity
+              .get(this.hk(providerId, hashes[i]))
+              ?.has(modelClass),
+          );
+          if (classProven.length)
+            return this.rrPick(providerId, classProven, keys, hashes);
+          // A premium-proven key is valid overflow for base traffic, but a
+          // base-proven key is not evidence that the account has 7d_oi access.
+          if (modelClass === "base") {
+            const premiumProven = fresh.filter((i) =>
+              this.classAffinity
+                .get(this.hk(providerId, hashes[i]))
+                ?.has("fable"),
+            );
+            if (premiumProven.length)
+              return this.rrPick(providerId, premiumProven, keys, hashes);
+          }
+        }
       }
       return this.rrPick(providerId, fresh, keys, hashes);
     }
@@ -484,6 +523,14 @@ export class KeyHealthStore {
       this.sticky.set(mkey, keyHash);
       this.persistSticky(providerId, model, keyHash);
     }
+
+    const modelClass = modelClassOf(model);
+    if (modelClass) {
+      if (!this.classAffinity.has(k)) this.classAffinity.set(k, new Set());
+      this.classAffinity.get(k)!.add(modelClass);
+      this.classAffinityFails.set(`${k}|${modelClass}`, 0);
+      this.persistClassAffinity(providerId, keyHash, modelClass, 0);
+    }
   }
 
   // A proven (key,model) pair failed: bump its counter and evict once it
@@ -492,20 +539,38 @@ export class KeyHealthStore {
     providerId: string,
     keyHash: string,
     model: string | null,
+    status: number | null = null,
   ): void {
     if (!model) return;
     const k = this.hk(providerId, keyHash);
-    if (!this.affinity.get(k)?.has(model)) return;
-    const fk = `${k}|${model}`;
-    const fails = (this.affinityFails.get(fk) ?? 0) + 1;
-    if (fails >= this.affinityFailThreshold) {
-      this.affinity.get(k)!.delete(model);
-      this.affinityFails.delete(fk);
-      this.deleteAffinity(providerId, keyHash, model);
-      this.clearStickyIfPointsTo(providerId, model, keyHash);
+    if (this.affinity.get(k)?.has(model)) {
+      const fk = `${k}|${model}`;
+      const fails = (this.affinityFails.get(fk) ?? 0) + 1;
+      if (fails >= this.affinityFailThreshold) {
+        this.affinity.get(k)!.delete(model);
+        this.affinityFails.delete(fk);
+        this.deleteAffinity(providerId, keyHash, model);
+        this.clearStickyIfPointsTo(providerId, model, keyHash);
+      } else {
+        this.affinityFails.set(fk, fails);
+        this.persistAffinity(providerId, keyHash, model, fails);
+      }
+    }
+
+    const modelClass = modelClassOf(model);
+    if (!modelClass || !this.classAffinity.get(k)?.has(modelClass)) return;
+    const classKey = `${k}|${modelClass}`;
+    const classFails =
+      modelClass === "fable" && status === RATE_LIMIT_STATUS
+        ? this.affinityFailThreshold
+        : (this.classAffinityFails.get(classKey) ?? 0) + 1;
+    if (classFails >= this.affinityFailThreshold) {
+      this.classAffinity.get(k)!.delete(modelClass);
+      this.classAffinityFails.delete(classKey);
+      this.deleteClassAffinity(providerId, keyHash, modelClass);
     } else {
-      this.affinityFails.set(fk, fails);
-      this.persistAffinity(providerId, keyHash, model, fails);
+      this.classAffinityFails.set(classKey, classFails);
+      this.persistClassAffinity(providerId, keyHash, modelClass, classFails);
     }
   }
 
@@ -633,6 +698,22 @@ export class KeyHealthStore {
     } catch {
       /* best-effort */
     }
+
+    const classes = this.classAffinity.get(k);
+    if (classes) {
+      for (const modelClass of classes)
+        this.classAffinityFails.delete(`${k}|${modelClass}`);
+      classes.clear();
+    }
+    try {
+      this.db
+        .prepare(
+          "DELETE FROM key_class_affinity WHERE provider_id = ? AND key_hash = ?",
+        )
+        .run(providerId, keyHash);
+    } catch {
+      /* best-effort */
+    }
   }
 
   // A key just lost affinity for `model` (evicted after repeated failures,
@@ -741,6 +822,41 @@ export class KeyHealthStore {
         (readyAt): readyAt is number => readyAt !== null && readyAt > now,
       );
     return candidates.length ? Math.min(...candidates) : null;
+  }
+
+  private persistClassAffinity(
+    providerId: string,
+    keyHash: string,
+    modelClass: string,
+    fails: number,
+  ): void {
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO key_class_affinity (provider_id, key_hash, model_class, fails)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(provider_id, key_hash, model_class) DO UPDATE SET fails=excluded.fails`,
+        )
+        .run(providerId, keyHash, modelClass, fails);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  private deleteClassAffinity(
+    providerId: string,
+    keyHash: string,
+    modelClass: string,
+  ): void {
+    try {
+      this.db
+        .prepare(
+          "DELETE FROM key_class_affinity WHERE provider_id = ? AND key_hash = ? AND model_class = ?",
+        )
+        .run(providerId, keyHash, modelClass);
+    } catch {
+      /* best-effort */
+    }
   }
 
   private persistAffinity(
