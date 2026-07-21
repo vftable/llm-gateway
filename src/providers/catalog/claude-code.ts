@@ -50,7 +50,6 @@ class ClaudeCodeAdapter extends AnthropicCompatibleAdapter {
   messages(ctx: BuildCtx): BuiltRequest {
     const built = super.messages(ctx);
     built.url = withBetaQuery(built.url);
-    fs.writeFileSync(`/tmp/${Date.now()}.json`, JSON.stringify(built));
     return built;
   }
 

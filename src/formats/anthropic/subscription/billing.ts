@@ -22,7 +22,7 @@ export const CLAUDE_CODE_BETA_FLAGS = [
   "effort-2025-11-24",
 ];
 
-export const CLAUDE_CODE_BETA_BLACKLIST = ["redact-thinking-2026-02-12", "context-1m-2025-08-07"];
+export const CLAUDE_CODE_BETA_BLACKLIST = ["redact-thinking-2026-02-12"];
 
 /** Salt for the 3-char hex cc_version suffix (extracted from Claude Code). */
 export const BILLING_SALT = "59cf53e54c78";
