@@ -32,6 +32,7 @@ import {
   unifiedRateLimitToUsageWindows,
   unifiedStatusMessage,
 } from "../../services/anthropic-unified-usage";
+import fs from "node:fs";
 
 class ClaudeCodeAdapter extends AnthropicCompatibleAdapter {
   requestTransforms(p: Provider): RequestTransform[] {
@@ -49,7 +50,7 @@ class ClaudeCodeAdapter extends AnthropicCompatibleAdapter {
   messages(ctx: BuildCtx): BuiltRequest {
     const built = super.messages(ctx);
     built.url = withBetaQuery(built.url);
-    console.log(JSON.stringify(built.headers, null, 2));
+    fs.writeFileSync(`/tmp/${Date.now()}.json`, JSON.stringify(built));
     return built;
   }
 
