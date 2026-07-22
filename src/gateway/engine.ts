@@ -51,6 +51,7 @@ import {
   KeyHealthStore,
   parseRateLimitHint,
   AUTH_FAIL_STATUS,
+  hashKey,
   type KeyPick,
 } from "./key-health";
 import { ThinkingConverter } from "../formats/thinking";
@@ -110,6 +111,13 @@ import {
 export type { ForwardContext } from "./engine-support/types";
 import type { ForwardContext } from "./engine-support/types";
 
+// A Claude Code long-context usage-credits 429 rotates to a different key
+// WITHOUT spending a normal retry attempt (it's the key's subscription plan,
+// not a fault). This bounds that free rotation so a pathological pool can't spin
+// forever — in practice the loop stops much sooner, the moment every enabled key
+// has returned the credits 429. Hit the cap → fail the provider over cleanly.
+const MAX_CREDIT_ROTATIONS = 100;
+
 export class ForwardingEngine {
   private readonly keyHealth: KeyHealthStore;
 
@@ -139,6 +147,7 @@ export class ForwardingEngine {
     stickyCleared: number;
     affinityCleared: number;
     classAffinityCleared: number;
+    creditProvenCleared: number;
   } {
     return this.keyHealth.clearAllModelKeyPairs();
   }
@@ -522,8 +531,18 @@ export class ForwardingEngine {
         entry.provider.retryAttempts,
         Math.min(usable || 1, providerKeys.length || 1),
       );
+      // `tried` excludes keys from re-selection this request. `creditLess` is the
+      // subset that returned the long-context usage-credits 429 — tracked so we
+      // fail the provider over cleanly the instant EVERY enabled key is credit-
+      // less, rather than burning all 100 rotations. `sawCreditError` gates the
+      // credit-proven marking: a plain success only proves long-context credits
+      // when it followed another key's credits rejection.
       const tried = new Set<string>();
-      for (let attempt = 1; attempt <= attempts; attempt++) {
+      const creditLess = new Set<string>();
+      let sawCreditError = false;
+      let normalAttempts = 0; // genuine failures — bounded by `attempts`
+      let creditRotations = 0; // free credit-driven rotations — bounded by cap
+      while (true) {
         if (res.headersSent || res.writableEnded) return;
         const pick = this.keyHealth.select(
           entry.provider.id,
@@ -541,6 +560,42 @@ export class ForwardingEngine {
           startedAt,
           pick,
         );
+
+        // Long-context usage-credits 429: NOT a key fault — this key's
+        // subscription plan just can't serve this request. Skip it silently (no
+        // health penalty, no cooldown, no error log), drop any stale credit-
+        // proof, and rotate to another key to find one whose plan works. This
+        // rotation does NOT consume a normal retry attempt; it's bounded only by
+        // creditLess-exhaustion and MAX_CREDIT_ROTATIONS.
+        if (pick && result.usageCreditsRequired) {
+          sawCreditError = true;
+          creditLess.add(pick.keyHash);
+          this.keyHealth.clearCreditProven(entry.provider.id, pick.keyHash);
+          lastReason = result.reason || lastReason;
+          creditRotations++;
+          // Every enabled key is now credit-less, or we've rotated too many
+          // times: this provider can't serve the request. Fail it over to the
+          // next hop with NO key issues (all keys stay healthy/usable).
+          const allCreditLess = providerKeys.every((k) =>
+            creditLess.has(hashKey(k)),
+          );
+          if (allCreditLess || creditRotations >= MAX_CREDIT_ROTATIONS) {
+            lastReason = `all ${providerKeys.length} enabled key(s) lack long-context usage credits`;
+            this.logger.warn("provider_credit_exhausted", {
+              provider: entry.provider.id,
+              model: entry.upstreamModel,
+              creditLessKeys: creditLess.size,
+              rotations: creditRotations,
+              failover:
+                entry === chain[chain.length - 1]
+                  ? "exhausted"
+                  : "next-provider",
+            });
+            break; // move to the next provider in the chain
+          }
+          continue; // rotate to another key, free of the normal attempt budget
+        }
+
         // Feed the outcome back into key health (skip client-disconnect 499).
         if (pick && result.status !== 499) {
           if (result.committed && result.status && result.status < 400) {
@@ -549,6 +604,11 @@ export class ForwardingEngine {
               pick.keyHash,
               entry.upstreamModel,
             );
+            // This key served a request that another key rejected for lack of
+            // long-context credits — its plan is PROVEN to have them, so give it
+            // durable extra pull in the pool for future long-context traffic.
+            if (sawCreditError)
+              this.keyHealth.markCreditProven(entry.provider.id, pick.keyHash);
           } else if (result.status && AUTH_FAIL_STATUS.has(result.status)) {
             this.keyHealth.markAuthFailed(
               entry.provider.id,
@@ -557,9 +617,6 @@ export class ForwardingEngine {
               result.reason ?? `upstream auth failed (${result.status})`,
             );
             this.disableDeadKey(entry.provider.id, pick.keyHash, result.status);
-          } else if (result.status === 429 && result.usageCreditsRequired) {
-            // This key lacks credits for this request shape; it is not unhealthy
-            // or cooling down. The tried set still excludes it for this request.
           } else if (result.status === 429) {
             if (
               result.rateLimitScope === "model" &&
@@ -626,6 +683,7 @@ export class ForwardingEngine {
           return;
         }
         lastReason = result.reason || lastReason;
+        normalAttempts++;
         const remainingUsable = this.keyHealth.usableCount(
           entry.provider.id,
           providerKeys,
@@ -643,23 +701,21 @@ export class ForwardingEngine {
             ? `all ${providerKeys.length} enabled key(s) rate-limited until ${new Date(nextReadyAt).toISOString()}`
             : `all ${providerKeys.length} enabled key(s) dead/unavailable`;
         }
-        const more = attempt < attempts && !exhaustedThisProvider;
-        if (!result.usageCreditsRequired)
-          this.logger.warn("provider_attempt_failed", {
-            provider: entry.provider.id,
-            attempt: `${attempt}/${attempts}`,
-            model: entry.upstreamModel,
-            reason: lastReason,
-            remainingUsableKeys: remainingUsable,
-            failover: more
-              ? "retry"
-              : entry === chain[chain.length - 1]
-                ? "exhausted"
-                : "next-provider",
-          });
-        if (exhaustedThisProvider) break;
-        if (more && !result.usageCreditsRequired)
-          await sleep(entry.provider.retryIntervalMs);
+        const more = normalAttempts < attempts && !exhaustedThisProvider;
+        this.logger.warn("provider_attempt_failed", {
+          provider: entry.provider.id,
+          attempt: `${normalAttempts}/${attempts}`,
+          model: entry.upstreamModel,
+          reason: lastReason,
+          remainingUsableKeys: remainingUsable,
+          failover: more
+            ? "retry"
+            : entry === chain[chain.length - 1]
+              ? "exhausted"
+              : "next-provider",
+        });
+        if (!more) break;
+        await sleep(entry.provider.retryIntervalMs);
       }
     }
 
@@ -697,7 +753,7 @@ export class ForwardingEngine {
 
   // --- one attempt ----------------------------------------------------------
 
-  private attemptOnce(
+  private async attemptOnce(
     req: Request,
     res: Response,
     ctx: ForwardContext,
@@ -799,21 +855,22 @@ export class ForwardingEngine {
         "content-length": String(serialized.length),
       };
     } catch (err) {
-      return Promise.resolve({
+      return {
         committed: false,
         reason: `request build failed: ${(err as Error).message}`,
-      });
+      };
     }
+
     const isHttps = upstreamUrl.protocol === "https:";
     const transport = isHttps ? https : http;
     let proxyAgent: ReturnType<typeof agentFor>;
     try {
       proxyAgent = agentFor(provider.proxy, isHttps);
     } catch (err) {
-      return Promise.resolve({
+      return {
         committed: false,
         reason: `bad provider proxy: ${(err as Error).message}`,
-      });
+      };
     }
 
     return new Promise((resolvePromise) => {

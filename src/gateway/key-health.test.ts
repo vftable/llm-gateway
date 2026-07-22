@@ -168,6 +168,7 @@ test("clearAllModelKeyPairs resets live and persisted routing evidence only", ()
     const store = new KeyHealthStore(db, clk.now);
     store.recordSuccess(p.id, hashKey("b"), "claude-fable-5");
     store.recordSuccess(p.id, hashKey("b"), "claude-sonnet-5");
+    store.markCreditProven(p.id, hashKey("b"));
     store.markRateLimited(p.id, hashKey("a"), 60_000, 429, "global");
     store.markModelCooldown(p.id, hashKey("b"), "fable", 60_000, 429, "7d_oi");
     store.markAuthFailed(p.id, hashKey("c"), 401, "bad key");
@@ -176,6 +177,7 @@ test("clearAllModelKeyPairs resets live and persisted routing evidence only", ()
       stickyCleared: 2,
       affinityCleared: 2,
       classAffinityCleared: 2,
+      creditProvenCleared: 1,
     });
     assert.ok(store.snapshot(p.id, hashKey("a")).rateLimitedUntil > clk.now());
     assert.equal(store.snapshot(p.id, hashKey("c")).authFailed, true);
@@ -190,6 +192,7 @@ test("clearAllModelKeyPairs resets live and persisted routing evidence only", ()
       stickyCleared: 0,
       affinityCleared: 0,
       classAffinityCleared: 0,
+      creditProvenCleared: 0,
     });
     assert.ok(
       reloaded.snapshot(p.id, hashKey("a")).rateLimitedUntil > clk.now(),
@@ -533,6 +536,60 @@ test("markAuthFailed accumulates a lifetime count that survives recordSuccess", 
     // still see the persisted count.
     const reloaded = new KeyHealthStore(db);
     assert.equal(reloaded.snapshot(p.id, hashKey("a")).authFailCount, 2);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("credit-proven keys get preference in the fresh pool", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b", "c"]);
+    const store = new KeyHealthStore(db);
+    // No affinity for this model, so selection falls to the generic fresh pool —
+    // where a credit-proven key must win over the round-robin default.
+    store.markCreditProven(p.id, hashKey("b"));
+    const picks = [
+      store.select(p.id, p.keys, "some-model", new Set())!.key,
+      store.select(p.id, p.keys, "some-model", new Set())!.key,
+    ];
+    // Every fresh pick is the credit-proven key (it owns the round-robin pool).
+    assert.deepEqual(picks, ["b", "b"]);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("exact-model affinity still wins over credit-proven (cache locality)", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b", "c"]);
+    const store = new KeyHealthStore(db);
+    // 'a' is proven for THIS model; 'b' merely holds long-context credits. A
+    // request for this model prefers the cache-warm key 'a'.
+    store.recordSuccess(p.id, hashKey("a"), "m");
+    store.markCreditProven(p.id, hashKey("b"));
+    assert.equal(store.select(p.id, p.keys, "m", new Set())!.key, "a");
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("markCreditProven persists across a reopen; clearCreditProven drops it", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const store = new KeyHealthStore(db);
+    store.markCreditProven(p.id, hashKey("b"));
+    assert.equal(store.isCreditProven(p.id, hashKey("b")), true);
+
+    const reloaded = new KeyHealthStore(db);
+    assert.equal(reloaded.isCreditProven(p.id, hashKey("b")), true);
+    reloaded.clearCreditProven(p.id, hashKey("b"));
+    assert.equal(reloaded.isCreditProven(p.id, hashKey("b")), false);
+
+    const again = new KeyHealthStore(db);
+    assert.equal(again.isCreditProven(p.id, hashKey("b")), false);
   } finally {
     closeDatabase(db);
   }

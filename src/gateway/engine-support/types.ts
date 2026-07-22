@@ -123,8 +123,11 @@ export interface AttemptResult {
   rateLimitModelClass?: string;
   /** Operator-facing explanation of the chosen cooldown scope. */
   rateLimitReason?: string;
-  /** Claude Code key lacks long-context usage credits. Rotate immediately
-   * without logging, cooling, or recording a key-health failure. */
+  /** The upstream returned the Claude Code long-context usage-credits 429 for
+   * this key: its subscription plan can't serve this request, but the key is
+   * otherwise healthy. The engine rotates to another key WITHOUT logging,
+   * cooling, or recording any key-health failure (see forward()'s credit
+   * rotation), and only fails the provider over once every key is credit-less. */
   usageCreditsRequired?: boolean;
 }
 

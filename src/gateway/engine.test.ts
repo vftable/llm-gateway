@@ -1387,7 +1387,7 @@ test("forward() falls over to the next provider once every key on the first is d
   }
 });
 
-test("Claude Code Sonnet 4.6 rotates immediately past a key without long-context usage credits", async () => {
+test("Claude Code rotates immediately past a key without long-context usage credits", async () => {
   const seenKeys: string[] = [];
   const server = http.createServer((req, res) => {
     const auth = String(req.headers.authorization);
@@ -1491,7 +1491,7 @@ test("Claude Code Sonnet 4.6 rotates immediately past a key without long-context
   }
 });
 
-test("Claude Code Sonnet 4.6 bounds all-keys-without-credits retries without logging or cooldown", async () => {
+test("Claude Code bounds all-keys-without-credits retries without logging or cooldown", async () => {
   const seenKeys: string[] = [];
   const server = http.createServer((req, res) => {
     seenKeys.push(String(req.headers.authorization));
@@ -1576,6 +1576,201 @@ test("Claude Code Sonnet 4.6 bounds all-keys-without-credits retries without log
   } finally {
     closeDatabase(db);
     await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("credit rotation marks the surviving key credit-proven and prefers it next time", async () => {
+  // key-1 always lacks long-context credits; key-2 always serves. After the
+  // first request rotates key-1 → key-2, key-2 is credit-proven, so the NEXT
+  // request must pick key-2 first (no wasted rotation through key-1).
+  const seenKeys: string[] = [];
+  const server = http.createServer((req, res) => {
+    const auth = String(req.headers.authorization);
+    seenKeys.push(auth);
+    req.resume();
+    req.on("end", () => {
+      if (auth === "Bearer key-1") {
+        res.writeHead(429, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            type: "error",
+            error: {
+              type: "rate_limit_error",
+              message: "Usage credits are required for long context requests.",
+            },
+          }),
+        );
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "ok", content: [], usage: {} }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKeys: ["key-1", "key-2"],
+      catalogId: "claude-code",
+      authScheme: "bearer",
+      retryAttempts: 1,
+      retryIntervalMs: 1,
+    });
+    const created = createModel(db, {
+      alias: "claude-sonnet",
+      type: "anthropic",
+      providers: [{ providerId: "cc", upstreamModel: "claude-sonnet-4-6" }],
+    });
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const model = getModel(db, created.id)!;
+    const body = {
+      model: "claude-sonnet",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "hi" }],
+    };
+    // Request 1: rotates key-1 (credit-less) → key-2 (serves).
+    const r1 = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      r1.res as never,
+      ctxFor(model, body, "/v1/messages"),
+    );
+    assert.equal(r1.state.statusCode || 200, 200);
+    assert.deepEqual(seenKeys, ["Bearer key-1", "Bearer key-2"]);
+    // key-2 is now credit-proven and persisted.
+    assert.equal(
+      new KeyHealthStore(db).isCreditProven("cc", credHash("key-2")),
+      true,
+    );
+
+    // Request 2: key-2 is preferred, so key-1 is never tried again.
+    seenKeys.length = 0;
+    const r2 = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      r2.res as never,
+      ctxFor(model, body, "/v1/messages"),
+    );
+    assert.equal(r2.state.statusCode || 200, 200);
+    assert.deepEqual(seenKeys, ["Bearer key-2"]);
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("all-keys-credit-less fails over to the next provider with no key issues", async () => {
+  // Provider 1 (claude-code): every key returns the long-context credits 429.
+  // Provider 2 (anthropic): serves the request. The chain must fail provider 1
+  // over CLEANLY — provider 1's keys stay fully usable (not a key fault).
+  const p1Keys: string[] = [];
+  const server1 = http.createServer((req, res) => {
+    p1Keys.push(String(req.headers.authorization));
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(429, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message: "Usage credits are required for long context requests.",
+          },
+        }),
+      );
+    });
+  });
+  let p2Served = false;
+  const server2 = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      p2Served = true;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "ok", content: [], usage: {} }));
+    });
+  });
+  await new Promise<void>((r) => server1.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r) => server2.listen(0, "127.0.0.1", r));
+  const port1 = (server1.address() as AddressInfo).port;
+  const port2 = (server2.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${port1}`,
+      apiKeys: ["key-1", "key-2"],
+      catalogId: "claude-code",
+      authScheme: "bearer",
+      retryAttempts: 1,
+      retryIntervalMs: 5_000,
+    });
+    createProvider(db, {
+      id: "an",
+      name: "Anthropic",
+      baseUrl: `http://127.0.0.1:${port2}`,
+      apiKeys: ["an-key"],
+      catalogId: "anthropic",
+      authScheme: "bearer",
+      retryAttempts: 1,
+    });
+    const created = createModel(db, {
+      alias: "claude-sonnet",
+      type: "anthropic",
+      providers: [
+        { providerId: "cc", upstreamModel: "claude-sonnet-4-6" },
+        { providerId: "an", upstreamModel: "claude-sonnet-4-6" },
+      ],
+    });
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const { res, state } = mockRes();
+    const started = Date.now();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(
+        getModel(db, created.id)!,
+        {
+          model: "claude-sonnet",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hi" }],
+        },
+        "/v1/messages",
+      ),
+    );
+    // Provider 2 served the client.
+    assert.equal(state.statusCode || 200, 200);
+    assert.ok(p2Served, "next provider must serve");
+    // Provider 1 tried both keys once each, then failed over — no retry sleep.
+    assert.deepEqual(p1Keys, ["Bearer key-1", "Bearer key-2"]);
+    assert.ok(Date.now() - started < 1_000, "must not wait retryIntervalMs");
+    // Provider 1's keys stay fully usable — the credits 429 is not a key fault.
+    assert.equal(
+      new KeyHealthStore(db).usableCount(
+        "cc",
+        ["key-1", "key-2"],
+        "claude-sonnet-4-6",
+      ),
+      2,
+    );
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => server1.close(() => r()));
+    await new Promise<void>((r) => server2.close(() => r()));
   }
 });
 

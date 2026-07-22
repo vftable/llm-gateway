@@ -74,6 +74,7 @@ export class GatewayRouter {
     stickyCleared: number;
     affinityCleared: number;
     classAffinityCleared: number;
+    creditProvenCleared: number;
   } {
     return this.engine.clearAllModelKeyPairs();
   }

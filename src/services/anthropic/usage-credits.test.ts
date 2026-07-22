@@ -30,14 +30,19 @@ test("matches the exact Claude Code Sonnet 4.6 long-context credits error", () =
   assert.equal(matches(), true);
 });
 
-test("rejects other statuses, providers, and models", () => {
+test("rejects other statuses and providers", () => {
   assert.equal(matches({ status: 400 }), false);
   assert.equal(matches({ catalogId: "anthropic" }), false);
-  assert.equal(matches({ upstreamModel: "claude-opus-4-6" }), false);
-  assert.equal(matches({ upstreamModel: "claude-sonnet-4-5" }), false);
 });
 
-test("rejects different error types and non-exact messages", () => {
+test("is no longer model-gated — any Claude Code model with this 429 matches", () => {
+  // The predicate used to require Sonnet 4.6; that gate was removed, so the
+  // long-context credits 429 is now recognised for any Claude Code model.
+  assert.equal(matches({ upstreamModel: "claude-opus-4-6" }), true);
+  assert.equal(matches({ upstreamModel: "claude-sonnet-4-5" }), true);
+});
+
+test("rejects a non-rate-limit error type even with the credits message", () => {
   assert.equal(
     matches({
       body: JSON.stringify({
@@ -49,13 +54,40 @@ test("rejects different error types and non-exact messages", () => {
     }),
     false,
   );
+});
+
+test("matches by substring — trailing wording and the 'Extra usage' variant", () => {
+  // Detection is substring-based so a minor upstream tweak (extra trailing text,
+  // or the older phrasing) still triggers the credit rotation.
   assert.equal(
     matches({
       body: JSON.stringify({
         error: {
           type: "rate_limit_error",
-          message: `${LONG_CONTEXT_USAGE_CREDITS_MESSAGE} `,
+          message: `${LONG_CONTEXT_USAGE_CREDITS_MESSAGE} Please upgrade.`,
         },
+      }),
+    }),
+    true,
+  );
+  assert.equal(
+    matches({
+      body: JSON.stringify({
+        error: {
+          type: "rate_limit_error",
+          message: "Extra usage is required for long context requests.",
+        },
+      }),
+    }),
+    true,
+  );
+});
+
+test("rejects an unrelated rate_limit_error message", () => {
+  assert.equal(
+    matches({
+      body: JSON.stringify({
+        error: { type: "rate_limit_error", message: "Too many requests." },
       }),
     }),
     false,

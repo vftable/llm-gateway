@@ -241,6 +241,22 @@ CREATE TABLE IF NOT EXISTS key_model_sticky (
   PRIMARY KEY (provider_id, model)
 );
 
+-- Keys whose subscription plan is PROVEN to have long-context usage credits —
+-- learned when a key succeeds on a request that OTHER keys rejected with the
+-- Claude Code "usage credits are required for long context" 429. Selection
+-- gives these keys extra pull in the pool (they float ahead of unproven keys
+-- among the fresh candidates) so long-context traffic concentrates on the keys
+-- that can actually serve it, instead of wasting rotations on credit-less keys.
+-- A key's row is cleared the moment it itself returns that 429 (its plan
+-- changed). Provider-wide, not per-model: a plan either has long-context
+-- credits or it doesn't.
+CREATE TABLE IF NOT EXISTS key_credit_proven (
+  provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  key_hash    TEXT NOT NULL,
+  updated_at  TEXT NOT NULL,
+  PRIMARY KEY (provider_id, key_hash)
+);
+
 -- Latest Claude Code subscription quota snapshot learned passively from
 -- anthropic-ratelimit-unified-* response headers. Never stores raw credentials.
 CREATE TABLE IF NOT EXISTS provider_key_unified_usage (

@@ -187,6 +187,9 @@ export class KeyHealthStore {
   private classAffinity = new Map<string, Set<string>>();
   private classAffinityFails = new Map<string, number>();
   private modelCooldowns = new Map<string, ModelCooldownRow>();
+  // `${providerId}|${keyHash}` for keys proven to hold long-context usage
+  // credits (see key_credit_proven). Provider-wide, not per-model.
+  private creditProven = new Set<string>();
   private loaded = new Set<string>(); // providerIds hydrated from DB
 
   constructor(
@@ -301,6 +304,11 @@ export class KeyHealthStore {
         .all(providerId) as Array<{ model: string; key_hash: string }>;
       for (const r of srows)
         this.sticky.set(this.mk(providerId, r.model), r.key_hash);
+      const cpRows = this.db
+        .prepare("SELECT key_hash FROM key_credit_proven WHERE provider_id = ?")
+        .all(providerId) as Array<{ key_hash: string }>;
+      for (const r of cpRows)
+        this.creditProven.add(this.hk(providerId, r.key_hash));
       const crows = this.db
         .prepare(
           "SELECT key_hash, model_class, cooldown_until, last_error_status, last_error FROM provider_key_model_cooldown WHERE provider_id = ?",
@@ -440,6 +448,18 @@ export class KeyHealthStore {
           }
         }
       }
+      // No exact/class affinity match (or no model): prefer keys PROVEN to hold
+      // long-context usage credits — they get the round-robin pool to themselves
+      // so long-context traffic lands on a key that can serve it instead of
+      // wasting a rotation on a credit-less one (see key_credit_proven). Exact-
+      // model affinity above still wins for cache locality; this only refines the
+      // otherwise-generic fresh pool.
+      const creditPref = fresh.filter((i) =>
+        this.creditProven.has(this.hk(providerId, hashes[i])),
+      );
+      if (creditPref.length)
+        return this.rrPick(providerId, creditPref, keys, hashes);
+
       return this.rrPick(providerId, fresh, keys, hashes);
     }
 
@@ -531,6 +551,50 @@ export class KeyHealthStore {
       this.classAffinityFails.set(`${k}|${modelClass}`, 0);
       this.persistClassAffinity(providerId, keyHash, modelClass, 0);
     }
+  }
+
+  // Mark a key as PROVEN to hold long-context usage credits — its subscription
+  // plan served a request that other keys rejected with the Claude Code
+  // long-context credits 429. Gives the key extra pull in select() so future
+  // long-context traffic prefers it. Idempotent + persisted.
+  markCreditProven(providerId: string, keyHash: string): void {
+    const k = this.hk(providerId, keyHash);
+    if (this.creditProven.has(k)) return;
+    this.creditProven.add(k);
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO key_credit_proven (provider_id, key_hash, updated_at)
+           VALUES (?, ?, ?)
+           ON CONFLICT(provider_id, key_hash) DO UPDATE SET
+             updated_at=excluded.updated_at`,
+        )
+        .run(providerId, keyHash, new Date(this.now()).toISOString());
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Drop a key's long-context-credit proof — it just returned the credits 429
+  // itself, so its plan no longer qualifies. Idempotent + persisted.
+  clearCreditProven(providerId: string, keyHash: string): void {
+    const k = this.hk(providerId, keyHash);
+    if (!this.creditProven.delete(k)) return;
+    try {
+      this.db
+        .prepare(
+          "DELETE FROM key_credit_proven WHERE provider_id = ? AND key_hash = ?",
+        )
+        .run(providerId, keyHash);
+    } catch {
+      /* best-effort */
+    }
+  }
+
+  // Whether a key is currently proven to hold long-context usage credits.
+  isCreditProven(providerId: string, keyHash: string): boolean {
+    this.ensureLoaded(providerId);
+    return this.creditProven.has(this.hk(providerId, keyHash));
   }
 
   // A proven (key,model) pair failed: bump its counter and evict once it
@@ -676,6 +740,7 @@ export class KeyHealthStore {
     stickyCleared: number;
     affinityCleared: number;
     classAffinityCleared: number;
+    creditProvenCleared: number;
   } {
     const clear = this.db.transaction(() => ({
       stickyCleared: this.db.prepare("DELETE FROM key_model_sticky").run()
@@ -685,6 +750,9 @@ export class KeyHealthStore {
       classAffinityCleared: this.db
         .prepare("DELETE FROM key_class_affinity")
         .run().changes,
+      creditProvenCleared: this.db
+        .prepare("DELETE FROM key_credit_proven")
+        .run().changes,
     }));
     const result = clear();
     this.sticky.clear();
@@ -692,6 +760,7 @@ export class KeyHealthStore {
     this.affinityFails.clear();
     this.classAffinity.clear();
     this.classAffinityFails.clear();
+    this.creditProven.clear();
     return result;
   }
 
