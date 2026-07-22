@@ -34,6 +34,7 @@ import openrouterSvg from "@lobehub/icons-static-svg/icons/openrouter.svg?raw";
 import opencodeSvg from "@lobehub/icons-static-svg/icons/opencode.svg?raw";
 import newapiSvg from "@lobehub/icons-static-svg/icons/newapi.svg?raw";
 import ollamaSvg from "@lobehub/icons-static-svg/icons/ollama.svg?raw";
+import clineSvg from "@lobehub/icons-static-svg/icons/cline.svg?raw";
 
 // Ordered: more specific patterns before broader ones (e.g. "gemini" before
 // a generic "google", "kimi" before "k2").
@@ -101,6 +102,20 @@ const PROVIDER_BRANDS: Record<string, { svg: string; label: string }> = {
   zai: { svg: zaiSvg, label: "Z.ai" },
   newapi: { svg: newapiSvg, label: "NewAPI" },
   ollama: { svg: ollamaSvg, label: "Ollama" },
+  qwen: { svg: qwenSvg, label: "Qwen" },
+  cline: { svg: clineSvg, label: "Cline" },
+  minimax: { svg: minimaxSvg, label: "MiniMax" },
+  // Catalog-ID aliases — pages that call ProviderIcon with brand={provider.catalogId}
+  // need entries for IDs that differ from the template's brand field.
+  "opencode-go": { svg: opencodeSvg, label: "OpenCode" },
+  "google-gemini": { svg: geminiSvg, label: "Gemini" },
+  "glm-coding": { svg: zaiSvg, label: "Z.ai" },
+  "nvidia-nim": { svg: nvidiaSvg, label: "NVIDIA" },
+  "ollama-cloud": { svg: ollamaSvg, label: "Ollama" },
+  "claude-code": { svg: claudeSvg, label: "Claude" },
+  "xiaomi-mimo": { svg: mimoSvg, label: "MiMo" },
+  clinepass: { svg: clineSvg, label: "Cline" },
+  qwencloud: { svg: qwenSvg, label: "Qwen" },
   // Generic-adapter catalog ids — ProviderCard passes provider.catalogId
   // straight through as `brand`, so these need entries too (a custom-named
   // "openai-compatible"/"anthropic-compatible" provider must still show its
