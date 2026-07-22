@@ -161,6 +161,10 @@ export interface ProviderKeyUsage {
     lastErrorAt?: string;
   };
   windows: ProviderKeyUsageWindow[];
+  /** ISO timestamp of the most recent proxied request that used this key
+   *  (any status — a 429 still counts). Drives the usage dashboard's
+   *  last-used sort + green highlight. Absent if never used. */
+  lastUsedAt?: string;
   /** When the KEY ITSELF becomes invalid — distinct from a window's
    *  resetsAt, which refills rather than expiring. */
   expiresAt?: string;

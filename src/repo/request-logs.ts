@@ -274,6 +274,23 @@ export function keyStats(db: DB, providerId: string): KeyStat[] {
   return rows;
 }
 
+// Most-recent request timestamp per key for one provider, keyed by
+// upstream_key_hash (== provider_keys.cred_hash). Any logged request counts as
+// a "use" — including a 429 — since the usage dashboard sorts/highlights by
+// when a key was last exercised, not by whether the call succeeded. Returns a
+// hash -> ISO-timestamp map; keys that never served a logged request are absent.
+export function lastUsedByKey(db: DB, providerId: string): Map<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT upstream_key_hash AS credHash, MAX(ts) AS lastUsedAt
+       FROM request_logs
+       WHERE provider_id = @providerId AND upstream_key_hash IS NOT NULL
+       GROUP BY upstream_key_hash`,
+    )
+    .all({ providerId }) as Array<{ credHash: string; lastUsedAt: string }>;
+  return new Map(rows.map((r) => [r.credHash, r.lastUsedAt]));
+}
+
 // --- Aggregated dashboard stats -------------------------------------------
 
 export interface DashboardStats {

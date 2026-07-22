@@ -8,6 +8,7 @@ import { adapterForProvider } from "../../providers";
 import { listProviders } from "../../repo/providers";
 import { getUnifiedUsage } from "../../repo/provider-key-usage";
 import { listProviderKeys, maskProviderKey } from "../../repo/provider-keys";
+import { lastUsedByKey } from "../../repo/request-logs";
 import { seedFromKey, makeUsageCtx } from "./provider-probe";
 import { KeyHealthStore } from "../../gateway/key-health";
 
@@ -23,6 +24,7 @@ export async function buildUsageReport(
   const adapter = adapterForProvider(p);
   const healthStore = new KeyHealthStore(db);
   const providerKeys = listProviderKeys(db, p.id);
+  const lastUsed = lastUsedByKey(db, p.id);
   const rows = providerKeys.map((k) => {
     const h = healthStore.snapshot(p.id, k.credHash);
     return {
@@ -30,6 +32,7 @@ export async function buildUsageReport(
       enabled: k.enabled,
       metadata: k.metadata,
       keyHash: k.credHash,
+      lastUsedAt: lastUsed.get(k.credHash),
       health: {
         usable: h.usable,
         dead: h.authFailed,
@@ -73,43 +76,47 @@ export async function buildUsageReport(
 
   let anyDummy = false;
   const keys = await Promise.all(
-    rows.map(async ({ key, enabled, metadata, keyHash, health }) => {
-      const mask = maskProviderKey(key);
-      try {
-        const { windows, expiresAt, dummy, unavailable, message } =
-          await adapter.keyUsage({
-            provider: p,
-            apiKey: key,
-            keyMetadata: metadata,
-            mask,
+    rows.map(
+      async ({ key, enabled, metadata, keyHash, health, lastUsedAt }) => {
+        const mask = maskProviderKey(key);
+        try {
+          const { windows, expiresAt, dummy, unavailable, message } =
+            await adapter.keyUsage({
+              provider: p,
+              apiKey: key,
+              keyMetadata: metadata,
+              mask,
+              enabled,
+              seed: seedFromKey(key),
+              unifiedUsage: getUnifiedUsage(db, p.id, keyHash),
+              ...makeUsageCtx(p),
+            });
+          if (dummy) anyDummy = true;
+          return {
+            keyMask: mask,
             enabled,
-            seed: seedFromKey(key),
-            unifiedUsage: getUnifiedUsage(db, p.id, keyHash),
-            ...makeUsageCtx(p),
-          });
-        if (dummy) anyDummy = true;
-        return {
-          keyMask: mask,
-          enabled,
-          health,
-          windows,
-          ...(expiresAt ? { expiresAt } : {}),
-          ...(unavailable ? { unavailable: true } : {}),
-          ...(message ? { message } : {}),
-        };
-      } catch (e) {
-        // An adapter's live query threw — surface it as an unavailable key with
-        // the error detail rather than failing the whole page.
-        return {
-          keyMask: mask,
-          enabled,
-          health,
-          windows: [],
-          unavailable: true,
-          message: `Usage query failed: ${(e as Error).message}`,
-        };
-      }
-    }),
+            health,
+            windows,
+            ...(lastUsedAt ? { lastUsedAt } : {}),
+            ...(expiresAt ? { expiresAt } : {}),
+            ...(unavailable ? { unavailable: true } : {}),
+            ...(message ? { message } : {}),
+          };
+        } catch (e) {
+          // An adapter's live query threw — surface it as an unavailable key with
+          // the error detail rather than failing the whole page.
+          return {
+            keyMask: mask,
+            enabled,
+            health,
+            windows: [],
+            ...(lastUsedAt ? { lastUsedAt } : {}),
+            unavailable: true,
+            message: `Usage query failed: ${(e as Error).message}`,
+          };
+        }
+      },
+    ),
   );
   const visibleKeys = keys.filter((key) => {
     // Dead/auth-failed keys don't belong in the usage dashboard — they are shown

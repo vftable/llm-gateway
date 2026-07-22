@@ -36,10 +36,37 @@ import { ProviderIcon } from "@/components/model-icon";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn, fmtNum, fmtTokens } from "@/lib/utils";
 
 const KEYS_PER_PAGE = 10;
+
+// A key sitting in a 429 cooldown. Dead (auth-failed) keys never reach the
+// client — they're filtered server-side — so a live rate-limit is the only
+// health state this gate needs to consider.
+export function isRateLimited(key: ProviderKeyUsage): boolean {
+  return !!key.health?.rateLimitedUntil;
+}
+
+// Order keys most-recently-used first (by lastUsedAt), so the freshest key —
+// the one the router most recently picked — leads the list and gets the green
+// highlight. Never-used keys (no lastUsedAt) sink to the bottom, keeping their
+// original relative order (a stable sort on the decorated index). Pure: returns
+// a new array, doesn't mutate the input.
+export function sortByLastUsed<T extends { lastUsedAt?: string }>(
+  keys: T[],
+): T[] {
+  return keys
+    .map((k, i) => ({ k, i }))
+    .sort((a, b) => {
+      const ta = a.k.lastUsedAt ? Date.parse(a.k.lastUsedAt) : -Infinity;
+      const tb = b.k.lastUsedAt ? Date.parse(b.k.lastUsedAt) : -Infinity;
+      if (tb !== ta) return tb - ta;
+      return a.i - b.i;
+    })
+    .map((x) => x.k);
+}
 
 // Tracks how many masonry columns fit the viewport. Thresholds are double
 // the `sm`/`xl` Tailwind breakpoints (640px / 1280px) this page used as a
@@ -64,11 +91,17 @@ function useColumnCount(): number {
 // Mirrors ProviderUsageCard's structure: header, optional search bar, one
 // KeyUsageBlock per visible key (paginated, so capped at KEYS_PER_PAGE), and
 // pagination controls.
-function estimateWeight(report: ProviderUsageReport): number {
+function estimateWeight(
+  report: ProviderUsageReport,
+  showRateLimited: boolean,
+): number {
+  const keys = showRateLimited
+    ? report.keys
+    : report.keys.filter((k) => !isRateLimited(k));
   const HEADER = 70;
-  const SEARCH = report.keys.length > KEYS_PER_PAGE ? 40 : 0;
-  const PAGINATION = report.keys.length > KEYS_PER_PAGE ? 40 : 0;
-  const visibleKeys = report.keys.slice(0, KEYS_PER_PAGE);
+  const SEARCH = keys.length > KEYS_PER_PAGE ? 40 : 0;
+  const PAGINATION = keys.length > KEYS_PER_PAGE ? 40 : 0;
+  const visibleKeys = keys.slice(0, KEYS_PER_PAGE);
   const keysWeight = visibleKeys.reduce((sum, key) => {
     let w = 40; // key mask row + block padding
     if (key.message) w += 30;
@@ -84,6 +117,7 @@ function estimateWeight(report: ProviderUsageReport): number {
 function packColumns(
   reports: ProviderUsageReport[],
   columnCount: number,
+  showRateLimited: boolean,
 ): ProviderUsageReport[][] {
   const columns: ProviderUsageReport[][] = Array.from(
     { length: columnCount },
@@ -96,7 +130,7 @@ function packColumns(
       if (weights[i] < weights[shortest]) shortest = i;
     }
     columns[shortest].push(report);
-    weights[shortest] += estimateWeight(report);
+    weights[shortest] += estimateWeight(report, showRateLimited);
   }
   return columns;
 }
@@ -104,6 +138,9 @@ function packColumns(
 export default function ProviderUsage() {
   const [reports, setReports] = useState<ProviderUsageReport[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // Rate-limited keys are hidden by default — they're cooling down and clutter
+  // the at-a-glance quota view — behind an opt-in toggle.
+  const [showRateLimited, setShowRateLimited] = useState(false);
 
   // Refresh pulls live usage from each provider adapter (its async keyUsage()).
   const load = useCallback(async () => {
@@ -121,15 +158,33 @@ export default function ProviderUsage() {
     void load();
   }, [load]);
 
+  // Count what's actually shown, so the header badge matches the cards: with
+  // the toggle off, rate-limited keys aren't rendered and don't count.
   const totalKeys = useMemo(
-    () => (reports ?? []).reduce((n, r) => n + r.keys.length, 0),
+    () =>
+      (reports ?? []).reduce(
+        (n, r) =>
+          n +
+          (showRateLimited
+            ? r.keys.length
+            : r.keys.filter((k) => !isRateLimited(k)).length),
+        0,
+      ),
+    [reports, showRateLimited],
+  );
+  const hiddenCount = useMemo(
+    () =>
+      (reports ?? []).reduce(
+        (n, r) => n + r.keys.filter((k) => isRateLimited(k)).length,
+        0,
+      ),
     [reports],
   );
 
   const columnCount = useColumnCount();
   const columns = useMemo(
-    () => (reports ? packColumns(reports, columnCount) : []),
-    [reports, columnCount],
+    () => (reports ? packColumns(reports, columnCount, showRateLimited) : []),
+    [reports, columnCount, showRateLimited],
   );
 
   return (
@@ -145,17 +200,29 @@ export default function ProviderUsage() {
           )
         }
         actions={
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => void load()}
-            disabled={refreshing}
-          >
-            <RefreshCw
-              className={cn("h-3.5 w-3.5", refreshing && "animate-spin")}
-            />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2">
+              <Switch
+                checked={showRateLimited}
+                onCheckedChange={setShowRateLimited}
+              />
+              <span className="text-xs font-medium text-muted-foreground normal-case">
+                show rate-limited
+                {hiddenCount > 0 && !showRateLimited && ` (${hiddenCount})`}
+              </span>
+            </label>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void load()}
+              disabled={refreshing}
+            >
+              <RefreshCw
+                className={cn("h-3.5 w-3.5", refreshing && "animate-spin")}
+              />
+              Refresh
+            </Button>
+          </div>
         }
       />
 
@@ -168,7 +235,11 @@ export default function ProviderUsage() {
           {columns.map((col, i) => (
             <div key={i} className="flex min-w-0 flex-1 flex-col gap-4">
               {col.map((r) => (
-                <ProviderUsageCard key={r.providerId} report={r} />
+                <ProviderUsageCard
+                  key={r.providerId}
+                  report={r}
+                  showRateLimited={showRateLimited}
+                />
               ))}
             </div>
           ))}
@@ -198,19 +269,41 @@ function UsageSkeleton() {
   );
 }
 
-function ProviderUsageCard({ report }: { report: ProviderUsageReport }) {
+function ProviderUsageCard({
+  report,
+  showRateLimited,
+}: {
+  report: ProviderUsageReport;
+  showRateLimited: boolean;
+}) {
   const [filter, setFilter] = useState("");
   const [page, setPage] = useState(0);
+
+  // Freshest-first, then drop rate-limited keys unless the toggle is on. Order
+  // matters: sort before filtering so the highlight is the most-recently-used
+  // key that's actually visible.
+  const sortedKeys = useMemo(
+    () =>
+      sortByLastUsed(report.keys).filter(
+        (k) => showRateLimited || !isRateLimited(k),
+      ),
+    [report.keys, showRateLimited],
+  );
+
+  // The green-outlined key: the most-recently-used visible key. Absent if no
+  // visible key has ever been used (nothing to anchor "last used" to).
+  const highlightMask = sortedKeys.find((k) => k.lastUsedAt)?.keyMask;
+
   const filteredKeys = useMemo(() => {
     const query = filter.trim().toLowerCase();
     return query
-      ? report.keys.filter(
+      ? sortedKeys.filter(
           (key) =>
             key.keyMask.toLowerCase().includes(query) ||
             key.message?.toLowerCase().includes(query),
         )
-      : report.keys;
-  }, [filter, report.keys]);
+      : sortedKeys;
+  }, [filter, sortedKeys]);
   const pageCount = Math.max(1, Math.ceil(filteredKeys.length / KEYS_PER_PAGE));
   const safePage = Math.min(page, pageCount - 1);
   const pageKeys = filteredKeys.slice(
@@ -254,13 +347,13 @@ function ProviderUsageCard({ report }: { report: ProviderUsageReport }) {
         )}
       </div>
 
-      {report.keys.length > KEYS_PER_PAGE && (
+      {sortedKeys.length > KEYS_PER_PAGE && (
         <TableSearch
           value={filter}
           onChange={setFilter}
           placeholder="Filter keys…"
           count={filter ? filteredKeys.length : undefined}
-          total={filter ? report.keys.length : undefined}
+          total={filter ? sortedKeys.length : undefined}
           className="w-full sm:w-full"
         />
       )}
@@ -270,12 +363,24 @@ function ProviderUsageCard({ report }: { report: ProviderUsageReport }) {
           <KeyRound className="h-3.5 w-3.5" />
           No recorded key usage yet.
         </div>
+      ) : sortedKeys.length === 0 ? (
+        // Every key is rate-limited and the toggle is off — say so rather than
+        // showing a bare "no match", so it's clear the toggle would reveal them.
+        <div className="flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-4 text-xs text-muted-foreground">
+          <KeyRound className="h-3.5 w-3.5" />
+          All {report.keys.length} {report.keys.length === 1 ? "key" : "keys"}{" "}
+          rate-limited — enable “show rate-limited” to view.
+        </div>
       ) : pageKeys.length === 0 ? (
         <EmptyState msg="No keys match this filter" />
       ) : (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2 [&>*:last-child:nth-child(odd)]:col-span-2">
           {pageKeys.map((key) => (
-            <KeyUsageBlock key={key.keyMask} usage={key} />
+            <KeyUsageBlock
+              key={key.keyMask}
+              usage={key}
+              highlight={key.keyMask === highlightMask}
+            />
           ))}
         </div>
       )}
@@ -291,8 +396,15 @@ function ProviderUsageCard({ report }: { report: ProviderUsageReport }) {
 }
 
 // Exported so the provider detail Keys tab can render the same per-key usage
-// blocks inline (fed by the per-provider usage endpoint).
-export function KeyUsageBlock({ usage }: { usage: ProviderKeyUsage }) {
+// blocks inline (fed by the per-provider usage endpoint). `highlight` draws a
+// green outline on the most-recently-used key (the router's freshest pick).
+export function KeyUsageBlock({
+  usage,
+  highlight = false,
+}: {
+  usage: ProviderKeyUsage;
+  highlight?: boolean;
+}) {
   const health = usage.health;
   const rateLimited = !!health?.rateLimitedUntil;
   const healthNote = rateLimited
@@ -305,6 +417,9 @@ export function KeyUsageBlock({ usage }: { usage: ProviderKeyUsage }) {
         health?.dead && "border-destructive/40 bg-destructive/5",
         rateLimited && !health?.dead && "border-warning/40 bg-warning/5",
         !usage.enabled && !health?.dead && "opacity-60",
+        // Green ring wins visually over the border tint — the freshest key
+        // should read as "active now" even if it's also, say, disabled.
+        highlight && "border-success ring-1 ring-success",
       )}
     >
       <div
@@ -424,7 +539,16 @@ function fmtUsage(n: number, unit: UsageUnit): string {
 }
 
 function UsageBar({ window: w }: { window: ProviderKeyUsageWindow }) {
-  const pct = w.limit > 0 ? Math.min(100, (w.used / w.limit) * 100) : 0;
+  // `resetsAt` is when this window's counter rolls over to a fresh quota. Once
+  // it's in the past, the reported `used` describes a window that has already
+  // reset — stale data — so show 0 (a fresh, empty window) rather than a filled
+  // bar that no longer reflects the live quota. The "reset … ago" line below
+  // still renders, explaining why it reads empty.
+  const reset = w.resetsAt
+    ? new Date(w.resetsAt).getTime() <= Date.now()
+    : false;
+  const used = reset ? 0 : w.used;
+  const pct = w.limit > 0 ? Math.min(100, (used / w.limit) * 100) : 0;
   // Warn/critical color as the window fills.
   const tone =
     pct >= 90 ? "bg-destructive" : pct >= 70 ? "bg-warning" : "bg-primary";
@@ -443,7 +567,7 @@ function UsageBar({ window: w }: { window: ProviderKeyUsageWindow }) {
           ) : (
             <>
               <span className="font-mono text-foreground">
-                {fmtUsage(w.used, w.unit)}
+                {fmtUsage(used, w.unit)}
               </span>
               {" / "}
               <span className="font-mono">

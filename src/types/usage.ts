@@ -42,6 +42,13 @@ export interface ProviderKeyUsage {
   };
   windows: ProviderKeyUsageWindow[];
   /**
+   * ISO timestamp of the most recent proxied request that used this key
+   * (MAX(ts) over request_logs by upstream key hash — any status, a 429 is
+   * still a "use"). Drives the usage dashboard's last-used sort + highlight.
+   * Omitted when the key has never served a logged request.
+   */
+  lastUsedAt?: string;
+  /**
    * ISO timestamp when the KEY ITSELF becomes invalid (distinct from a
    * window's `resetsAt`, which refills rather than expiring). Omitted when
    * the provider doesn't report an expiry or the key never expires.

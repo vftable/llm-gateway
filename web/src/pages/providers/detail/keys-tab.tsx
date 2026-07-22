@@ -16,7 +16,7 @@ import type {
   ProviderKeySyncConfig,
   ProviderUsageReport,
 } from "@/lib/types";
-import { KeyUsageBlock } from "../usage";
+import { KeyUsageBlock, sortByLastUsed } from "../usage";
 import { UsageBlockGridSkeleton, FormSection } from "@/components/shared";
 import { ProviderKeyManager } from "@/components/provider-key-manager";
 import { Button } from "@/components/ui/button";
@@ -429,9 +429,20 @@ function KeyUsagePanel({ providerId }: { providerId: string }) {
           </p>
         ) : (
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 [&>*:last-child:nth-child(odd)]:col-span-2">
-            {report.keys.map((k, i) => (
-              <KeyUsageBlock key={i} usage={k} />
-            ))}
+            {(() => {
+              // Freshest-first; green-outline the most-recently-used key. This
+              // detail view keeps rate-limited keys visible (it's the key
+              // manager) — only the dashboard hides them behind a toggle.
+              const sorted = sortByLastUsed(report.keys);
+              const highlightMask = sorted.find((k) => k.lastUsedAt)?.keyMask;
+              return sorted.map((k, i) => (
+                <KeyUsageBlock
+                  key={i}
+                  usage={k}
+                  highlight={k.keyMask === highlightMask}
+                />
+              ));
+            })()}
           </div>
         )}
       </div>
