@@ -40,6 +40,24 @@ export function upsertUnifiedUsage(
   httpStatus: number | null,
   capturedAt = new Date().toISOString(),
 ): UnifiedUsageSnapshot {
+  const has7dOi = Object.keys(headers).some((key) =>
+    key.startsWith("anthropic-ratelimit-unified-7d_oi-"),
+  );
+  const stored =
+    httpStatus !== null && httpStatus >= 200 && httpStatus < 300 && !has7dOi
+      ? getUnifiedUsage(db, providerId, keyHash)
+      : null;
+  const mergedHeaders = stored
+    ? {
+        ...Object.fromEntries(
+          Object.entries(stored.headers).filter(([key]) =>
+            key.startsWith("anthropic-ratelimit-unified-7d_oi-"),
+          ),
+        ),
+        ...headers,
+      }
+    : headers;
+
   db.prepare(
     `INSERT INTO provider_key_unified_usage
        (provider_id, key_hash, headers_json, http_status, captured_at)
@@ -51,7 +69,7 @@ export function upsertUnifiedUsage(
   ).run({
     provider_id: providerId,
     key_hash: keyHash,
-    headers_json: JSON.stringify(headers),
+    headers_json: JSON.stringify(mergedHeaders),
     http_status: httpStatus,
     captured_at: capturedAt,
   });

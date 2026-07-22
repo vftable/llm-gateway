@@ -49,6 +49,75 @@ test("unified usage snapshot upserts latest values atomically", () => {
   }
 });
 
+test("base-model success preserves omitted Fable 7d_oi usage", () => {
+  const db = setup();
+  try {
+    upsertUnifiedUsage(
+      db,
+      "provider-1",
+      "hash-1",
+      {
+        "anthropic-ratelimit-unified-5h-utilization": "0.1",
+        "anthropic-ratelimit-unified-7d_oi-utilization": "0.27",
+        "anthropic-ratelimit-unified-7d_oi-reset": "1785031200",
+      },
+      200,
+      "2026-07-21T01:00:00.000Z",
+    );
+    upsertUnifiedUsage(
+      db,
+      "provider-1",
+      "hash-1",
+      { "anthropic-ratelimit-unified-5h-utilization": "0.5" },
+      200,
+      "2026-07-21T02:00:00.000Z",
+    );
+
+    assert.deepEqual(getUnifiedUsage(db, "provider-1", "hash-1")!.headers, {
+      "anthropic-ratelimit-unified-7d_oi-utilization": "0.27",
+      "anthropic-ratelimit-unified-7d_oi-reset": "1785031200",
+      "anthropic-ratelimit-unified-5h-utilization": "0.5",
+    });
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("Fable success overwrites prior 7d_oi usage", () => {
+  const db = setup();
+  try {
+    upsertUnifiedUsage(
+      db,
+      "provider-1",
+      "hash-1",
+      {
+        "anthropic-ratelimit-unified-7d_oi-utilization": "0.27",
+        "anthropic-ratelimit-unified-7d_oi-reset": "1785031200",
+      },
+      200,
+    );
+    upsertUnifiedUsage(
+      db,
+      "provider-1",
+      "hash-1",
+      {
+        "anthropic-ratelimit-unified-5h-utilization": "0.5",
+        "anthropic-ratelimit-unified-7d_oi-utilization": "0.63",
+        "anthropic-ratelimit-unified-7d_oi-reset": "1785636000",
+      },
+      200,
+    );
+
+    assert.deepEqual(getUnifiedUsage(db, "provider-1", "hash-1")!.headers, {
+      "anthropic-ratelimit-unified-5h-utilization": "0.5",
+      "anthropic-ratelimit-unified-7d_oi-utilization": "0.63",
+      "anthropic-ratelimit-unified-7d_oi-reset": "1785636000",
+    });
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test("provider deletion cascades unified usage snapshots", () => {
   const db = setup();
   try {
