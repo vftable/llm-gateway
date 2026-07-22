@@ -51,6 +51,10 @@ import { exampleCustom } from "./catalog/example-custom";
 import { proxy } from "./catalog/proxy";
 import { newapi } from "./catalog/newapi";
 import { ollama, ollamaCloud } from "./catalog/ollama";
+import { opencodeGo } from "./catalog/opencode-go";
+import { qwencloud } from "./catalog/qwencloud";
+import { clinepass } from "./catalog/clinepass";
+import { minimax } from "./catalog/minimax";
 
 // Order here is the order shown in the catalog grid: branded stock providers
 // first, generic escape-hatch templates last.
@@ -61,9 +65,13 @@ const ADAPTERS: ProviderAdapter[] = [
   nvidiaNim,
   openrouter,
   opencode,
+  opencodeGo,
   xiaomiMimo,
   deepseek,
   glm,
+  qwencloud,
+  clinepass,
+  minimax,
   gemini,
   openaiCompatible,
   anthropicCompatible,

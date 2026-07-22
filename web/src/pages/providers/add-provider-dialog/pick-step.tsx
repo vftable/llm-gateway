@@ -32,8 +32,12 @@ const FAMILIES: Family[] = [
     ids: new Set(["ollama", "ollama-cloud"]),
   },
   { label: "NewAPI", brand: "newapi", ids: new Set(["newapi"]) },
-  { label: "OpenCode", brand: "opencode", ids: new Set(["opencode"]) },
+  { label: "OpenCode", brand: "opencode", ids: new Set(["opencode", "opencode-go"]) },
   { label: "Xiaomi", brand: "mimo", ids: new Set(["xiaomi-mimo"]) },
+  { label: "Qwen", brand: "qwen", ids: new Set(["qwencloud"]) },
+  { label: "Cline", brand: "cline", ids: new Set(["clinepass"]) },
+  { label: "CommandCode", brand: "commandcode", ids: new Set(["commandcode"]) },
+  { label: "MiniMax", brand: "minimax", ids: new Set(["minimax"]) },
 ];
 
 function groupTemplates(

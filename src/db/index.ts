@@ -280,6 +280,7 @@ CREATE TABLE IF NOT EXISTS provider_key_sync (
   last_sync_error   TEXT,
   enabled           INTEGER NOT NULL DEFAULT 1
 );
+
 `;
 
 export function openDatabase(dbPath: string): DB {
