@@ -34,6 +34,7 @@ import {
   familyDefaultTransforms,
   applyAuthHeaders,
   type EndpointRoute,
+  type BuiltRequest,
 } from "../providers";
 import { getProviderModel } from "../repo/provider-models";
 import {
@@ -81,6 +82,10 @@ import { upsertUnifiedUsage } from "../repo/provider-key-usage";
 import { filterUnifiedRateLimitHeaders } from "../services/anthropic/unified-usage";
 import { classifyAnthropicRateLimit } from "../services/anthropic/rate-limit-scope";
 import { isClaudeCodeUsageCreditsError } from "../services/anthropic/usage-credits";
+import {
+  contextWindowLimit,
+  countInputTokens,
+} from "../services/anthropic/count-tokens";
 import { logUpstreamNon2xx } from "./engine-support/log-upstream-error";
 import { captureRequest, packResponseSummary } from "./debug-capture";
 import type {
@@ -562,6 +567,22 @@ export class ForwardingEngine {
           pick,
         );
 
+        // The pre-flight count_tokens gate found the input over this provider's
+        // context window (Claude Code Sonnet 4.6 → 200k). Not a key problem:
+        // abandon this provider with no health penalty and fail over to the next
+        // hop, which can serve the long context.
+        if (result.skipProvider) {
+          lastReason = result.reason || lastReason;
+          this.logger.warn("provider_skipped", {
+            provider: entry.provider.id,
+            model: entry.upstreamModel,
+            reason: lastReason,
+            failover:
+              entry === chain[chain.length - 1] ? "exhausted" : "next-provider",
+          });
+          break;
+        }
+
         // Long-context usage-credits 429: NOT a key fault — this key's
         // subscription plan just can't serve this request. Skip it silently (no
         // health penalty, no cooldown, no error log), drop any stale credit-
@@ -803,6 +824,7 @@ export class ForwardingEngine {
     let serialized: Buffer;
     let upstreamUrl: URL;
     let headers: Record<string, string>;
+    let built: BuiltRequest;
     try {
       const reqBody = { ...ctx.requestBody, model: upstreamModel };
       const converted = applyBodyTransforms(
@@ -829,7 +851,7 @@ export class ForwardingEngine {
       // url/headers/body via the URL parts + resolve() (no `new URL()` needed).
       // Runs LAST, so it wins over anything a request transform edited.
       const resolve = makeResolve(provider, route.forwardPath);
-      const built = route.adapter.buildFor(route.providerFmt, {
+      built = route.adapter.buildFor(route.providerFmt, {
         provider,
         model: upstreamModel,
         body: converted,
@@ -872,6 +894,36 @@ export class ForwardingEngine {
         committed: false,
         reason: `bad provider proxy: ${(err as Error).message}`,
       };
+    }
+
+    // Pre-flight context-window gate: Claude Code Sonnet 4.6 is capped at its
+    // 200k base window, so count the real input tokens upstream first and skip
+    // this provider (fail over, no key penalty) when it's over. Only fires when
+    // a key was picked (the count needs auth) and only for the gated hop; every
+    // other model/provider proceeds straight through.
+    const window = pick
+      ? contextWindowLimit(provider.catalogId, upstreamModel, built.url)
+      : null;
+    if (window !== null) {
+      const counted = await countInputTokens({
+        url: built.url,
+        headers: built.headers,
+        body: built.body,
+        timeoutMs: provider.requestTimeoutMs,
+        tlsVerify: provider.tlsVerify,
+        proxy: provider.proxy,
+      });
+      if (counted !== null && counted > window) {
+        const reason = `input ${counted.toLocaleString()} tok over ${upstreamModel}'s ${window.toLocaleString()} context window`;
+        this.logger.warn("provider_skipped_context_limit", {
+          provider: provider.id,
+          model: upstreamModel,
+          countedInputTokens: counted,
+          contextWindow: window,
+          reason,
+        });
+        return { committed: false, skipProvider: true, reason };
+      }
     }
 
     return new Promise((resolvePromise) => {

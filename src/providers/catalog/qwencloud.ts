@@ -2,9 +2,9 @@ import {
   OpenAICompatibleAdapter,
   type BuildCtx,
   type BuiltRequest,
-} from "../base"
-import { WireKind } from "../../types"
-import { OPENAI_DEFAULT_TRANSFORMS } from "./openai"
+} from "../base";
+import { WireKind } from "../../types";
+import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // QwenCloud Token Plan (international, Singapore region).
 //
@@ -19,8 +19,8 @@ class QwenCloudAdapter extends OpenAICompatibleAdapter {
   // since the /compatible-mode/v1 prefix is carried in ctx.basePath; so we
   // can append /apps/anthropic directly to ctx.baseUrl.
   override messages(ctx: BuildCtx): BuiltRequest {
-    const url = ctx.baseUrl.replace(/\/+$/, "") + "/apps/anthropic"
-    return { url, headers: ctx.headers, body: ctx.body }
+    const url = ctx.baseUrl.replace(/\/+$/, "") + "/apps/anthropic";
+    return { url, headers: ctx.headers, body: ctx.body };
   }
 }
 
@@ -62,4 +62,4 @@ export const qwencloud = new QwenCloudAdapter({
   quirks: {
     defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
   },
-})
+});

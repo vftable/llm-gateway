@@ -1774,6 +1774,208 @@ test("all-keys-credit-less fails over to the next provider with no key issues", 
   }
 });
 
+// A local Anthropic-ish upstream answering /v1/messages/count_tokens (with a
+// configurable input-token count) and the real /v1/messages. Records which
+// paths were hit so a gate test can assert the real request was (not) sent.
+function countGateServer(inputTokens: number) {
+  const seen = { countPath: false, messagesPath: false };
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      if ((req.url || "").includes("/count_tokens")) {
+        seen.countPath = true;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ input_tokens: inputTokens }));
+        return;
+      }
+      seen.messagesPath = true;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ id: "ok", content: [], usage: {} }));
+    });
+  });
+  return { server, seen };
+}
+
+test("Sonnet 4.6 count_tokens gate skips claude-code when input exceeds the 200k window", async () => {
+  // Provider 1 (claude-code) reports 250k tokens → over 200k, so it's skipped
+  // WITHOUT sending the real request. Provider 2 serves the long context.
+  const cc = countGateServer(250_000);
+  const fb = countGateServer(250_000); // its count endpoint stays unused
+  await new Promise<void>((r) => cc.server.listen(0, "127.0.0.1", r));
+  await new Promise<void>((r) => fb.server.listen(0, "127.0.0.1", r));
+  const ccPort = (cc.server.address() as AddressInfo).port;
+  const fbPort = (fb.server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${ccPort}`,
+      apiKeys: ["sk-ant-cc"],
+      catalogId: "claude-code",
+      endpoints: [WireKind.Messages],
+      retryAttempts: 3, // prove a skip doesn't retry keys
+    });
+    createProvider(db, {
+      id: "fb",
+      name: "Anthropic",
+      baseUrl: `http://127.0.0.1:${fbPort}`,
+      apiKeys: ["sk-ant-fb"],
+      catalogId: "anthropic",
+      endpoints: [WireKind.Messages],
+      retryAttempts: 1,
+    });
+    const created = createModel(db, {
+      alias: "sonnet",
+      type: "anthropic",
+      providers: [
+        { providerId: "cc", upstreamModel: "claude-sonnet-4-6" },
+        { providerId: "fb", upstreamModel: "claude-sonnet-4-6" },
+      ],
+    });
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const keyHealth = (engine as unknown as { keyHealth: KeyHealthStore })
+      .keyHealth;
+    const { res, state } = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(
+        getModel(db, created.id)!,
+        {
+          model: "sonnet",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hi" }],
+        },
+        "/v1/messages",
+      ),
+    );
+    // count ran on claude-code; the real request did NOT.
+    assert.equal(cc.seen.countPath, true, "count_tokens must be called");
+    assert.equal(
+      cc.seen.messagesPath,
+      false,
+      "the real request must NOT be sent when over the window",
+    );
+    // Served by the fallback; claude-code key stays fully usable (no penalty).
+    assert.equal(state.statusCode || 200, 200);
+    assert.equal(fb.seen.messagesPath, true);
+    assert.equal(
+      keyHealth.usableCount("cc", ["sk-ant-cc"], "claude-sonnet-4-6"),
+      1,
+    );
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => cc.server.close(() => r()));
+    await new Promise<void>((r) => fb.server.close(() => r()));
+  }
+});
+
+test("Sonnet 4.6 count_tokens gate proceeds when input is within the 200k window", async () => {
+  const cc = countGateServer(100_000); // under 200k → proceed
+  await new Promise<void>((r) => cc.server.listen(0, "127.0.0.1", r));
+  const ccPort = (cc.server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${ccPort}`,
+      apiKeys: ["sk-ant-cc"],
+      catalogId: "claude-code",
+      endpoints: [WireKind.Messages],
+      retryAttempts: 1,
+    });
+    const created = createModel(db, {
+      alias: "sonnet",
+      type: "anthropic",
+      providers: [{ providerId: "cc", upstreamModel: "claude-sonnet-4-6" }],
+    });
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const { res, state } = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(
+        getModel(db, created.id)!,
+        {
+          model: "sonnet",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hi" }],
+        },
+        "/v1/messages",
+      ),
+    );
+    // Both the count AND the real request ran; the client got the 200.
+    assert.equal(cc.seen.countPath, true);
+    assert.equal(cc.seen.messagesPath, true);
+    assert.equal(state.statusCode || 200, 200);
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => cc.server.close(() => r()));
+  }
+});
+
+test("count_tokens gate does not fire for a non-Sonnet-4-6 model (Opus 4.6 1M)", async () => {
+  const cc = countGateServer(250_000); // would exceed IF it were checked
+  await new Promise<void>((r) => cc.server.listen(0, "127.0.0.1", r));
+  const ccPort = (cc.server.address() as AddressInfo).port;
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "cc",
+      name: "Claude Code",
+      baseUrl: `http://127.0.0.1:${ccPort}`,
+      apiKeys: ["sk-ant-cc"],
+      catalogId: "claude-code",
+      endpoints: [WireKind.Messages],
+      retryAttempts: 1,
+    });
+    const created = createModel(db, {
+      alias: "opus",
+      type: "anthropic",
+      providers: [{ providerId: "cc", upstreamModel: "claude-opus-4-6" }],
+    });
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const { res, state } = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(
+        getModel(db, created.id)!,
+        {
+          model: "opus",
+          max_tokens: 16,
+          messages: [{ role: "user", content: "hi" }],
+        },
+        "/v1/messages",
+      ),
+    );
+    // Opus 4.6 1M is NOT gated — no pre-flight count, straight to the request.
+    assert.equal(cc.seen.countPath, false);
+    assert.equal(cc.seen.messagesPath, true);
+    assert.equal(state.statusCode || 200, 200);
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => cc.server.close(() => r()));
+  }
+});
+
 test("Claude Code 7d_oi exhaustion cools a key for Fable without blocking Opus", async () => {
   let fableHits = 0;
   let opusHits = 0;

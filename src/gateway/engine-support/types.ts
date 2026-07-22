@@ -129,6 +129,11 @@ export interface AttemptResult {
    * cooling, or recording any key-health failure (see forward()'s credit
    * rotation), and only fails the provider over once every key is credit-less. */
   usageCreditsRequired?: boolean;
+  /** The pre-flight count_tokens gate found the input over the model's context
+   * window for this provider (Claude Code Sonnet 4.6 → 200k). Abandon this
+   * provider and fail over to the next hop WITHOUT any key-health penalty — the
+   * request simply doesn't fit here, it's not a key/auth/rate-limit problem. */
+  skipProvider?: boolean;
 }
 
 // Upstream-reported usage shape (subset of readResponseUsage's return).

@@ -105,7 +105,9 @@ class DeepSeekAdapter extends OpenAICompatibleAdapter {
     const balanceLine = parts.join(" · ");
     return {
       windows: [],
-      message: available ? balanceLine : `${balanceLine} — insufficient for API calls`,
+      message: available
+        ? balanceLine
+        : `${balanceLine} — insufficient for API calls`,
     };
   }
 }

@@ -2,10 +2,10 @@ import {
   OpenAICompatibleAdapter,
   type UsageCtx,
   type KeyUsageResult,
-} from "../base"
-import { WireKind } from "../../types"
-import type { ProviderKeyUsageWindow } from "../../types"
-import { OPENAI_DEFAULT_TRANSFORMS } from "./openai"
+} from "../base";
+import { WireKind } from "../../types";
+import type { ProviderKeyUsageWindow } from "../../types";
+import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // OpenCode Go — a paid subscription tier at opencode.ai/go, distinct from Zen.
 // Supports both /chat/completions and /messages.
@@ -27,108 +27,138 @@ import { OPENAI_DEFAULT_TRANSFORMS } from "./openai"
 //   data-slot="usage-value">12< ... data-slot="reset-time">1 hour 56 minutes<
 
 const WORKSPACE_URL = (workspaceId: string) =>
-  `https://opencode.ai/workspace/${encodeURIComponent(workspaceId)}/go`
+  `https://opencode.ai/workspace/${encodeURIComponent(workspaceId)}/go`;
 
-const NUM = String.raw`(-?\d+(?:\.\d+)?)`
+const NUM = String.raw`(-?\d+(?:\.\d+)?)`;
 
 interface UsageWindow {
-  usagePercent: number
-  resetInSec: number
+  usagePercent: number;
+  resetInSec: number;
 }
 
 function extractWindowSsr(html: string, key: string): UsageWindow | null {
   // SolidJS SSR format: rollingUsage:$R[N]={usagePercent:N,resetInSec:N}
   // Field order varies — try both orderings.
-  const base = key + String.raw`:\$R\[\d+\]=\{[^}]*`
-  const pctFirst = new RegExp(base + `usagePercent:${NUM}[^}]*resetInSec:${NUM}`)
-  const resetFirst = new RegExp(base + `resetInSec:${NUM}[^}]*usagePercent:${NUM}`)
+  const base = key + String.raw`:\$R\[\d+\]=\{[^}]*`;
+  const pctFirst = new RegExp(
+    base + `usagePercent:${NUM}[^}]*resetInSec:${NUM}`,
+  );
+  const resetFirst = new RegExp(
+    base + `resetInSec:${NUM}[^}]*usagePercent:${NUM}`,
+  );
 
-  const m1 = pctFirst.exec(html)
+  const m1 = pctFirst.exec(html);
   if (m1) {
-    const usagePercent = parseFloat(m1[1])
-    const resetInSec = parseFloat(m1[2])
+    const usagePercent = parseFloat(m1[1]);
+    const resetInSec = parseFloat(m1[2]);
     if (Number.isFinite(usagePercent) && Number.isFinite(resetInSec))
-      return { usagePercent, resetInSec }
+      return { usagePercent, resetInSec };
   }
 
-  const m2 = resetFirst.exec(html)
+  const m2 = resetFirst.exec(html);
   if (m2) {
-    const resetInSec = parseFloat(m2[1])
-    const usagePercent = parseFloat(m2[2])
+    const resetInSec = parseFloat(m2[1]);
+    const usagePercent = parseFloat(m2[2]);
     if (Number.isFinite(usagePercent) && Number.isFinite(resetInSec))
-      return { usagePercent, resetInSec }
+      return { usagePercent, resetInSec };
   }
 
-  return null
+  return null;
 }
 
 function parseHumanReadableTime(s: string): number | null {
-  const n = s.toLowerCase().replace(/\s+/g, " ").trim()
-  if (["reset-now", "reset now", "now", "resets now"].includes(n)) return 0
-  let total = 0
-  let matched = false
-  const day = n.match(/(\d+(?:\.\d+)?)\s*days?/)
-  const hr = n.match(/(\d+(?:\.\d+)?)\s*hours?/)
-  const min = n.match(/(\d+(?:\.\d+)?)\s*minutes?/)
-  const sec = n.match(/(\d+(?:\.\d+)?)\s*seconds?/)
-  if (day) { total += parseFloat(day[1]) * 86400; matched = true }
-  if (hr) { total += parseFloat(hr[1]) * 3600; matched = true }
-  if (min) { total += parseFloat(min[1]) * 60; matched = true }
-  if (sec) { total += parseFloat(sec[1]); matched = true }
-  return matched ? total : null
+  const n = s.toLowerCase().replace(/\s+/g, " ").trim();
+  if (["reset-now", "reset now", "now", "resets now"].includes(n)) return 0;
+  let total = 0;
+  let matched = false;
+  const day = n.match(/(\d+(?:\.\d+)?)\s*days?/);
+  const hr = n.match(/(\d+(?:\.\d+)?)\s*hours?/);
+  const min = n.match(/(\d+(?:\.\d+)?)\s*minutes?/);
+  const sec = n.match(/(\d+(?:\.\d+)?)\s*seconds?/);
+  if (day) {
+    total += parseFloat(day[1]) * 86400;
+    matched = true;
+  }
+  if (hr) {
+    total += parseFloat(hr[1]) * 3600;
+    matched = true;
+  }
+  if (min) {
+    total += parseFloat(min[1]) * 60;
+    matched = true;
+  }
+  if (sec) {
+    total += parseFloat(sec[1]);
+    matched = true;
+  }
+  return matched ? total : null;
 }
 
 function extractWindowsDataSlot(html: string): Record<string, UsageWindow> {
-  const result: Record<string, UsageWindow> = {}
-  const items = html.split(/data-slot="usage-item"/)
+  const result: Record<string, UsageWindow> = {};
+  const items = html.split(/data-slot="usage-item"/);
   for (let i = 1; i < items.length; i++) {
-    const chunk = items[i]
-    const labelM = chunk.match(/data-slot="usage-label">([^<]+)</)
-    if (!labelM) continue
-    const label = labelM[1].trim().toLowerCase()
+    const chunk = items[i];
+    const labelM = chunk.match(/data-slot="usage-label">([^<]+)</);
+    if (!labelM) continue;
+    const label = labelM[1].trim().toLowerCase();
 
-    const usageM = chunk.match(/data-slot="usage-value">[^0-9]*(\d+(?:\.\d+)?)/)
-    if (!usageM) continue
-    const usagePercent = parseFloat(usageM[1])
+    const usageM = chunk.match(
+      /data-slot="usage-value">[^0-9]*(\d+(?:\.\d+)?)/,
+    );
+    if (!usageM) continue;
+    const usagePercent = parseFloat(usageM[1]);
 
-    const resetM = chunk.match(/data-slot="(reset-time|reset-now)">([\s\S]*?)<\/span>/)
-    if (!resetM) continue
+    const resetM = chunk.match(
+      /data-slot="(reset-time|reset-now)">([\s\S]*?)<\/span>/,
+    );
+    if (!resetM) continue;
     const resetContent = resetM[2]
-      .replace(/<!--\$-->/g, "").replace(/<!--\/-->/g, "")
-      .replace(/Resets?\s*in\s*/i, "").trim()
-    const resetInSec = resetM[1] === "reset-now" ? 0 : parseHumanReadableTime(resetContent)
+      .replace(/<!--\$-->/g, "")
+      .replace(/<!--\/-->/g, "")
+      .replace(/Resets?\s*in\s*/i, "")
+      .trim();
+    const resetInSec =
+      resetM[1] === "reset-now" ? 0 : parseHumanReadableTime(resetContent);
 
-    if (!Number.isFinite(usagePercent) || resetInSec === null || !Number.isFinite(resetInSec))
-      continue
+    if (
+      !Number.isFinite(usagePercent) ||
+      resetInSec === null ||
+      !Number.isFinite(resetInSec)
+    )
+      continue;
 
-    const key = label.includes("rolling") ? "rolling"
-      : label.includes("weekly") ? "weekly"
-      : label.includes("monthly") ? "monthly"
-      : null
-    if (key) result[key] = { usagePercent, resetInSec }
+    const key = label.includes("rolling")
+      ? "rolling"
+      : label.includes("weekly")
+        ? "weekly"
+        : label.includes("monthly")
+          ? "monthly"
+          : null;
+    if (key) result[key] = { usagePercent, resetInSec };
   }
-  return result
+  return result;
 }
 
 function extractWindows(html: string): {
-  rolling: UsageWindow | null
-  weekly: UsageWindow | null
-  monthly: UsageWindow | null
+  rolling: UsageWindow | null;
+  weekly: UsageWindow | null;
+  monthly: UsageWindow | null;
 } {
   // Try SolidJS SSR format first
-  let rolling = extractWindowSsr(html, "rollingUsage")
-  let weekly = extractWindowSsr(html, "weeklyUsage")
-  let monthly = extractWindowSsr(html, "monthlyUsage")
+  let rolling = extractWindowSsr(html, "rollingUsage");
+  let weekly = extractWindowSsr(html, "weeklyUsage");
+  let monthly = extractWindowSsr(html, "monthlyUsage");
 
   // Fall back to data-slot HTML format
   if (!rolling && !weekly && !monthly) {
-    const ds = extractWindowsDataSlot(html)
-    rolling = ds.rolling ?? null
-    weekly = ds.weekly ?? null
-    monthly = ds.monthly ?? null
+    const ds = extractWindowsDataSlot(html);
+    rolling = ds.rolling ?? null;
+    weekly = ds.weekly ?? null;
+    monthly = ds.monthly ?? null;
   }
 
-  return { rolling, weekly, monthly }
+  return { rolling, weekly, monthly };
 }
 
 function toWindow(
@@ -136,7 +166,7 @@ function toWindow(
   label: string,
   w: UsageWindow | null,
 ): ProviderKeyUsageWindow | null {
-  if (!w) return null
+  if (!w) return null;
   return {
     id,
     label,
@@ -144,16 +174,19 @@ function toWindow(
     limit: 100,
     unit: "percent",
     resetsAt: new Date(Date.now() + w.resetInSec * 1000).toISOString(),
-  }
+  };
 }
 
 class OpenCodeGoAdapter extends OpenAICompatibleAdapter {
   supportsKeyUsage(_ctx: UsageCtx): boolean {
-    return true
+    return true;
   }
 
   async keyUsage(ctx: UsageCtx): Promise<KeyUsageResult> {
-    const { workspaceId, authCookie } = ctx.keyMetadata as Record<string, string>
+    const { workspaceId, authCookie } = ctx.keyMetadata as Record<
+      string,
+      string
+    >;
 
     if (!workspaceId || !authCookie) {
       return {
@@ -161,7 +194,7 @@ class OpenCodeGoAdapter extends OpenAICompatibleAdapter {
         unavailable: true,
         message:
           'Set "workspaceId" and "authCookie" in this key\'s metadata to enable quota display.',
-      }
+      };
     }
 
     if (!ctx.enabled) {
@@ -169,10 +202,10 @@ class OpenCodeGoAdapter extends OpenAICompatibleAdapter {
         windows: [],
         unavailable: true,
         message: "Key disabled — usage not queried.",
-      }
+      };
     }
 
-    let html: string
+    let html: string;
     try {
       const res = await ctx.request(WORKSPACE_URL(workspaceId), {
         method: "GET",
@@ -183,24 +216,24 @@ class OpenCodeGoAdapter extends OpenAICompatibleAdapter {
           accept: "text/html",
         },
         signal: ctx.signal,
-      })
+      });
       if (!res.ok) {
         return {
           windows: [],
           unavailable: true,
           message: `Dashboard returned HTTP ${res.status} — check workspaceId and authCookie.`,
-        }
+        };
       }
-      html = res.text
+      html = res.text;
     } catch (err) {
       return {
         windows: [],
         unavailable: true,
         message: `Scrape failed: ${(err as Error).message}`,
-      }
+      };
     }
 
-    const { rolling, weekly, monthly } = extractWindows(html)
+    const { rolling, weekly, monthly } = extractWindows(html);
 
     if (!rolling && !weekly && !monthly) {
       return {
@@ -208,18 +241,18 @@ class OpenCodeGoAdapter extends OpenAICompatibleAdapter {
         unavailable: true,
         message:
           "Could not parse quota data — page structure may have changed, or session expired.",
-      }
+      };
     }
 
-    const windows: ProviderKeyUsageWindow[] = []
-    const w1 = toWindow("rolling-5h", "Prompts (5h)", rolling)
-    if (w1) windows.push(w1)
-    const w2 = toWindow("weekly", "Prompts (weekly)", weekly)
-    if (w2) windows.push(w2)
-    const w3 = toWindow("monthly", "Prompts (monthly)", monthly)
-    if (w3) windows.push(w3)
+    const windows: ProviderKeyUsageWindow[] = [];
+    const w1 = toWindow("rolling-5h", "Prompts (5h)", rolling);
+    if (w1) windows.push(w1);
+    const w2 = toWindow("weekly", "Prompts (weekly)", weekly);
+    if (w2) windows.push(w2);
+    const w3 = toWindow("monthly", "Prompts (monthly)", monthly);
+    if (w3) windows.push(w3);
 
-    return { windows }
+    return { windows };
   }
 }
 
@@ -259,4 +292,4 @@ export const opencodeGo = new OpenCodeGoAdapter({
   quirks: {
     defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
   },
-})
+});
