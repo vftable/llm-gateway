@@ -200,7 +200,10 @@ export class ForwardingEngine {
 
   // --- chain + route --------------------------------------------------------
 
-  private buildChain(model: Model | null): ChainEntry[] {
+  private buildChain(
+    model: Model | null,
+    inputTokens?: number,
+  ): ChainEntry[] {
     if (!model) return [];
     const enabledProviders = new Map(
       listProviders(this.db, false).map((p) => [p.id, p]),
@@ -251,6 +254,7 @@ export class ForwardingEngine {
           ownTransforms: [],
         });
     }
+
     return chain;
   }
 
@@ -405,7 +409,7 @@ export class ForwardingEngine {
 
     let chain: ChainEntry[];
     try {
-      chain = this.buildChain(ctx.resolvedModel);
+      chain = this.buildChain(ctx.resolvedModel, ctx.inputTokens);
     } catch (err) {
       // A DB read while building the chain failed (e.g. SQLITE_BUSY). Fail the
       // request cleanly instead of letting the rejection escape to a 500.

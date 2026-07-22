@@ -24,6 +24,7 @@ interface ModelRow {
   responses_native: number;
   type: string;
   capabilities: string;
+  routing_strategy: string;
   sort_order: number;
   created_at: string;
   updated_at: string;
@@ -131,6 +132,7 @@ export interface ModelInput {
   responsesNative?: boolean;
   type?: string;
   capabilities?: ModelCapabilities;
+  routingStrategy?: "priority" | "quota_balanced";
   providers?: Array<{
     providerId: string;
     upstreamModel: string;
@@ -228,6 +230,7 @@ function writeModel(
     capabilities: JSON.stringify(
       stock?.capabilities ?? input.capabilities ?? DEFAULT_CAPABILITIES,
     ),
+    routing_strategy: input.routingStrategy ?? "priority",
     sort_order: 0,
     created_at: createdAt,
     updated_at: updatedAt,
@@ -236,9 +239,9 @@ function writeModel(
     db.prepare(
       `INSERT INTO models
         (id, alias, display_name, context_window, max_output_tokens, enabled,
-         responses_native, type, capabilities, sort_order, created_at, updated_at)
+         responses_native, type, capabilities, routing_strategy, sort_order, created_at, updated_at)
        VALUES (@id, @alias, @display_name, @context_window, @max_output_tokens,
-         @enabled, @responses_native, @type, @capabilities, @sort_order, @created_at, @updated_at)`,
+         @enabled, @responses_native, @type, @capabilities, @routing_strategy, @sort_order, @created_at, @updated_at)`,
     ).run(params);
   } else {
     db.prepare(
@@ -246,7 +249,7 @@ function writeModel(
          alias=@alias, display_name=@display_name, context_window=@context_window,
          max_output_tokens=@max_output_tokens, enabled=@enabled,
          responses_native=@responses_native, type=@type, capabilities=@capabilities,
-         updated_at=@updated_at
+         routing_strategy=@routing_strategy, updated_at=@updated_at
        WHERE id=@id`,
     ).run(params);
   }
