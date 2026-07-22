@@ -417,9 +417,9 @@ export function KeyUsageBlock({
         health?.dead && "border-destructive/40 bg-destructive/5",
         rateLimited && !health?.dead && "border-warning/40 bg-warning/5",
         !usage.enabled && !health?.dead && "opacity-60",
-        // Green ring wins visually over the border tint — the freshest key
-        // should read as "active now" even if it's also, say, disabled.
-        highlight && "border-success ring-1 ring-success",
+        // Softened green border + faint tint marks the freshest key as "active
+        // now" (wins over the other border tints) without a bright, thick ring.
+        highlight && "border-success/50 bg-success/5",
       )}
     >
       <div
