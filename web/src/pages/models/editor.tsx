@@ -486,6 +486,16 @@ export default function ModelEditor() {
                   const provider = providers.find(
                     (p) => p.id === row.providerId,
                   );
+                  // Options are the enabled providers, PLUS this row's own
+                  // provider when it's been since disabled — so a chain hop
+                  // pointing at a now-disabled provider still shows its name
+                  // (marked "(disabled)") instead of rendering blank and
+                  // silently dropping its target on save. New rows can still
+                  // only be pointed at enabled providers (addChainRow default).
+                  const rowProviderOptions =
+                    provider && !provider.enabled
+                      ? [...enabledProviders, provider]
+                      : enabledProviders;
                   const dragging = i === dragIndex;
                   const dropTarget =
                     dragIndex !== null && i === overIndex && i !== dragIndex;
@@ -546,9 +556,15 @@ export default function ModelEditor() {
                             <SelectValue placeholder="Select provider" />
                           </SelectTrigger>
                           <SelectContent>
-                            {enabledProviders.map((p) => (
+                            {rowProviderOptions.map((p) => (
                               <SelectItem key={p.id} value={p.id}>
-                                {p.name}
+                                {p.enabled ? (
+                                  p.name
+                                ) : (
+                                  <span className="text-muted-foreground">
+                                    {p.name} (disabled)
+                                  </span>
+                                )}
                               </SelectItem>
                             ))}
                           </SelectContent>

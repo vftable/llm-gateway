@@ -420,11 +420,25 @@ export class KeyHealthStore {
 
     const fresh = idx.filter(isFresh);
     if (fresh.length) {
+      // Within any fresh pool, cycle a key that has RECOVERED from an expired
+      // rate-limit / model cooldown back into rotation before spending a
+      // never-limited key — so a base-model request reuses a key whose 429 (or,
+      // for Fable/Mythos, whose 7d_oi window) has since reset instead of pulling
+      // a pristine one, and the recovered key gets used again the moment it's
+      // eligible. `isFresh` already excludes keys still cooling down (readyAt >
+      // now), so for Fable this never re-picks a key whose 7d_oi is still maxed.
+      const pick = (pool: number[]) =>
+        this.rrPick(
+          providerId,
+          this.preferRecovered(providerId, pool, hashes),
+          keys,
+          hashes,
+        );
       if (model) {
         const proven = fresh.filter((i) =>
           this.affinity.get(this.hk(providerId, hashes[i]))?.has(model),
         );
-        if (proven.length) return this.rrPick(providerId, proven, keys, hashes);
+        if (proven.length) return pick(proven);
 
         const modelClass = modelClassOf(model);
         if (modelClass) {
@@ -433,8 +447,7 @@ export class KeyHealthStore {
               .get(this.hk(providerId, hashes[i]))
               ?.has(modelClass),
           );
-          if (classProven.length)
-            return this.rrPick(providerId, classProven, keys, hashes);
+          if (classProven.length) return pick(classProven);
           // A premium-proven key is valid overflow for base traffic, but a
           // base-proven key is not evidence that the account has 7d_oi access.
           if (modelClass === "base") {
@@ -443,8 +456,7 @@ export class KeyHealthStore {
                 .get(this.hk(providerId, hashes[i]))
                 ?.has("fable"),
             );
-            if (premiumProven.length)
-              return this.rrPick(providerId, premiumProven, keys, hashes);
+            if (premiumProven.length) return pick(premiumProven);
           }
         }
       }
@@ -457,10 +469,9 @@ export class KeyHealthStore {
       const creditPref = fresh.filter((i) =>
         this.creditProven.has(this.hk(providerId, hashes[i])),
       );
-      if (creditPref.length)
-        return this.rrPick(providerId, creditPref, keys, hashes);
+      if (creditPref.length) return pick(creditPref);
 
-      return this.rrPick(providerId, fresh, keys, hashes);
+      return pick(fresh);
     }
 
     // No fresh key: try an untried non-auth-failed one (may be cooling down),
@@ -508,6 +519,38 @@ export class KeyHealthStore {
     }
     const cand = pool[0];
     return { key: keys[cand], keyHash: hashes[cand], index: cand };
+  }
+
+  // Narrow a fresh pool to keys that carry a lapsed cooldown — a rate limit or
+  // (for Fable/Mythos) a 7d_oi model cooldown that has since expired but whose
+  // marker hasn't been cleared by a subsequent success yet. These are keys the
+  // pool already burned once and that have recovered; reusing them before an
+  // untouched key concentrates load onto proven credentials and lets a
+  // recovered key re-enter rotation promptly. If none have recovered, the pool
+  // is returned unchanged (every key is pristine — nothing to prefer). The
+  // caller only passes FRESH indices, so any lapsed marker here is genuinely
+  // recovered (readyAt <= now); a still-active cooldown was already filtered out.
+  private preferRecovered(
+    providerId: string,
+    pool: number[],
+    hashes: string[],
+  ): number[] {
+    const recovered = pool.filter((i) =>
+      this.hasCooldownMarker(providerId, hashes[i]),
+    );
+    return recovered.length ? recovered : pool;
+  }
+
+  // Whether a key still carries a rate-limit or Fable 7d_oi model-cooldown
+  // marker (non-zero), whether or not it's expired. Paired with the caller's
+  // freshness check, a true here on a fresh key means "recovered" — the marker
+  // outlives its own expiry and is only zeroed by a later recordSuccess.
+  private hasCooldownMarker(providerId: string, keyHash: string): boolean {
+    if (this.getHealth(providerId, keyHash).rateLimitedUntil > 0) return true;
+    return (
+      (this.modelCooldowns.get(this.ck(providerId, keyHash, "fable"))
+        ?.cooldownUntil ?? 0) > 0
+    );
   }
 
   // A key served this model: clear any auth-fail flag, reset the failure

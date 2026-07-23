@@ -40,6 +40,17 @@ import {
 
 const PAGE_SIZE = 50;
 
+// Future-tense countdown for a throttle row's retry epoch (ms): "retry in 45s"
+// / "retry in 3m" — or "retry now" once it has lapsed (the row hasn't re-fetched
+// since the cooldown cleared). relTime is past-tense only, so this is separate.
+function retryHint(retryAtMs: number): string {
+  const s = Math.round((retryAtMs - Date.now()) / 1000);
+  if (s <= 0) return "retry now";
+  if (s < 60) return `retry in ${s}s`;
+  if (s < 3600) return `retry in ${Math.floor(s / 60)}m`;
+  return `retry in ${Math.floor(s / 3600)}h`;
+}
+
 export default function RequestLogs() {
   const [model, setModel] = useState("");
   const [errorsOnly, setErrorsOnly] = useState(false);
@@ -308,7 +319,14 @@ const LogRow = memo(function LogRow({
           </div>
         </TableCell>
         <TableCell className="text-right">
-          <StatusBadge status={l.status} />
+          <div className="flex flex-col items-end gap-0.5">
+            <StatusBadge status={l.status} throttled={l.throttled} />
+            {l.throttled && l.retryAt && (
+              <span className="text-[0.6rem] text-muted-foreground">
+                {retryHint(l.retryAt)}
+              </span>
+            )}
+          </div>
         </TableCell>
         <TableCell className="text-right tabular-nums text-muted-foreground">
           {l.inputTokens != null || l.outputTokens != null

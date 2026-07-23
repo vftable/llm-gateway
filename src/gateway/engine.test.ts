@@ -12,13 +12,13 @@ import type { AddressInfo } from "net";
 import { openDatabase, closeDatabase } from "../db";
 import { createProvider } from "../repo/providers";
 import { createModel, getModel } from "../repo/models";
-import { listRequestLogs } from "../repo/request-logs";
+import { listRequestLogs, getRequestLogDetail } from "../repo/request-logs";
 import { getUnifiedUsage } from "../repo/provider-key-usage";
 import { credHash, listProviderKeys } from "../repo/provider-keys";
 import { Logger } from "../logger";
 import { ThinkingConverter } from "../formats/thinking";
 import { ForwardingEngine, type ForwardContext } from "./engine";
-import { KeyHealthStore } from "./key-health";
+import { KeyHealthStore, hashKey } from "./key-health";
 import type { Model } from "../types";
 import { WireKind } from "../types";
 
@@ -64,6 +64,12 @@ function mockRes() {
           state.writableEnded = true;
         },
       };
+    },
+    // finishChainExhausted sets Retry-After before status().json() on the 503
+    // path; capture it into state.headers for assertions.
+    setHeader(name: string, value: unknown) {
+      state.headers[name] = value;
+      return res;
     },
     // Present in case a path reaches them; unused in the BigInt path.
     on() {
@@ -2051,7 +2057,15 @@ test("Claude Code 7d_oi exhaustion cools a key for Fable without blocking Opus",
         messages: [{ role: "user", content: "hi" }],
       }),
     );
-    assert.equal(fableRes.state.statusCode, 502);
+    // The only key's Fable class is now cooling down until 7d_oi resets — from
+    // the Fable request's view the whole (single-provider) chain is temporarily
+    // rate-limited, so it answers 503 + Retry-After (the reset), not a hard 502.
+    assert.equal(fableRes.state.statusCode, 503);
+    const fableRetryAfter = Number(fableRes.state.headers["Retry-After"]);
+    assert.ok(
+      fableRetryAfter >= 55 && fableRetryAfter <= 60,
+      `Retry-After ${fableRetryAfter} not ~60`,
+    );
 
     const health = new KeyHealthStore(db);
     assert.equal(
@@ -2216,6 +2230,163 @@ test("forward() reuses the same key across repeat requests for a model (sticky) 
       1,
       `expected one key reused for every request, got: ${seenKeys.join(", ")}`,
     );
+  } finally {
+    closeDatabase(db);
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+});
+
+test("fully rate-limited chain answers 503 + Retry-After (soonest key recovery)", async () => {
+  const db = openDatabase(":memory:");
+  try {
+    const model = seededModel(db); // provider "p", key "k1"
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const keyHealth = (engine as unknown as { keyHealth: KeyHealthStore })
+      .keyHealth;
+    // The provider's only key is cooling down → no usable key. No network call
+    // happens (the pre-attempt guard fires), so this is deterministic.
+    keyHealth.markRateLimited("p", hashKey("k1"), 60_000);
+    const { res, state } = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(model, {
+        model: "test-model",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
+    assert.equal(state.statusCode, 503);
+    const retryAfter = Number(state.headers["Retry-After"]);
+    // ceil(60s) — allow a little slop for test execution time.
+    assert.ok(
+      retryAfter >= 55 && retryAfter <= 60,
+      `Retry-After ${retryAfter} not ~60`,
+    );
+    const body = state.body as { error?: { type?: string } };
+    assert.equal(body.error?.type, "rate_limited");
+    // The final log row carries the 503 and is flagged as a transient throttle
+    // (marker-tagged error) with a future retry epoch — not a hard error.
+    const row = listRequestLogs(db)[0]!;
+    assert.equal(row.status, 503);
+    assert.equal(row.throttled, true);
+    assert.ok(
+      row.retryAt && row.retryAt > Date.now(),
+      "retryAt is in the future",
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("chain exhausted by auth-failed (not rate-limited) keys still answers 502", async () => {
+  const db = openDatabase(":memory:");
+  try {
+    const model = seededModel(db);
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const keyHealth = (engine as unknown as { keyHealth: KeyHealthStore })
+      .keyHealth;
+    // Dead key (no recovery time) → not a transient rate-limit → plain 502.
+    keyHealth.markAuthFailed("p", hashKey("k1"), 401, "bad key");
+    const { res, state } = mockRes();
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctxFor(model, {
+        model: "test-model",
+        messages: [{ role: "user", content: "hi" }],
+      }),
+    );
+    assert.equal(state.statusCode, 502);
+    assert.equal(state.headers["Retry-After"], undefined);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("debug capture logs the upstream-converted body, not the raw client body", async () => {
+  // A Messages-shaped client request routed to an OpenAI (Chat) provider: the
+  // debug_request must reflect what the provider actually received (Chat shape:
+  // system folded into a leading system message, upstream model id stamped),
+  // not the client's original Messages shape (top-level `system`).
+  const server = http.createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "x",
+          usage: { prompt_tokens: 3, completion_tokens: 5 },
+        }),
+      );
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const port = (server.address() as AddressInfo).port;
+
+  const db = openDatabase(":memory:");
+  try {
+    createProvider(db, {
+      id: "up",
+      name: "up",
+      baseUrl: `http://127.0.0.1:${port}`,
+      apiKeys: ["k-secret"],
+      catalogId: "openai",
+      authScheme: "bearer",
+      retryAttempts: 1,
+    });
+    const created = createModel(db, {
+      alias: "test-model",
+      providers: [{ providerId: "up", upstreamModel: "up-1" }],
+    });
+    const model = getModel(db, created.id)!;
+    const engine = new ForwardingEngine(
+      db,
+      quietLogger(),
+      new ThinkingConverter(),
+      0,
+    );
+    const { res } = mockRes();
+    // debug on, and a Messages client body (top-level system + user turn).
+    const ctx: ForwardContext = {
+      ...ctxFor(
+        model,
+        {
+          model: "test-model",
+          system: "you are helpful",
+          messages: [{ role: "user", content: "hi" }],
+        },
+        "/v1/messages",
+      ),
+      debug: true,
+    };
+    await engine.forward(
+      { method: "POST", headers: {} } as never,
+      res as never,
+      ctx,
+    );
+
+    const logId = listRequestLogs(db)[0]!.id;
+    const detail = getRequestLogDetail(db, logId)!;
+    const captured = JSON.parse(detail.request!) as {
+      model?: string;
+      system?: unknown;
+      messages?: Array<{ role?: string }>;
+    };
+    // Converted Chat shape: upstream model id stamped, `system` folded into a
+    // leading system message (so no top-level system), NOT the raw Messages body.
+    assert.equal(captured.model, "up-1");
+    assert.equal(captured.system, undefined);
+    assert.equal(captured.messages?.[0]?.role, "system");
   } finally {
     closeDatabase(db);
     await new Promise<void>((r) => server.close(() => r()));

@@ -269,7 +269,7 @@ function ErrorLogRow({ log: l }: { log: RequestLog }) {
           {l.model ?? "—"}
         </TableCell>
         <TableCell className="text-right">
-          <StatusBadge status={l.status} />
+          <StatusBadge status={l.status} throttled={l.throttled} />
         </TableCell>
         <TableCell className="text-right tabular-nums text-muted-foreground">
           {fmtLatency(l.latencyMs)}

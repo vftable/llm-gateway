@@ -54,4 +54,10 @@ export interface RequestLog {
   error: string | null;
   /** True when captured request/response debug payloads exist for this row. */
   hasDebug: boolean;
+  /** True when this is a transient gateway throttle 503 (whole chain
+   *  rate-limited), not a real failure — the UI badges it amber. Absent/false
+   *  for every other row. */
+  throttled?: boolean;
+  /** Epoch ms when the soonest rate-limited key frees up (throttle rows only). */
+  retryAt?: number;
 }

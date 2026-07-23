@@ -6,6 +6,8 @@ import {
   insertRequestLog,
   listRequestLogs,
   lastUsedByKey,
+  dashboardStats,
+  throttleLogError,
 } from "./request-logs";
 
 // Insert a log row with an explicit ts + status so MAX(ts) ordering and the
@@ -101,6 +103,94 @@ test("lastUsedByKey returns the newest ts per key, any status, scoped to provide
     assert.equal(map.get("hashA"), "2026-07-22T08:30:00.000Z");
     assert.equal(map.get("hashB"), "2026-07-21T12:00:00.000Z");
     assert.equal(map.size, 2);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("dashboardStats excludes throttle 503s from errors, 5xx band, and error rate", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const retryAt = Date.now() + 60_000;
+    // 2 successes, 1 real 500, 1 gateway throttle 503 (marker-tagged).
+    insertRequestLog(db, {
+      ...base,
+      upstreamKeyHash: null,
+      upstreamKeyMask: null,
+    });
+    insertRequestLog(db, {
+      ...base,
+      upstreamKeyHash: null,
+      upstreamKeyMask: null,
+    });
+    insertRequestLog(db, {
+      ...base,
+      status: 500,
+      error: "boom",
+      upstreamKeyHash: null,
+      upstreamKeyMask: null,
+    });
+    insertRequestLog(db, {
+      ...base,
+      status: 503,
+      error: throttleLogError(retryAt, "all 1 enabled key(s) rate-limited"),
+      upstreamKeyHash: null,
+      upstreamKeyMask: null,
+    });
+
+    const s = dashboardStats(db);
+    assert.equal(s.requestsToday, 4);
+    // Only the real 500 counts as an error; the throttle is excluded.
+    assert.equal(s.requestsErrorToday, 1);
+    assert.equal(s.throttledToday, 1);
+    // 5xx band excludes the throttle (just the 500).
+    assert.equal(s.statusBands.serverError, 1);
+    // Error rate denominator drops the throttle: 1 error / (4 - 1) = 33.3%.
+    assert.ok(
+      Math.abs(s.errorRateToday - (1 / 3) * 100) < 0.01,
+      `errorRate ${s.errorRateToday} not ~33.3`,
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("a genuine upstream 503 (no marker) still counts as a server error", () => {
+  const db = openDatabase(":memory:");
+  try {
+    insertRequestLog(db, {
+      ...base,
+      status: 503,
+      error: "upstream 503", // NOT the throttle marker
+      upstreamKeyHash: null,
+      upstreamKeyMask: null,
+    });
+    const s = dashboardStats(db);
+    assert.equal(s.requestsErrorToday, 1);
+    assert.equal(s.throttledToday, 0);
+    assert.equal(s.statusBands.serverError, 1);
+    // And the mapped row is NOT flagged as a throttle.
+    assert.equal(listRequestLogs(db)[0]?.throttled ?? false, false);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("listRequestLogs maps a throttle 503 to throttled + retryAt", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const retryAt = Date.now() + 30_000;
+    insertRequestLog(db, {
+      ...base,
+      status: 503,
+      error: throttleLogError(retryAt, "all keys rate-limited"),
+      upstreamKeyHash: null,
+      upstreamKeyMask: null,
+    });
+    const [row] = listRequestLogs(db);
+    assert.equal(row.throttled, true);
+    // Millisecond epoch round-trips (throttleLogError rounds to whole ms).
+    assert.equal(row.retryAt, Math.round(retryAt));
   } finally {
     closeDatabase(db);
   }

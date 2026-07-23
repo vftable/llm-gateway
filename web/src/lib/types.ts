@@ -499,6 +499,11 @@ export interface RequestLog {
   stream: boolean;
   error: string | null;
   hasDebug: boolean;
+  /** Transient gateway throttle 503 (whole chain rate-limited) — badged amber,
+   *  not counted as an error. Absent/false for every other row. */
+  throttled?: boolean;
+  /** Epoch ms when the soonest rate-limited key frees up (throttle rows only). */
+  retryAt?: number;
 }
 
 export interface RequestLogDetail {
@@ -522,6 +527,9 @@ export interface KeyStat {
 export interface DashboardStats {
   requestsToday: number;
   requestsErrorToday: number;
+  /** Gateway throttle 503s today (whole chain temporarily rate-limited) —
+   *  transient, excluded from requestsErrorToday and the error rate. */
+  throttledToday: number;
   tokensToday: number;
   errorRateToday: number;
   byModel: Array<{

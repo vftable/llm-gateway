@@ -12,11 +12,25 @@ export function fmtLatency(ms: number | null): string {
   return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)}s`;
 }
 
-export function StatusBadge({ status }: { status: number | null }) {
+export function StatusBadge({
+  status,
+  throttled = false,
+}: {
+  status: number | null;
+  throttled?: boolean;
+}) {
   if (status == null)
     return (
       <Badge variant="secondary" className={cn("tabular-nums")}>
         —
+      </Badge>
+    );
+  // A gateway throttle 503 is a transient rate-limit, not a failure — badge it
+  // amber ("warning") with a label, so it never reads as a red 5xx error.
+  if (throttled)
+    return (
+      <Badge variant="warning" className="tabular-nums">
+        {status} throttled
       </Badge>
     );
   const variant =

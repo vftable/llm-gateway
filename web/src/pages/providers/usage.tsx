@@ -44,9 +44,16 @@ const KEYS_PER_PAGE = 6;
 
 // A key sitting in a 429 cooldown. Dead (auth-failed) keys never reach the
 // client — they're filtered server-side — so a live rate-limit is the only
-// health state this gate needs to consider.
+// health state this gate needs to consider. The server only sends
+// rateLimitedUntil while the cooldown is still live, but this list can go stale
+// between refreshes — re-check the timestamp locally so a cooldown that lapses
+// after the last fetch stops counting as rate-limited (dropping the key out of
+// the hidden/"show rate-limited" set) the moment the client's own clock says
+// it's over, instead of waiting for the next reload. Mirrors the same guard in
+// provider-key-manager's row status.
 export function isRateLimited(key: ProviderKeyUsage): boolean {
-  return !!key.health?.rateLimitedUntil;
+  const until = key.health?.rateLimitedUntil;
+  return !!until && new Date(until).getTime() > Date.now();
 }
 
 // Order keys most-recently-used first (by lastUsedAt), so the freshest key —
@@ -406,9 +413,12 @@ export function KeyUsageBlock({
   highlight?: boolean;
 }) {
   const health = usage.health;
-  const rateLimited = !!health?.rateLimitedUntil;
+  // Re-check the timestamp (not just its presence) so a cooldown that lapsed
+  // between refreshes stops tinting the block amber / showing the badge —
+  // consistent with the isRateLimited() gate that hides these keys.
+  const rateLimited = isRateLimited(usage);
   const healthNote = rateLimited
-    ? `Rate-limited — ${resetLabel(health.rateLimitedUntil!)}`
+    ? `Rate-limited — ${resetLabel(health!.rateLimitedUntil!)}`
     : null;
   return (
     <div
@@ -439,7 +449,7 @@ export function KeyUsageBlock({
         <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
           {rateLimited && !health?.dead && (
             <Badge variant="warning">
-              Resets {relativeTime(health.rateLimitedUntil!)}
+              Resets {relativeTime(health!.rateLimitedUntil!)}
             </Badge>
           )}
           {usage.expiresAt && <ExpiryBadge expiresAt={usage.expiresAt} />}

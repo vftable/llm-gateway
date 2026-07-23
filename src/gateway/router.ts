@@ -236,6 +236,18 @@ export class GatewayRouter {
                 projected,
                 limit: apiKey.tokensPerDay,
               });
+              // Every 429 the gateway returns carries a Retry-After so clients
+              // back off precisely — here, seconds until the daily quota resets
+              // at UTC midnight (floor 1s).
+              res.setHeader(
+                "Retry-After",
+                String(
+                  Math.max(
+                    1,
+                    Math.ceil((resetsAt.getTime() - Date.now()) / 1000),
+                  ),
+                ),
+              );
               return res.status(429).json({
                 error: {
                   type: "usage_limit_reached",

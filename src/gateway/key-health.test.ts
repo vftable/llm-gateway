@@ -541,6 +541,76 @@ test("markAuthFailed accumulates a lifetime count that survives recordSuccess", 
   }
 });
 
+test("a recovered (expired rate-limit) key is reused before a pristine key", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const clk = clock();
+    const store = new KeyHealthStore(db, clk.now);
+    // "a" gets rate-limited, then its cooldown lapses. Its marker survives (no
+    // success cleared it), so it's a recovered key — preferred over pristine "b"
+    // for a base model instead of burning the untouched key.
+    store.markRateLimited(p.id, hashKey("a"), 60_000);
+    clk.advance(61_000);
+    const picks = [
+      store.select(p.id, p.keys, "claude-sonnet-5", new Set())!.key,
+      store.select(p.id, p.keys, "claude-sonnet-5", new Set())!.key,
+    ];
+    assert.deepEqual(picks, ["a", "a"]);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("a recovered Fable 7d_oi key re-enters rotation once its window resets", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const clk = clock();
+    const store = new KeyHealthStore(db, clk.now);
+    // "a" maxes its 7d_oi window (model-scoped Fable cooldown). While cooling
+    // down, Fable traffic avoids it; once the window resets it's the recovered
+    // key and is preferred back into rotation over pristine "b".
+    store.markModelCooldown(p.id, hashKey("a"), "fable", 60_000, 429, "7d_oi");
+    assert.equal(
+      store.select(p.id, p.keys, "claude-fable-5", new Set())!.key,
+      "b",
+    );
+    clk.advance(61_000);
+    const picks = [
+      store.select(p.id, p.keys, "claude-fable-5", new Set())!.key,
+      store.select(p.id, p.keys, "claude-fable-5", new Set())!.key,
+    ];
+    assert.deepEqual(picks, ["a", "a"]);
+  } finally {
+    closeDatabase(db);
+  }
+});
+
+test("recovery preference does not resurrect a still-maxed Fable key", () => {
+  const db = openDatabase(":memory:");
+  try {
+    const p = provider(db, ["a", "b"]);
+    const clk = clock();
+    const store = new KeyHealthStore(db, clk.now);
+    // "a" is still inside its 7d_oi cooldown — not fresh, so never preferred as
+    // "recovered". Fable traffic must stay on pristine "b".
+    store.markModelCooldown(p.id, hashKey("a"), "fable", 60_000, 429, "7d_oi");
+    assert.equal(
+      store.select(p.id, p.keys, "claude-fable-5", new Set())!.key,
+      "b",
+    );
+    // A base model, however, is unaffected by the Fable cooldown: "a" is fresh
+    // there, and its lapsed-marker status makes it the recovered pick.
+    assert.equal(
+      store.select(p.id, p.keys, "claude-opus-4-8", new Set())!.key,
+      "a",
+    );
+  } finally {
+    closeDatabase(db);
+  }
+});
+
 test("credit-proven keys get preference in the fresh pool", () => {
   const db = openDatabase(":memory:");
   try {

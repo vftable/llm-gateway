@@ -102,7 +102,11 @@ export default function Dashboard() {
         <Stat
           label="Error rate"
           value={`${s.errorRateToday.toFixed(1)}%`}
-          hint={`${fmtNum(s.requestsErrorToday)} failed`}
+          hint={
+            s.throttledToday > 0
+              ? `${fmtNum(s.requestsErrorToday)} failed · ${fmtNum(s.throttledToday)} throttled`
+              : `${fmtNum(s.requestsErrorToday)} failed`
+          }
           accent={s.errorRateToday > 5}
         />
         <Stat
@@ -115,13 +119,19 @@ export default function Dashboard() {
         />
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         <Stat label="Providers" value={fmtNum(data.providers)} />
         <Stat label="Models" value={fmtNum(data.models)} />
         <Stat label="Active keys" value={fmtNum(data.keys)} />
         <Stat
           label="HTTP 5xx today"
           value={fmtNum(s.statusBands.serverError)}
+        />
+        <Stat
+          label="Throttled today"
+          value={fmtNum(s.throttledToday)}
+          hint="rate-limited (transient)"
+          accent={s.throttledToday > 0}
         />
       </div>
 

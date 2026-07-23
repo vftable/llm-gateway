@@ -77,7 +77,7 @@ import { stripInvisible } from "../utils";
 import { readResponseUsage } from "../formats/tokens";
 import { listProviders } from "../repo/providers";
 import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
-import { insertRequestLog } from "../repo/request-logs";
+import { insertRequestLog, throttleLogError } from "../repo/request-logs";
 import { upsertUnifiedUsage } from "../repo/provider-key-usage";
 import { filterUnifiedRateLimitHeaders } from "../services/anthropic/unified-usage";
 import { classifyAnthropicRateLimit } from "../services/anthropic/rate-limit-scope";
@@ -458,6 +458,19 @@ export class ForwardingEngine {
 
     let lastReason = "no attempts";
     let first: ChainEntry | null = null;
+    // Soonest epoch-ms at which ANY hop's key pool frees up, folded across every
+    // hop that failed over purely because all its keys were rate-limited (not
+    // auth-failed/dead). When the whole chain is exhausted this way it's a
+    // temporary condition, not a hard error: forward() ends with 503 +
+    // Retry-After pointing here, rather than a generic 502. Stays null if any
+    // exhaustion was for a non-rate-limit reason (dead keys, build failures).
+    let earliestRetryAt: number | null = null;
+    const foldRetryAt = (at: number | null): void => {
+      if (at && at > Date.now()) {
+        earliestRetryAt =
+          earliestRetryAt === null ? at : Math.min(earliestRetryAt, at);
+      }
+    };
     for (const entry of chain) {
       if (!first) first = entry;
       let route: Route;
@@ -521,6 +534,7 @@ export class ForwardingEngine {
         lastReason = nextReadyAt
           ? `all ${providerKeys.length} enabled key(s) rate-limited until ${new Date(nextReadyAt).toISOString()}`
           : `all ${providerKeys.length} enabled key(s) unavailable`;
+        foldRetryAt(nextReadyAt);
         this.logger.warn("provider_keys_exhausted", {
           provider: entry.provider.id,
           model: entry.upstreamModel,
@@ -722,6 +736,7 @@ export class ForwardingEngine {
           lastReason = nextReadyAt
             ? `all ${providerKeys.length} enabled key(s) rate-limited until ${new Date(nextReadyAt).toISOString()}`
             : `all ${providerKeys.length} enabled key(s) dead/unavailable`;
+          foldRetryAt(nextReadyAt);
         }
         const more = normalAttempts < attempts && !exhaustedThisProvider;
         this.logger.warn("provider_attempt_failed", {
@@ -741,8 +756,16 @@ export class ForwardingEngine {
       }
     }
 
-    if (!res.headersSent && !res.writableEnded)
-      this.finish502(res, `All providers failed (last reason: ${lastReason}).`);
+    // Every hop that failed over did so because its keys were rate-limited (not
+    // dead/misconfigured) → the chain is temporarily saturated, not broken.
+    // Answer 503 + Retry-After (soonest key recovery) so the client backs off
+    // and retries instead of treating it as a hard upstream failure. Otherwise
+    // fall back to the generic 502.
+    const { status, logError } = this.finishChainExhausted(
+      res,
+      earliestRetryAt,
+      lastReason,
+    );
     // No upstream usage to apply — release the reservation so a failed request
     // doesn't permanently inflate the key's daily counter.
     this.settleUsage(ctx, first?.provider ?? null, {});
@@ -750,13 +773,53 @@ export class ForwardingEngine {
       ctx,
       first?.provider ?? null,
       first?.upstreamModel ?? null,
-      502,
+      status,
       ctx.inputTokens || null,
       null,
       null,
-      lastReason,
+      logError,
       startedAt,
     );
+  }
+
+  // Terminate a request whose whole provider chain failed. When `retryAt` is a
+  // future epoch-ms (every exhausted hop was rate-limited, nothing dead), answer
+  // 503 + Retry-After so the caller knows this is transient and when to retry;
+  // otherwise 502. Returns the status actually sent AND the string to store as
+  // the log row's `error` — for the 503 that's the throttle marker (carrying the
+  // retry epoch) so the dashboard/logs can tell a transient throttle from a real
+  // 5xx (see request-logs throttleLogError). The status is still returned when
+  // headers were already flushed, so the log row reflects intent. Mirrors
+  // finish502's headers-sent guard.
+  private finishChainExhausted(
+    res: Response,
+    retryAt: number | null,
+    lastReason: string,
+  ): { status: number; logError: string } {
+    const now = Date.now();
+    if (retryAt !== null && retryAt > now) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((retryAt - now) / 1000));
+      if (!res.headersSent && !res.writableEnded) {
+        res.setHeader("Retry-After", String(retryAfterSeconds));
+        res.status(503).json({
+          error: {
+            type: "rate_limited",
+            message: `All providers rate-limited; retry after ${new Date(retryAt).toISOString()} (${lastReason}).`,
+            source: "gateway",
+            retry_after_seconds: retryAfterSeconds,
+          },
+        });
+      } else if (!res.writableEnded) {
+        try {
+          res.end();
+        } catch {
+          /* noop */
+        }
+      }
+      return { status: 503, logError: throttleLogError(retryAt, lastReason) };
+    }
+    this.finish502(res, `All providers failed (last reason: ${lastReason}).`);
+    return { status: 502, logError: lastReason };
   }
 
   private finish502(res: Response, message: string): void {
@@ -877,6 +940,20 @@ export class ForwardingEngine {
         ...built.headers,
         "content-length": String(serialized.length),
       };
+      // Debug capture reflects what the PROVIDER actually received, not the raw
+      // client body: re-distill from the converted+built body (Messages/Chat/
+      // Responses — captureRequest branches on shape). Overwrites the up-front
+      // client-body capture (forward()); on failover the last attempt's body
+      // wins, matching the provider the log row attributes. Never throws into
+      // the attempt. Both recordLog sites (buffered + streaming settle) read
+      // ctx.debugRequest, so this flows to both with no signature change.
+      if (ctx.debug) {
+        try {
+          ctx.debugRequest = captureRequest(built.body);
+        } catch {
+          /* keep the up-front client-body capture as fallback */
+        }
+      }
     } catch (err) {
       return {
         committed: false,

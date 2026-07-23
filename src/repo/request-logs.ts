@@ -5,6 +5,42 @@
 import type { Database as DB } from "better-sqlite3";
 import type { RequestLog } from "../types";
 
+// Canonical marker the engine stamps on the `error` of a gateway-generated
+// "whole chain is temporarily rate-limited" 503 (see engine.ts
+// finishChainExhausted). It's code-owned — never sourced from an upstream body
+// — so matching on it reliably distinguishes a transient throttle from a real
+// 5xx failure, WITHOUT coupling to the fact that 503 happens to be in
+// RETRY_STATUS. The retry epoch (ms) is embedded so the row can show a
+// countdown: `throttled:<epochMs>: <human reason>`.
+export const THROTTLE_MARKER = "throttled:";
+
+// Build the `error` string stored for a throttle 503. `retryAtMs` is the epoch
+// ms when the soonest key frees up; `reason` is the operator-facing detail.
+export function throttleLogError(retryAtMs: number, reason: string): string {
+  return `${THROTTLE_MARKER}${Math.round(retryAtMs)}: ${reason}`;
+}
+
+// Parse a log row's (status, error) into throttle state. A row is "throttled"
+// only when it's a 503 carrying the marker — a genuine upstream/gateway 5xx is
+// never mistaken for one. Returns the retry epoch (ms) when present.
+export function parseThrottle(
+  status: number | null,
+  error: string | null,
+): { throttled: boolean; retryAt: number | null } {
+  if (status !== 503 || !error || !error.startsWith(THROTTLE_MARKER))
+    return { throttled: false, retryAt: null };
+  const rest = error.slice(THROTTLE_MARKER.length);
+  const ms = Number.parseInt(rest, 10);
+  return { throttled: true, retryAt: Number.isFinite(ms) ? ms : null };
+}
+
+// SQL fragment identifying a throttle 503 row (marker-tagged). Shared by the
+// dashboard aggregates so a throttle is uniformly excluded from error/5xx
+// counts. `error` is the request_logs column (optionally aliased).
+function throttleSql(col = "error"): string {
+  return `(status = 503 AND ${col} LIKE '${THROTTLE_MARKER}%')`;
+}
+
 interface LogRow {
   id: number;
   ts: string;
@@ -60,6 +96,17 @@ function mapLog(r: LogRow): RequestLog {
     // Flag only — the heavy request/response blobs are fetched on demand via
     // getRequestLogDetail so the list stays light.
     hasDebug: !!(r.debug_request || r.debug_response),
+    // A transient "whole chain rate-limited" 503 (not a real failure): the UI
+    // badges it amber and shows the retry countdown instead of a red error.
+    ...(() => {
+      const t = parseThrottle(r.status, r.error);
+      return t.throttled
+        ? {
+            throttled: true as const,
+            ...(t.retryAt ? { retryAt: t.retryAt } : {}),
+          }
+        : {};
+    })(),
   };
 }
 
@@ -296,6 +343,9 @@ export function lastUsedByKey(db: DB, providerId: string): Map<string, string> {
 export interface DashboardStats {
   requestsToday: number;
   requestsErrorToday: number;
+  /** Gateway throttle 503s today (whole chain temporarily rate-limited) —
+   *  transient, excluded from requestsErrorToday and the error rate. */
+  throttledToday: number;
   tokensToday: number;
   errorRateToday: number;
   byModel: Array<{
@@ -316,20 +366,26 @@ export interface DashboardStats {
 
 export function dashboardStats(db: DB): DashboardStats {
   const today = new Date().toISOString().slice(0, 10);
+  // A gateway throttle 503 (whole chain temporarily rate-limited) is a
+  // transient, retryable condition, NOT a failure — exclude it from the error
+  // rate and the 5xx band, and surface it in its own `throttledToday` count.
+  const throttle = throttleSql();
   const agg = db
     .prepare(
       `SELECT
          COUNT(*) AS requests,
-         COALESCE(SUM(CASE WHEN status IS NULL OR status >= 400 THEN 1 ELSE 0 END), 0) AS errors,
+         COALESCE(SUM(CASE WHEN (status IS NULL OR status >= 400) AND NOT ${throttle} THEN 1 ELSE 0 END), 0) AS errors,
+         COALESCE(SUM(CASE WHEN ${throttle} THEN 1 ELSE 0 END), 0) AS throttled,
          COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0) AS tokens,
          COALESCE(SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END), 0) AS success,
          COALESCE(SUM(CASE WHEN status >= 400 AND status < 500 THEN 1 ELSE 0 END), 0) AS clientErr,
-         COALESCE(SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END), 0) AS serverErr
+         COALESCE(SUM(CASE WHEN status >= 500 AND NOT ${throttle} THEN 1 ELSE 0 END), 0) AS serverErr
        FROM request_logs WHERE date(ts) = @today`,
     )
     .get({ today }) as {
     requests: number;
     errors: number;
+    throttled: number;
     tokens: number;
     success: number;
     clientErr: number;
@@ -387,11 +443,16 @@ export function dashboardStats(db: DB): DashboardStats {
   }
 
   const req = agg.requests || 0;
+  // Throttles aren't failures and aren't successes either — exclude them from
+  // the error-rate denominator so a burst of rate-limiting doesn't distort the
+  // rate in either direction.
+  const rateDenom = req - (agg.throttled || 0);
   return {
     requestsToday: req,
     requestsErrorToday: agg.errors || 0,
+    throttledToday: agg.throttled || 0,
     tokensToday: agg.tokens || 0,
-    errorRateToday: req ? (agg.errors / req) * 100 : 0,
+    errorRateToday: rateDenom > 0 ? (agg.errors / rateDenom) * 100 : 0,
     byModel,
     byProvider,
     statusBands: {
