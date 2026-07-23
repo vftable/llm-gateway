@@ -429,7 +429,7 @@ export function KeyUsageBlock({
         !usage.enabled && !health?.dead && "opacity-60",
         // Softened green border + faint tint marks the freshest key as "active
         // now" (wins over the other border tints) without a bright, thick ring.
-        highlight && "border-success/50 bg-success/5",
+        highlight && "border-success/25",
       )}
     >
       <div
