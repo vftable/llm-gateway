@@ -82,9 +82,16 @@ export function createServerApp(
       path.join(opts.webDistDir, "index.html"),
       "utf8",
     );
-    if (base !== "/") {
-      indexHtml = indexHtml.replace("<head>", `<head><base href="${base}">`);
-    }
+    // Always inject <base href>, including when base is "/". The production
+    // build uses relative asset URLs (./assets/…); without a base tag those
+    // resolve against the current document path, so a refresh on a nested
+    // SPA route (e.g. /providers/abc) looks for /providers/assets/… and
+    // fails. document.baseURI also feeds BrowserRouter's basename via
+    // webBase(), so a missing tag corrupts routing depth under nested URLs.
+    indexHtml = indexHtml.replace(
+      /<head(\s[^>]*)?>/i,
+      (m) => `${m}<base href="${base}">`,
+    );
     const sendIndex = (_req: express.Request, res: express.Response) =>
       res.type("html").send(indexHtml);
 
