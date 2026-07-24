@@ -32,7 +32,7 @@
   "_disabledApiKeyMessage_comment": "Anthropic-compatible authentication_error message returned when a known gateway API key exists but is disabled/revoked.",
   "disabledApiKeyMessage": "Your API key was revoked. Please contact your gateway's administrator for help.",
 
-  "_webTools_comment": "Back Anthropic's hosted web_search/web_fetch tools with a pluggable web provider so they work against any upstream model. enabled=turn on; provider=backend id (currently 'firecrawl'); baseUrl blank = provider default; apiKey blank = keyless where supported (Firecrawl's public API rejects some IPs without a key — get a free one at firecrawl.dev).",
+  "_webTools_comment": "Back Anthropic's hosted web_search/web_fetch tools with a pluggable web provider so they work against any upstream model. enabled=turn on; provider=backend id ('firecrawl', 'brave', 'searxng'); baseUrl blank = provider default (searxng REQUIRES a baseUrl — point it at your instance, e.g. http://localhost:8080); apiKey blank = keyless where supported (Firecrawl's public API rejects some IPs without a key — get a free one at firecrawl.dev).",
   "webTools": {
     "enabled": false,
     "provider": "firecrawl",

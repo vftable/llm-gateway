@@ -13,11 +13,13 @@ import type {
 } from "./types";
 import { createFirecrawlProvider } from "./firecrawl";
 import { createBraveProvider } from "./brave";
+import { createSearxngProvider } from "./searxng";
 
 // The one place providers are wired in. Add a line here to drop in a backend.
 const PROVIDERS: Record<string, WebProviderFactory> = {
   firecrawl: createFirecrawlProvider,
   brave: createBraveProvider,
+  searxng: createSearxngProvider,
   // tavily: createTavilyProvider,
 };
 
