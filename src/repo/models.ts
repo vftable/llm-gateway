@@ -456,6 +456,7 @@ export function batchModelLinks(
       ordered.forEach((link, priority) =>
         setPriority.run(priority, modelId, link.providerId, link.upstreamModel),
       );
+      result.reordered = ops.reorder.length;
     } else if ((ops.add?.length ?? 0) + (ops.remove?.length ?? 0) > 0) {
       // Compact priorities after structural edits.
       current = getModel(db, modelId)!.providers;

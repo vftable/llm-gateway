@@ -190,12 +190,24 @@ export class SseUsageObserver extends Transform {
   private readUsage(u: unknown): void {
     if (!u || typeof u !== "object") return;
     const o = u as Record<string, unknown>;
-    const input = num(o.input_tokens) ?? num(o.prompt_tokens) ?? null;
+    let input = num(o.input_tokens) ?? num(o.prompt_tokens) ?? null;
     const output = num(o.output_tokens) ?? num(o.completion_tokens) ?? null;
+    const cached = readCachedTokens(o);
+    // Anthropic's input_tokens excludes cached tokens. Normalise so `input`
+    // always means "total input including cached" — the convention
+    // computeCostUsd expects. For OpenAI, prompt_tokens already includes
+    // cached, so only add when detecting the Anthropic shape.
+    if (
+      input != null &&
+      cached != null &&
+      typeof o.input_tokens === "number" &&
+      typeof o.cache_read_input_tokens === "number"
+    ) {
+      input = input + cached;
+    }
     if (input != null) this.seenInput = Math.max(this.seenInput ?? 0, input);
     if (output != null)
       this.seenOutput = Math.max(this.seenOutput ?? 0, output);
-    const cached = readCachedTokens(o);
     if (cached != null)
       this.seenCached = Math.max(this.seenCached ?? 0, cached);
   }

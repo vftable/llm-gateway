@@ -132,6 +132,8 @@ test("reads cached tokens via readCachedTokens (Anthropic + OpenAI shapes)", () 
     }),
   ]);
   assert.equal(anthropic.usage(0).cached, 4);
+  // Anthropic's input_tokens excludes cached; normalised to total = 10 + 4.
+  assert.equal(anthropic.usage(0).input, 14);
 
   const openai = new SseUsageObserver();
   feed(openai, [
@@ -143,6 +145,8 @@ test("reads cached tokens via readCachedTokens (Anthropic + OpenAI shapes)", () 
     }),
   ]);
   assert.equal(openai.usage(0).cached, 6);
+  // OpenAI's prompt_tokens already includes cached — no addition.
+  assert.equal(openai.usage(0).input, 10);
 });
 
 test("cached is omitted from usage() when never reported", () => {

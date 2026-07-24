@@ -169,7 +169,7 @@ test("readResponseUsage: no usage field / non-object body -> {}", () => {
   assert.deepEqual(readResponseUsage({ usage: "not an object" }), {});
 });
 
-test("readResponseUsage: includes cached tokens when present", () => {
+test("readResponseUsage: Anthropic cached tokens folded into input total", () => {
   const usage = readResponseUsage({
     usage: {
       input_tokens: 20,
@@ -177,7 +177,22 @@ test("readResponseUsage: includes cached tokens when present", () => {
       cache_read_input_tokens: 15,
     },
   });
-  assert.deepEqual(usage, { input: 20, output: 8, cached: 15 });
+  // input = input_tokens + cache_read_input_tokens = 35 (total including cached).
+  // computeCostUsd subtracts cached from input to derive the uncached billable
+  // portion, so input must include cached or the subtraction double-counts.
+  assert.deepEqual(usage, { input: 35, output: 8, cached: 15 });
+});
+
+test("readResponseUsage: OpenAI cached tokens already included in prompt_tokens", () => {
+  const usage = readResponseUsage({
+    usage: {
+      prompt_tokens: 100,
+      completion_tokens: 20,
+      prompt_tokens_details: { cached_tokens: 60 },
+    },
+  });
+  // prompt_tokens already includes cached — no addition needed.
+  assert.deepEqual(usage, { input: 100, output: 20, cached: 60 });
 });
 
 // --- readCachedTokens ---------------------------------------------------------

@@ -166,10 +166,15 @@ export function readMaxOutputTokens(
 // Works across Anthropic, OpenAI Chat, and OpenAI Responses shapes.
 // Returns {} when no usage info is present (e.g. passthrough / streaming).
 //
-// `cached` is prompt tokens served from the provider's prompt cache — reported
-// as `cache_read_input_tokens` (Anthropic) or `prompt_tokens_details.cached_tokens`
-// (OpenAI). It is a SUBSET of `input`, surfaced separately for cost visibility;
-// it is not added on top of the input total.
+// `input` is the TOTAL input tokens including cached — the same convention
+// OpenAI's `prompt_tokens` uses. Anthropic reports cached tokens separately
+// (cache_read_input_tokens) and its `input_tokens` excludes them, so this
+// function adds them back to normalise to one convention.
+//
+// `cached` is the subset of `input` that were prompt-cache hits, surfaced
+// separately for cost visibility. `computeCostUsd` subtracts `cached` from
+// `input` to derive the uncached billable portion — so `input` MUST include
+// cached tokens or the subtraction double-counts.
 export function readResponseUsage(body: unknown): {
   input?: number;
   output?: number;
@@ -180,15 +185,28 @@ export function readResponseUsage(body: unknown): {
   if (!u || typeof u !== "object") return {};
   const o = u as Record<string, unknown>;
   const out: { input?: number; output?: number; cached?: number } = {};
-  // OpenAI Chat: usage.{prompt_tokens, completion_tokens}
+  // OpenAI Chat: prompt_tokens already includes cached — use as-is.
   if (typeof o.prompt_tokens === "number") out.input = o.prompt_tokens;
   if (typeof o.completion_tokens === "number") out.output = o.completion_tokens;
-  // Anthropic / Responses: usage.{input_tokens, output_tokens}
-  // (overrides the OpenAI names if both are somehow present)
+  // Anthropic / Responses: input_tokens + output_tokens.
   if (typeof o.input_tokens === "number") out.input = o.input_tokens;
   if (typeof o.output_tokens === "number") out.output = o.output_tokens;
   const cached = readCachedTokens(o);
-  if (cached != null) out.cached = cached;
+  if (cached != null) {
+    out.cached = cached;
+    // Anthropic's input_tokens excludes cached tokens. Normalise so `input`
+    // always means "total input including cached" (the convention
+    // computeCostUsd expects). For OpenAI, prompt_tokens already includes
+    // cached, so the addition is harmless only if we detect the Anthropic
+    // shape: input_tokens is set AND cache_read_input_tokens is present (the
+    // field readCachedTokens reads for Anthropic).
+    if (
+      typeof o.input_tokens === "number" &&
+      typeof o.cache_read_input_tokens === "number"
+    ) {
+      out.input = o.input_tokens + cached;
+    }
+  }
   return out;
 }
 
