@@ -42,6 +42,7 @@ const FAMILIES: Family[] = [
   { label: "Cline", brand: "cline", ids: new Set(["clinepass"]) },
   { label: "CommandCode", brand: "commandcode", ids: new Set(["commandcode"]) },
   { label: "MiniMax", brand: "minimax", ids: new Set(["minimax"]) },
+  { label: "xAI", brand: "xai", ids: new Set(["xai"]) },
 ];
 
 function groupTemplates(
