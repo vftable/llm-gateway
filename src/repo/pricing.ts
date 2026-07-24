@@ -29,10 +29,7 @@ function mapPricing(r: PricingRow): ModelPricing {
   };
 }
 
-export function getPricingByAlias(
-  db: DB,
-  alias: string,
-): ModelPricing | null {
+export function getPricingByAlias(db: DB, alias: string): ModelPricing | null {
   const row = db
     .prepare("SELECT * FROM model_pricing WHERE alias = ?")
     .get(alias) as PricingRow | undefined;
@@ -97,7 +94,12 @@ export function computeCostUsd(
   const inputBillable = Math.max(0, (inputTokens ?? 0) - cached);
   const output = outputTokens ?? 0;
 
-  return (inputBillable * promptPer1m + cached * cachedRate + output * completionPer1m) / 1_000_000;
+  return (
+    (inputBillable * promptPer1m +
+      cached * cachedRate +
+      output * completionPer1m) /
+    1_000_000
+  );
 }
 
 // --- unit smoke test ---
@@ -118,7 +120,10 @@ if (process.argv[1]?.endsWith("pricing.ts")) {
   // inputBillable = 1000 - 200 = 800
   // cost = (800 * 0.15 + 200 * 0.075 + 500 * 0.6) / 1e6 = (120 + 15 + 300) / 1e6 = 0.000435
   const c1 = computeCostUsd(full, 1000, 500, 200);
-  assert(c1 !== null && Math.abs(c1 - 0.000435) < 1e-9, `full pricing: got ${c1}`);
+  assert(
+    c1 !== null && Math.abs(c1 - 0.000435) < 1e-9,
+    `full pricing: got ${c1}`,
+  );
 
   // Null pricing → null
   const c2 = computeCostUsd(null, 1000, 500, 200);
@@ -134,7 +139,10 @@ if (process.argv[1]?.endsWith("pricing.ts")) {
   const c4 = computeCostUsd(noCache, 1000, 500, 200);
   // inputBillable = 800, cached = 200 billed at 0.15
   // cost = (800 * 0.15 + 200 * 0.15 + 500 * 0.6) / 1e6 = (120 + 30 + 300) / 1e6 = 0.00045
-  assert(c4 !== null && Math.abs(c4 - 0.00045) < 1e-9, `cache fallback: got ${c4}`);
+  assert(
+    c4 !== null && Math.abs(c4 - 0.00045) < 1e-9,
+    `cache fallback: got ${c4}`,
+  );
 
   // Null tokens → 0 cost with valid pricing
   const c5 = computeCostUsd(full, null, null, null);

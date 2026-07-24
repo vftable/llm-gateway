@@ -479,7 +479,12 @@ function migrate(db: DB): void {
     "INTEGER NOT NULL DEFAULT 0",
   );
   addColumnIfMissing(db, "request_logs", "cost_usd", "REAL");
-  addColumnIfMissing(db, "usage_breakdown", "cost_usd", "REAL NOT NULL DEFAULT 0");
+  addColumnIfMissing(
+    db,
+    "usage_breakdown",
+    "cost_usd",
+    "REAL NOT NULL DEFAULT 0",
+  );
   // ponytail: CREATE TABLE IF NOT EXISTS covers both fresh-DB (SCHEMA_SQL) and legacy-DB
   db.exec(`CREATE TABLE IF NOT EXISTS model_pricing (
     alias TEXT PRIMARY KEY,

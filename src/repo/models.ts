@@ -13,10 +13,7 @@ import {
 import { parseJsonObject } from "./json";
 import { stockAnthropicModel } from "../formats/anthropic/stock-models";
 import { slugify } from "./providers";
-import {
-  upsertPricing,
-  deletePricing,
-} from "./pricing";
+import { upsertPricing, deletePricing } from "./pricing";
 
 interface ModelRow {
   id: string;
@@ -478,8 +475,7 @@ export function batchModelLinks(
 
 export function deleteModel(db: DB, id: string): boolean {
   const row = db.prepare("SELECT alias FROM models WHERE id = ?").get(id) as
-    | { alias: string }
-    | undefined;
+    { alias: string } | undefined;
   if (!row) return false;
   const tx = db.transaction(() => {
     deletePricing(db, row.alias);

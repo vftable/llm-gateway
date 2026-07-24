@@ -39,7 +39,11 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fmtNum, fmtUsd } from "@/lib/utils";
-import { ModelIcon, ProviderIcon, useModelTypes } from "@/components/model-icon";
+import {
+  ModelIcon,
+  ProviderIcon,
+  useModelTypes,
+} from "@/components/model-icon";
 
 const BREAKDOWN_PAGE_SIZE = 15;
 const KEYS_PAGE_SIZE = 10;
@@ -153,10 +157,7 @@ export default function Usage() {
           )}
         />
         <Stat label="Resolved requests" value={fmtNum(rows.length)} />
-        <Stat
-          label="Cost today (est.)"
-          value={fmtUsd(totalBreakdownCost)}
-        />
+        <Stat label="Cost today (est.)" value={fmtUsd(totalBreakdownCost)} />
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -271,7 +272,10 @@ export default function Usage() {
                     </TableCell>
                     <TableCell>
                       {r.providerName ? (
-                        <Badge variant="default" className="max-w-[8rem] truncate">
+                        <Badge
+                          variant="default"
+                          className="max-w-[8rem] truncate"
+                        >
                           {r.providerName}
                         </Badge>
                       ) : (
@@ -334,8 +338,12 @@ export default function Usage() {
                 <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-[40%]">Provider Resolved</TableHead>
-                      <TableHead className="w-24 text-right">Requests</TableHead>
+                      <TableHead className="w-[40%]">
+                        Provider Resolved
+                      </TableHead>
+                      <TableHead className="w-24 text-right">
+                        Requests
+                      </TableHead>
                       <TableHead className="w-24 text-right">Tokens</TableHead>
                       <TableHead className="w-24 text-right">Cost</TableHead>
                       <TableHead className="w-20 text-right">Share</TableHead>
@@ -351,12 +359,19 @@ export default function Usage() {
                         <TableRow key={i}>
                           <TableCell
                             className="min-w-0"
-                            title={r.providerName ?? r.providerId ?? "(unknown)"}
+                            title={
+                              r.providerName ?? r.providerId ?? "(unknown)"
+                            }
                           >
                             <span className="flex min-w-0 items-center gap-2">
                               <ProviderIcon
-                                brand={r.providerId?.replace(/-[0-9a-f]{8}$/, "")}
-                                name={r.providerName ?? r.providerId ?? undefined}
+                                brand={r.providerId?.replace(
+                                  /-[0-9a-f]{8}$/,
+                                  "",
+                                )}
+                                name={
+                                  r.providerName ?? r.providerId ?? undefined
+                                }
                                 className="size-3.5"
                               />
                               <span className="truncate">

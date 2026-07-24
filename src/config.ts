@@ -115,7 +115,9 @@ export function loadBootstrap(): BootstrapConfig {
   // order, but the SPA fallback would then swallow unknown API paths).
   if (webBasePath !== "/" && /^\/(api|v1|health)(\/|$)/.test(webBasePath)) {
     // eslint-disable-next-line no-console
-    console.warn(`[gateway] webBasePath "${webBasePath}" collides with an API surface; using "/"`);
+    console.warn(
+      `[gateway] webBasePath "${webBasePath}" collides with an API surface; using "/"`,
+    );
     webBasePath = "/";
   }
   const sessionTtlMs = (cfg.sessionTtlHours ?? 24 * 7) * 60 * 60 * 1000;

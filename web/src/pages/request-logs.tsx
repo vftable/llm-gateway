@@ -124,7 +124,9 @@ export default function RequestLogs() {
             <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[11%] whitespace-nowrap">Time</TableHead>
+                  <TableHead className="w-[11%] whitespace-nowrap">
+                    Time
+                  </TableHead>
                   <TableHead className="w-[9%]">Key</TableHead>
                   <TableHead className="w-[7%]">Client</TableHead>
                   <TableHead className="w-[16%]">Model</TableHead>

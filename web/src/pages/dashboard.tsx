@@ -27,7 +27,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ModelIcon, ProviderIcon, useModelTypes } from "@/components/model-icon";
+import {
+  ModelIcon,
+  ProviderIcon,
+  useModelTypes,
+} from "@/components/model-icon";
 
 export default function Dashboard() {
   const { data } = useWsSubscription<OverviewResponse>("overview");
@@ -117,10 +121,7 @@ export default function Dashboard() {
               : "—"
           }
         />
-        <Stat
-          label="Cost today (est.)"
-          value={fmtUsd(s.costUsdToday)}
-        />
+        <Stat label="Cost today (est.)" value={fmtUsd(s.costUsdToday)} />
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
@@ -246,10 +247,7 @@ export default function Dashboard() {
                   );
                   return (
                     <TableRow key={p.providerId}>
-                      <TableCell
-                        className="min-w-0"
-                        title={p.provider}
-                      >
+                      <TableCell className="min-w-0" title={p.provider}>
                         <span className="flex min-w-0 items-center gap-2">
                           <ProviderIcon
                             brand={p.catalogId}

@@ -435,7 +435,8 @@ export default function ModelEditor() {
           </div>
           <div className="rounded-md border border-dashed p-3">
             <p className="mb-3 text-xs font-medium text-muted-foreground">
-              Pricing — USD per 1M tokens. Leave blank to skip — unconfigured models render as `—` on dashboards.
+              Pricing — USD per 1M tokens. Leave blank to skip — unconfigured
+              models render as `—` on dashboards.
             </p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <Field label="Prompt (input)">
