@@ -39,7 +39,10 @@ const gateway = gatewayConfig();
 const backendPort = gateway.port;
 
 export default defineConfig(({ command }) => ({
-  base: command === "build" ? "/" : gateway.webBasePath,
+  // Relative assets in production so the gateway can point them at any
+  // webBasePath via a boot-time <base href>. Absolute "/" would pin assets
+  // to the origin root and break under a non-"/" prefix.
+  base: command === "build" ? "./" : gateway.webBasePath,
   plugins: [react(), tailwindcss()],
   css: {
     postcss: {},

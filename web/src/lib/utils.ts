@@ -197,8 +197,10 @@ export function relTime(iso: string | null | undefined): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-// Base path the UI is served under. The gateway injects <base href> into
-// index.html from config.json webBasePath; in dev (no tag) this is "/".
+// Base path the UI is served under. In production the gateway always injects
+// <base href> from config.json webBasePath (including "/"); without that tag,
+// document.baseURI follows the page URL and a nested-route refresh would make
+// this return e.g. "/providers/" instead of "/". In dev (no tag) this is "/".
 export function webBase(): string {
   return new URL(".", document.baseURI).pathname;
 }
