@@ -26,93 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { cn, conversionLabel, conversionHelp, plural } from "@/lib/utils";
-
-// Provider family groupings — order here is display order.
-const FAMILY_RULES: Array<{
-  label: string;
-  brand: string;
-  match: (p: Provider) => boolean;
-}> = [
-  {
-    label: "Anthropic",
-    brand: "anthropic",
-    match: (p) => p.catalogId === "anthropic" || p.catalogId === "claude-code",
-  },
-  {
-    label: "OpenAI",
-    brand: "openai",
-    match: (p) => p.catalogId === "openai",
-  },
-  {
-    label: "DeepSeek",
-    brand: "deepseek",
-    match: (p) => p.catalogId === "deepseek",
-  },
-  {
-    label: "Google",
-    brand: "gemini",
-    match: (p) => p.catalogId === "google-gemini",
-  },
-  {
-    label: "NVIDIA",
-    brand: "nvidia",
-    match: (p) => p.catalogId === "nvidia-nim",
-  },
-  {
-    label: "OpenRouter",
-    brand: "openrouter",
-    match: (p) => p.catalogId === "openrouter",
-  },
-  {
-    label: "Z.ai",
-    brand: "zai",
-    match: (p) => p.catalogId === "glm-coding",
-  },
-  {
-    label: "Ollama",
-    brand: "ollama",
-    match: (p) => p.catalogId === "ollama" || p.catalogId === "ollama-cloud",
-  },
-  {
-    label: "NewAPI",
-    brand: "newapi",
-    match: (p) => p.catalogId === "newapi",
-  },
-  {
-    label: "OpenCode",
-    brand: "opencode",
-    match: (p) => p.catalogId === "opencode",
-  },
-  {
-    label: "Xiaomi",
-    brand: "mimo",
-    match: (p) => p.catalogId === "xiaomi-mimo",
-  },
-];
-
-function groupProviders(
-  providers: Provider[],
-): Array<{ label: string; brand: string | null; items: Provider[] }> {
-  const claimed = new Set<string>();
-  const groups: Array<{
-    label: string;
-    brand: string | null;
-    items: Provider[];
-  }> = [];
-
-  for (const rule of FAMILY_RULES) {
-    const items = providers.filter((p) => rule.match(p) && !claimed.has(p.id));
-    if (items.length) {
-      groups.push({ label: rule.label, brand: rule.brand, items });
-      items.forEach((p) => claimed.add(p.id));
-    }
-  }
-
-  const rest = providers.filter((p) => !claimed.has(p.id));
-  if (rest.length) groups.push({ label: "Custom", brand: null, items: rest });
-
-  return groups;
-}
+import { groupByFamily } from "@/lib/provider-families";
 
 export default function Providers() {
   const navigate = useNavigate();
@@ -160,7 +74,7 @@ export default function Providers() {
         <SetupCard onStart={() => setAdding(true)} />
       ) : (
         <div className="space-y-6">
-          {groupProviders(items).map((g) => (
+          {groupByFamily(items, (p) => p.catalogId).map((g) => (
             <section key={g.label}>
               <div className="mb-3 flex items-center gap-2">
                 {g.brand && (
