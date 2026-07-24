@@ -399,7 +399,14 @@ export function TokenChart({
   return (
     <ChartContainer
       config={tokenChartConfig}
-      className="aspect-auto w-full"
+      // grow (flex-grow only, NOT flex-1 — that also zeroes flex-basis,
+      // which would collapse this in an auto-height parent with nothing to
+      // grow into). Leaving flex-basis as `auto` means it starts from
+      // `style.height` below, then grows to fill a stretched parent
+      // (dashboard's grid row) or simply stays at that height in a
+      // self-start parent (usage.tsx's 14-Day History) — one component,
+      // both layouts.
+      className="aspect-auto w-full grow"
       style={{ minHeight, height: minHeight }}
     >
       <AreaChart data={data} margin={{ left: 4, right: 8, top: 4 }}>
