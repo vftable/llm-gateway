@@ -130,5 +130,6 @@ export const deepseek = new DeepSeekAdapter({
   ],
   quirks: {
     defaultTransforms: OPENAI_DEFAULT_TRANSFORMS,
+    thinking: { defaultType: "enabled", supportsEffort: true },
   },
 });

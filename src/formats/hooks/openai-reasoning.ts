@@ -17,12 +17,14 @@
 // "responses", gated on providerFmt so it only fires for OpenAI-compatible hops.
 
 import {
+  isDeepSeekReasoner,
   isGlm52Plus,
   isGlmModel,
   isGpt56Plus,
   isGpt5Family,
 } from "../model-version";
 
+const DEEPSEEK_CATALOG_ID = "deepseek";
 const GLM_CATALOG_ID = "glm-coding";
 
 export interface ReasoningNormalizationContext {
@@ -107,6 +109,125 @@ export function normalizeOpenAIReasoning(
   return body;
 }
 
+// DeepSeek models that support the `thinking` toggle (deepseek-reasoner,
+// deepseek-r1, deepseek-v4*).
+//
+// Per https://api-docs.deepseek.com/api/create-chat-completion and
+// https://api-docs.deepseek.com/guides/thinking_mode/:
+//
+//   - `thinking: { type: "enabled" | "disabled" }` toggles reasoning.
+//   - `reasoning_effort` (top-level): "high" (default) or "max".
+//   - `max_tokens` is the only accepted output-length field;
+//     `max_completion_tokens` (OpenAI's newer name) is not recognised.
+//   - `frequency_penalty` and `presence_penalty` are deprecated — strip always.
+//   - `top_k`, `seed`, `parallel_tool_calls` are not in the API — strip always.
+//   - `temperature` and `top_p` have no effect when thinking is enabled.
+//
+// The gateway treats "low" effort (and "minimal"/"none") as "disable thinking"
+// since DeepSeek has no low tier and silently upgrading to "high" would betray
+// the client's intent for lightweight processing.
+function normalizeDeepSeekReasoning(
+  body: Record<string, unknown>,
+  _model: string,
+): Record<string, unknown> {
+  // Consume the gateway-internal signal from Messages→Chat conversion.
+  const signalDisabled = body._thinking_disabled === true;
+  delete body._thinking_disabled;
+
+  // Strip fields DeepSeek does not accept (would 400 or are deprecated).
+  delete body.top_k;
+  delete body.frequency_penalty;
+  delete body.presence_penalty;
+  delete body.seed;
+  delete body.parallel_tool_calls;
+
+  // Normalise max_completion_tokens → max_tokens (DeepSeek only accepts the
+  // latter). If both are present, max_completion_tokens wins (it's the newer
+  // OpenAI field and likelier to carry the client's real intent).
+  if (typeof body.max_completion_tokens === "number") {
+    body.max_tokens = body.max_completion_tokens;
+    delete body.max_completion_tokens;
+  }
+
+  // 1. Resolve the thinking toggle from three sources (priority order):
+  //    a. effort-based: "low" / "minimal" / "none" → disabled
+  //    b. gateway signal  → disabled
+  //    c. default          → enabled (DeepSeek upstream default)
+  let thinkingEnabled = !signalDisabled;
+
+  const rawEffort = body.reasoning_effort;
+  if (rawEffort !== undefined) {
+    const resolved = resolveDeepSeekEffort(rawEffort);
+    if (resolved === "disabled") {
+      thinkingEnabled = false;
+      delete body.reasoning_effort;
+    } else {
+      body.reasoning_effort = resolved;
+    }
+  }
+
+  // 2. Build the thinking toggle object. An existing `type: "disabled"` always
+  // wins (explicit client intent).
+  const existingThinking =
+    body.thinking && typeof body.thinking === "object"
+      ? (body.thinking as Record<string, unknown>)
+      : null;
+  if (existingThinking) {
+    const t = existingThinking;
+    if (t.type === "disabled") {
+      thinkingEnabled = false;
+    } else {
+      t.type = thinkingEnabled ? "enabled" : "disabled";
+    }
+    body.thinking = t;
+  } else {
+    body.thinking = { type: thinkingEnabled ? "enabled" : "disabled" };
+  }
+
+  // 3. When thinking is enabled, strip sampling params that have no effect.
+  if (thinkingEnabled) {
+    delete body.temperature;
+    delete body.top_p;
+  }
+
+  return body;
+}
+
+// Resolve a reasoning_effort value to DeepSeek's supported set.
+//   "low" / "minimal" / "none" → "disabled"  (no real candidate; disable thinking)
+//   "medium"                 → "high"        (map to the nearest real level)
+//   "xhigh" / "x-high" …     → "max"
+//   "high" / "highest"       → "high"
+//   "max" / "maximum"        → "max"
+//   unknown                  → pass through as-is (no clamping)
+function resolveDeepSeekEffort(
+  value: unknown,
+): "high" | "max" | "disabled" | string {
+  if (typeof value !== "string") return String(value);
+  const v = value.toLowerCase();
+  // "low" has no actual candidate in DeepSeek's envelope — the upstream
+  // silently maps it to "high", which betrays the client's intent.
+  if (
+    v === "low" ||
+    v === "minimal" ||
+    v === "none" ||
+    v === "lowest" ||
+    v === "min"
+  )
+    return "disabled";
+  if (v === "medium") return "high";
+  if (
+    v === "xhigh" ||
+    v === "x-high" ||
+    v === "extra-high" ||
+    v === "extra_high"
+  )
+    return "max";
+  if (v === "max" || v === "maximum") return "max";
+  if (v === "high" || v === "highest") return "high";
+  return value;
+}
+
 function normalizeChatReasoning(
   body: Record<string, unknown>,
   context: ReasoningNormalizationContext,
@@ -117,12 +238,30 @@ function normalizeChatReasoning(
   stripAnthropicMetadata(body);
 
   const model = typeof body.model === "string" ? body.model : undefined;
+
   if (
     context.catalogId === GLM_CATALOG_ID &&
     typeof model === "string" &&
     isGlmModel(model)
   )
     return normalizeGlmChatReasoning(body, model);
+
+  if (
+    context.catalogId === DEEPSEEK_CATALOG_ID &&
+    typeof model === "string" &&
+    isDeepSeekReasoner(model)
+  )
+    return normalizeDeepSeekReasoning(body, model);
+
+  // Generic path: strip gateway-internal signals and the `thinking` field.
+  // Only DeepSeek and GLM support the `thinking` toggle; OpenAI and most other
+  // providers 400 on unrecognized top-level fields. The provider-specific
+  // branches above have already returned by this point, so anything left here
+  // is an unsupported remnant.
+  delete body._thinking_disabled;
+  if (body.thinking && typeof body.thinking === "object") {
+    delete body.thinking;
+  }
 
   if (body.reasoning_effort === undefined) return body;
 
@@ -160,17 +299,43 @@ function normalizeGlmChatReasoning(
   body: Record<string, unknown>,
   model: string,
 ): Record<string, unknown> {
+  // Consume the gateway-internal signal from Messages→Chat conversion
+  // (see messagesRequestToChat in converters/chat-messages/request.ts).
+  const disabled = body._thinking_disabled === true;
+  delete body._thinking_disabled;
+
   const rawEffort = body.reasoning_effort;
-  if (rawEffort === undefined) return body;
+  if (rawEffort === undefined) {
+    // No effort hint — but a disabled signal from the Messages source still
+    // takes effect (turn thinking off via the toggle).
+    if (disabled) {
+      const existingThinking =
+        body.thinking && typeof body.thinking === "object"
+          ? (body.thinking as Record<string, unknown>)
+          : {};
+      body.thinking = { ...existingThinking, type: "disabled" };
+    }
+    return body;
+  }
 
   const effort = toGlmEffort(rawEffort);
-  if (!effort) return body;
+  if (!effort) {
+    // Unknown effort alias — still respect the disabled signal.
+    if (disabled) {
+      const existingThinking =
+        body.thinking && typeof body.thinking === "object"
+          ? (body.thinking as Record<string, unknown>)
+          : {};
+      body.thinking = { ...existingThinking, type: "disabled" };
+    }
+    return body;
+  }
 
   const existingThinking =
     body.thinking && typeof body.thinking === "object"
       ? (body.thinking as Record<string, unknown>)
       : {};
-  const explicitlyDisabled = existingThinking.type === "disabled";
+  const explicitlyDisabled = existingThinking.type === "disabled" || disabled;
   const skipThinking = effort === "minimal" || effort === "none";
 
   if (skipThinking || explicitlyDisabled) {

@@ -139,6 +139,18 @@ export function messagesRequestToChat(
     (out as Record<string, unknown>)._reasoning_summary = "auto";
   }
 
+  // Signal the thinking-disabled intent through a gateway-internal field so
+  // only providers that support the `thinking` toggle (DeepSeek, GLM) surface
+  // it. Forwarding `thinking` unconditionally would 400 on OpenAI and most
+  // other providers — the "openai-hooks" default consumes `_thinking_disabled`
+  // and builds the provider-native `thinking` shape; the generic path strips it
+  // before any unsupporting upstream sees it.
+  if (thinking && typeof thinking === "object") {
+    const tt = thinking as { type?: string };
+    (out as Record<string, unknown>)._thinking_disabled =
+      tt.type === "disabled";
+  }
+
   const tools = anthropicToolsToChat(body.tools);
   if (tools) out.tools = tools;
   const tc = anthropicToolChoiceToChat(body.tool_choice);

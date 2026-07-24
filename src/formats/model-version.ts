@@ -76,6 +76,20 @@ export function isGpt5Family(model: unknown): boolean {
   return typeof model === "string" && GPT5_RE.test(model);
 }
 
+// ---- DeepSeek ---------------------------------------------------------------
+
+// Matches DeepSeek reasoner (deepseek-reasoner, deepseek-r1) and v4-family
+// chat models — all of which support the `thinking` toggle per
+// https://api-docs.deepseek.com/guides/thinking_mode/.
+const DEEPSEEK_REASONER_RE = /^deepseek-(?:reasoner|r1|v4)/i;
+
+/** True when `model` is a DeepSeek model that supports the `thinking` toggle
+ *  (reasoner, r1, v4-family). Non-reasoner chat models (deepseek-chat / v3)
+ *  do not support it and should not receive the field. */
+export function isDeepSeekReasoner(model: unknown): boolean {
+  return typeof model === "string" && DEEPSEEK_REASONER_RE.test(model);
+}
+
 // ---- Z.AI / GLM ------------------------------------------------------------
 
 const GLM_RE = /^glm-(\d+)(?:\.(\d+))?(?:[-_]|$)/i;

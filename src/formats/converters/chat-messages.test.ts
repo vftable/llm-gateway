@@ -378,6 +378,52 @@ test("R8: thinking.type:disabled does not produce reasoning_effort", () => {
     thinking: { type: "disabled" },
   });
   assert.equal(out.reasoning_effort, undefined);
+  assert.equal(
+    (out as Record<string, unknown>)._thinking_disabled,
+    true,
+    "disabled thinking should set _thinking_disabled=true",
+  );
+});
+
+test("R8: thinking.type:enabled sets _thinking_disabled=false", () => {
+  const out = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+    thinking: { type: "enabled", budget_tokens: 16000 },
+  });
+  assert.equal(
+    (out as Record<string, unknown>)._thinking_disabled,
+    false,
+    "enabled thinking should set _thinking_disabled=false",
+  );
+});
+
+test("R8: thinking.type:adaptive sets _thinking_disabled=false", () => {
+  const out = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+    thinking: { type: "adaptive" },
+  });
+  assert.equal(
+    (out as Record<string, unknown>)._thinking_disabled,
+    false,
+    "adaptive thinking should set _thinking_disabled=false",
+  );
+});
+
+test("R8: absent thinking does not produce _thinking_disabled", () => {
+  const out = messagesRequestToChat({
+    model: "m",
+    max_tokens: 8192,
+    messages: [{ role: "user", content: "hi" }],
+  });
+  assert.equal(
+    (out as Record<string, unknown>)._thinking_disabled,
+    undefined,
+    "absent thinking should not set _thinking_disabled",
+  );
 });
 
 // ===========================================================================
