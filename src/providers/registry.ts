@@ -19,7 +19,7 @@
 // It appears in the wizard immediately (via .toTemplate()) and routes through
 // its adapter — no engine changes needed.
 //
-// `./catalog/` holds only the 14 stock provider entries themselves; this file
+// `./catalog/` holds only the 21 stock provider entries themselves; this file
 // (registry.ts), base/, quirks.ts, and types.ts are infrastructure and stay
 // at the top level of providers/ — kept apart so "add a provider" always
 // means "add one file to catalog/", never touching the machinery around it.
@@ -54,6 +54,7 @@ import { opencodeGo } from "./catalog/opencode-go";
 import { qwencloud } from "./catalog/qwencloud";
 import { clinepass } from "./catalog/clinepass";
 import { minimax } from "./catalog/minimax";
+import { xai } from "./catalog/xai";
 
 // Order here is the order shown in the catalog grid: branded stock providers
 // first, generic escape-hatch templates last.
@@ -71,6 +72,7 @@ const ADAPTERS: ProviderAdapter[] = [
   qwencloud,
   clinepass,
   minimax,
+  xai,
   gemini,
   openaiCompatible,
   anthropicCompatible,

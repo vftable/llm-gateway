@@ -28,7 +28,7 @@ src/providers/
     models.ts    — fetchModelList + OpenAI/Anthropic -> universal normalization
     adapter.ts   — the ProviderAdapter abstract class + the two compatible subclasses
     index.ts     — barrel (`export * from` all four)
-  catalog/       — the 14 stock provider instances (one file each)
+  catalog/       — the 21 stock provider instances (one file each)
     anthropic-compatible.ts — also exports ANTHROPIC_DEFAULT_TRANSFORMS, the
                    shared family-default stack anthropic.ts and
                    claude-code.ts both inherit (see transforms-api.md)

@@ -105,6 +105,7 @@ const PROVIDER_BRANDS: Record<string, { svg: string; label: string }> = {
   qwen: { svg: qwenSvg, label: "Qwen" },
   cline: { svg: clineSvg, label: "Cline" },
   minimax: { svg: minimaxSvg, label: "MiniMax" },
+  xai: { svg: grokSvg, label: "xAI" },
   // Catalog-ID aliases — pages that call ProviderIcon with brand={provider.catalogId}
   // need entries for IDs that differ from the template's brand field.
   "opencode-go": { svg: opencodeSvg, label: "OpenCode" },
