@@ -39,7 +39,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { fmtNum, fmtUsd } from "@/lib/utils";
-import { ModelIcon, useModelTypes } from "@/components/model-icon";
+import { ModelIcon, ProviderIcon, useModelTypes } from "@/components/model-icon";
 
 const BREAKDOWN_PAGE_SIZE = 15;
 const KEYS_PAGE_SIZE = 10;
@@ -331,14 +331,14 @@ export default function Usage() {
                   msg={`No requests for '${modelQuery}' resolved today`}
                 />
               ) : (
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Provider Resolved</TableHead>
-                      <TableHead className="text-right">Requests</TableHead>
-                      <TableHead className="text-right">Tokens</TableHead>
-                      <TableHead className="text-right">Cost</TableHead>
-                      <TableHead className="text-right">Share</TableHead>
+                      <TableHead className="w-[40%]">Provider Resolved</TableHead>
+                      <TableHead className="w-24 text-right">Requests</TableHead>
+                      <TableHead className="w-24 text-right">Tokens</TableHead>
+                      <TableHead className="w-24 text-right">Cost</TableHead>
+                      <TableHead className="w-20 text-right">Share</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -349,13 +349,20 @@ export default function Usage() {
                       );
                       return (
                         <TableRow key={i}>
-                          <TableCell className="max-w-[12rem]">
-                            <Badge
-                              variant="default"
-                              className="block max-w-full truncate"
-                            >
-                              {r.providerName ?? r.providerId ?? "(unknown)"}
-                            </Badge>
+                          <TableCell
+                            className="min-w-0"
+                            title={r.providerName ?? r.providerId ?? "(unknown)"}
+                          >
+                            <span className="flex min-w-0 items-center gap-2">
+                              <ProviderIcon
+                                brand={r.providerId?.replace(/-[0-9a-f]{8}$/, "")}
+                                name={r.providerName ?? r.providerId ?? undefined}
+                                className="size-3.5"
+                              />
+                              <span className="truncate">
+                                {r.providerName ?? r.providerId ?? "(unknown)"}
+                              </span>
+                            </span>
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {fmtNum(r.requests)}
