@@ -38,7 +38,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fmtNum, fmtUsd } from "@/lib/utils";
+import { fmtNum, fmtTokens, fmtUsd } from "@/lib/utils";
 import {
   ModelIcon,
   ProviderIcon,
@@ -199,11 +199,13 @@ export default function Usage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8" />
-                    <TableHead className="w-48">Key</TableHead>
-                    <TableHead className="w-32">Owner</TableHead>
-                    <TableHead className="w-44">Quota / Day</TableHead>
-                    <TableHead className="w-24 text-right">Used</TableHead>
-                    <TableHead className="w-28 text-right">Remaining</TableHead>
+                    <TableHead className="w-44">Key</TableHead>
+                    <TableHead className="w-28">Owner</TableHead>
+                    <TableHead className="w-40">Quota / Day</TableHead>
+                    <TableHead className="w-28 text-right">Used</TableHead>
+                    <TableHead className="w-32 text-right">
+                      Remaining
+                    </TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -282,11 +284,17 @@ export default function Usage() {
                         <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell
+                      className="text-right tabular-nums"
+                      title={fmtNum(r.requests)}
+                    >
                       {fmtNum(r.requests)}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {fmtNum(r.tokens)}
+                    <TableCell
+                      className="text-right tabular-nums"
+                      title={fmtNum(r.tokens)}
+                    >
+                      {fmtTokens(r.tokens)}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {r.costUsd > 0 ? fmtUsd(r.costUsd) : "—"}
@@ -338,15 +346,21 @@ export default function Usage() {
                 <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="w-[40%]">
+                      <TableHead className="w-[30%]">
                         Provider Resolved
                       </TableHead>
-                      <TableHead className="w-24 text-right">
+                      <TableHead className="w-[15%] text-right">
                         Requests
                       </TableHead>
-                      <TableHead className="w-24 text-right">Tokens</TableHead>
-                      <TableHead className="w-24 text-right">Cost</TableHead>
-                      <TableHead className="w-20 text-right">Share</TableHead>
+                      <TableHead className="w-[20%] text-right">
+                        Tokens
+                      </TableHead>
+                      <TableHead className="w-[20%] text-right">
+                        Cost
+                      </TableHead>
+                      <TableHead className="w-[15%] text-right">
+                        Share
+                      </TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -379,16 +393,22 @@ export default function Usage() {
                               </span>
                             </span>
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">
+                          <TableCell
+                            className="text-right tabular-nums whitespace-nowrap"
+                            title={fmtNum(r.requests)}
+                          >
                             {fmtNum(r.requests)}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtNum(r.tokens)}
+                          <TableCell
+                            className="text-right tabular-nums whitespace-nowrap"
+                            title={fmtNum(r.tokens)}
+                          >
+                            {fmtTokens(r.tokens)}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                          <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
                             {r.costUsd > 0 ? fmtUsd(r.costUsd) : "—"}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                          <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
                             {total
                               ? `${((r.tokens / total) * 100).toFixed(0)}%`
                               : "—"}
@@ -548,10 +568,10 @@ const KeyUsageRow = memo(function KeyUsageRow({
             </div>
           )}
         </TableCell>
-        <TableCell className="text-right tabular-nums">
+        <TableCell className="text-right tabular-nums whitespace-nowrap">
           {fmtNum(k.used)}
         </TableCell>
-        <TableCell className="text-right tabular-nums text-muted-foreground">
+        <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
           {k.limit ? (
             over ? (
               <Badge variant="destructive">exhausted</Badge>
@@ -580,12 +600,16 @@ const KeyUsageRow = memo(function KeyUsageRow({
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="pl-12">Model</TableHead>
-                    <TableHead className="w-44">Provider</TableHead>
-                    <TableHead className="w-24 text-right">Requests</TableHead>
-                    <TableHead className="w-28 text-right">Tokens</TableHead>
-                    <TableHead className="w-20 text-right">Cost</TableHead>
-                    <TableHead className="w-20 text-right pr-4">
+                    <TableHead className="w-[28%] pl-12">Model</TableHead>
+                    <TableHead className="w-[22%]">Provider</TableHead>
+                    <TableHead className="w-[13%] text-right">
+                      Requests
+                    </TableHead>
+                    <TableHead className="w-[17%] text-right">
+                      Tokens
+                    </TableHead>
+                    <TableHead className="w-[10%] text-right">Cost</TableHead>
+                    <TableHead className="w-[10%] text-right pr-4">
                       Share
                     </TableHead>
                   </TableRow>
@@ -595,7 +619,7 @@ const KeyUsageRow = memo(function KeyUsageRow({
                     const total = detail.reduce((a, x) => a + x.tokens, 0);
                     return (
                       <TableRow key={i}>
-                        <TableCell className="max-w-[16rem] pl-12 font-mono">
+                        <TableCell className="min-w-0 pl-12 font-mono">
                           <span className="flex min-w-0 items-center gap-2">
                             <ModelIcon
                               alias={d.model}
@@ -604,7 +628,7 @@ const KeyUsageRow = memo(function KeyUsageRow({
                             <span className="truncate">{d.model}</span>
                           </span>
                         </TableCell>
-                        <TableCell className="max-w-[12rem]">
+                        <TableCell className="min-w-0">
                           {d.providerName ? (
                             <Badge variant="secondary" className="truncate">
                               {d.providerName}
@@ -613,16 +637,22 @@ const KeyUsageRow = memo(function KeyUsageRow({
                             <span className="text-muted-foreground">—</span>
                           )}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell
+                          className="text-right tabular-nums whitespace-nowrap"
+                          title={fmtNum(d.requests)}
+                        >
                           {fmtNum(d.requests)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {fmtNum(d.tokens)}
+                        <TableCell
+                          className="text-right tabular-nums whitespace-nowrap"
+                          title={fmtNum(d.tokens)}
+                        >
+                          {fmtTokens(d.tokens)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                        <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
                           {d.costUsd > 0 ? fmtUsd(d.costUsd) : "—"}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground pr-4">
+                        <TableCell className="text-right tabular-nums text-muted-foreground pr-4 whitespace-nowrap">
                           {total
                             ? `${((d.tokens / total) * 100).toFixed(0)}%`
                             : "—"}

@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { OverviewResponse } from "@/lib/types";
 import { useWsSubscription } from "@/hooks/use-ws";
-import { fmtNum, fmtUsd } from "@/lib/utils";
+import { fmtNum, fmtTokens, fmtUsd } from "@/lib/utils";
 import {
   PageHeader,
   Stat,
@@ -175,11 +175,17 @@ export default function Dashboard() {
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[40%]">Model</TableHead>
-                    <TableHead className="w-20 text-right">Requests</TableHead>
-                    <TableHead className="w-24 text-right">Tokens</TableHead>
-                    <TableHead className="w-20 text-right">Cached</TableHead>
-                    <TableHead className="w-24 text-right">Cost</TableHead>
+                    <TableHead className="w-[26%]">Model</TableHead>
+                    <TableHead className="w-[18%] text-right">
+                      Requests
+                    </TableHead>
+                    <TableHead className="w-[19%] text-right">
+                      Tokens
+                    </TableHead>
+                    <TableHead className="w-[19%] text-right">
+                      Cached
+                    </TableHead>
+                    <TableHead className="w-[18%] text-right">Cost</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -194,16 +200,25 @@ export default function Dashboard() {
                           <span className="truncate">{m.model}</span>
                         </span>
                       </TableCell>
-                      <TableCell className="w-20 text-right tabular-nums whitespace-nowrap">
+                      <TableCell
+                        className="text-right tabular-nums whitespace-nowrap"
+                        title={fmtNum(m.requests)}
+                      >
                         {fmtNum(m.requests)}
                       </TableCell>
-                      <TableCell className="w-24 text-right tabular-nums whitespace-nowrap">
-                        {fmtNum(m.tokens)}
+                      <TableCell
+                        className="text-right tabular-nums whitespace-nowrap"
+                        title={fmtNum(m.tokens)}
+                      >
+                        {fmtTokens(m.tokens)}
                       </TableCell>
-                      <TableCell className="w-20 text-right tabular-nums text-muted-foreground whitespace-nowrap">
-                        {m.cached > 0 ? fmtNum(m.cached) : "—"}
+                      <TableCell
+                        className="text-right tabular-nums text-muted-foreground whitespace-nowrap"
+                        title={m.cached > 0 ? fmtNum(m.cached) : undefined}
+                      >
+                        {m.cached > 0 ? fmtTokens(m.cached) : "—"}
                       </TableCell>
-                      <TableCell className="w-24 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                      <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
                         {m.costUsd > 0 ? fmtUsd(m.costUsd) : "—"}
                       </TableCell>
                     </TableRow>
@@ -232,9 +247,9 @@ export default function Dashboard() {
             <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[40%]">Provider</TableHead>
-                  <TableHead className="w-[13%] text-right">Requests</TableHead>
-                  <TableHead className="w-[13%] text-right">Tokens</TableHead>
+                  <TableHead className="w-[34%]">Provider</TableHead>
+                  <TableHead className="w-[14%] text-right">Requests</TableHead>
+                  <TableHead className="w-[18%] text-right">Tokens</TableHead>
                   <TableHead className="w-[17%] text-right">Cost</TableHead>
                   <TableHead className="w-[17%] text-right">Share</TableHead>
                 </TableRow>
@@ -257,16 +272,22 @@ export default function Dashboard() {
                           <span className="truncate">{p.provider}</span>
                         </span>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell
+                        className="text-right tabular-nums whitespace-nowrap"
+                        title={fmtNum(p.requests)}
+                      >
                         {fmtNum(p.requests)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {fmtNum(p.tokens)}
+                      <TableCell
+                        className="text-right tabular-nums whitespace-nowrap"
+                        title={fmtNum(p.tokens)}
+                      >
+                        {fmtTokens(p.tokens)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                      <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
                         {p.costUsd > 0 ? fmtUsd(p.costUsd) : "—"}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                      <TableCell className="text-right tabular-nums text-muted-foreground whitespace-nowrap">
                         {total
                           ? `${((p.requests / total) * 100).toFixed(0)}%`
                           : "—"}

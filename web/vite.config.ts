@@ -39,7 +39,7 @@ const gateway = gatewayConfig();
 const backendPort = gateway.port;
 
 export default defineConfig(({ command }) => ({
-  base: command === "build" ? "./" : gateway.webBasePath,
+  base: command === "build" ? "/" : gateway.webBasePath,
   plugins: [react(), tailwindcss()],
   css: {
     postcss: {},
