@@ -453,6 +453,11 @@ export interface Model {
   providers: ModelProviderLink[];
   createdAt: string;
   updatedAt: string;
+  pricing: {
+    promptPer1m: number | null;
+    completionPer1m: number | null;
+    cachedPer1m: number | null;
+  } | null;
 }
 
 export interface User {
@@ -505,6 +510,10 @@ export interface RequestLog {
   throttled?: boolean;
   /** Epoch ms when the soonest rate-limited key frees up (throttle rows only). */
   retryAt?: number;
+  /** Estimated USD cost (null when pricing is not configured). */
+  costUsd: number | null;
+  /** Catalog brand id of the provider (used for icon lookup). */
+  catalogId: string | null;
 }
 
 export interface RequestLogDetail {
@@ -533,17 +542,21 @@ export interface DashboardStats {
   throttledToday: number;
   tokensToday: number;
   errorRateToday: number;
+  costUsdToday: number;
   byModel: Array<{
     model: string;
     requests: number;
     tokens: number;
     cached: number;
+    costUsd: number;
   }>;
   byProvider: Array<{
     providerId: string;
     provider: string;
+    catalogId: string | null;
     requests: number;
     tokens: number;
+    costUsd: number;
   }>;
   statusBands: { success: number; clientError: number; serverError: number };
   p95LatencyMs: number | null;
@@ -644,6 +657,11 @@ export interface ModelInput {
     contextWindow?: number | null;
     maxOutputTokens?: number | null;
   }>;
+  pricing?: {
+    promptPer1m?: number | null;
+    completionPer1m?: number | null;
+    cachedPer1m?: number | null;
+  };
 }
 
 export interface ProviderTestResult {
@@ -707,6 +725,7 @@ export interface UsageBreakdownRow {
   providerName: string | null;
   tokens: number;
   requests: number;
+  costUsd: number;
 }
 
 export interface FullBreakdownRow extends UsageBreakdownRow {
@@ -721,4 +740,5 @@ export interface ModelResolutionRow {
   providerName: string | null;
   tokens: number;
   requests: number;
+  costUsd: number;
 }

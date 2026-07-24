@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import type { OverviewResponse } from "@/lib/types";
 import { useWsSubscription } from "@/hooks/use-ws";
-import { fmtNum } from "@/lib/utils";
+import { fmtNum, fmtUsd } from "@/lib/utils";
 import {
   PageHeader,
   Stat,
@@ -27,7 +27,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ModelIcon, useModelTypes } from "@/components/model-icon";
+import { ModelIcon, ProviderIcon, useModelTypes } from "@/components/model-icon";
 
 export default function Dashboard() {
   const { data } = useWsSubscription<OverviewResponse>("overview");
@@ -92,7 +92,7 @@ export default function Dashboard() {
         desc="Live gateway telemetry — real-time via WebSocket"
       />
 
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         <Stat label="Requests today" value={fmtNum(s.requestsToday)} accent />
         <Stat
           label="Tokens today"
@@ -116,6 +116,10 @@ export default function Dashboard() {
               ? `${(s.p95LatencyMs / 1000).toFixed(2)}s`
               : "—"
           }
+        />
+        <Stat
+          label="Cost today (est.)"
+          value={fmtUsd(s.costUsdToday)}
         />
       </div>
 
@@ -170,12 +174,11 @@ export default function Dashboard() {
               <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[52%]">Model</TableHead>
-                    <TableHead className="w-[16%] text-right">
-                      Requests
-                    </TableHead>
-                    <TableHead className="w-[17%] text-right">Tokens</TableHead>
-                    <TableHead className="w-[15%] text-right">Cached</TableHead>
+                    <TableHead className="w-[40%]">Model</TableHead>
+                    <TableHead className="w-20 text-right">Requests</TableHead>
+                    <TableHead className="w-24 text-right">Tokens</TableHead>
+                    <TableHead className="w-20 text-right">Cached</TableHead>
+                    <TableHead className="w-24 text-right">Cost</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -190,14 +193,17 @@ export default function Dashboard() {
                           <span className="truncate">{m.model}</span>
                         </span>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="w-20 text-right tabular-nums whitespace-nowrap">
                         {fmtNum(m.requests)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="w-24 text-right tabular-nums whitespace-nowrap">
                         {fmtNum(m.tokens)}
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                      <TableCell className="w-20 text-right tabular-nums text-muted-foreground whitespace-nowrap">
                         {m.cached > 0 ? fmtNum(m.cached) : "—"}
+                      </TableCell>
+                      <TableCell className="w-24 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                        {m.costUsd > 0 ? fmtUsd(m.costUsd) : "—"}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -225,10 +231,11 @@ export default function Dashboard() {
             <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[55%]">Provider</TableHead>
-                  <TableHead className="w-[15%] text-right">Requests</TableHead>
-                  <TableHead className="w-[15%] text-right">Tokens</TableHead>
-                  <TableHead className="w-[15%] text-right">Share</TableHead>
+                  <TableHead className="w-[40%]">Provider</TableHead>
+                  <TableHead className="w-[13%] text-right">Requests</TableHead>
+                  <TableHead className="w-[13%] text-right">Tokens</TableHead>
+                  <TableHead className="w-[17%] text-right">Cost</TableHead>
+                  <TableHead className="w-[17%] text-right">Share</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -240,16 +247,26 @@ export default function Dashboard() {
                   return (
                     <TableRow key={p.providerId}>
                       <TableCell
-                        className="min-w-0 truncate"
+                        className="min-w-0"
                         title={p.provider}
                       >
-                        {p.provider}
+                        <span className="flex min-w-0 items-center gap-2">
+                          <ProviderIcon
+                            brand={p.catalogId}
+                            name={p.provider}
+                            className="size-3.5"
+                          />
+                          <span className="truncate">{p.provider}</span>
+                        </span>
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNum(p.requests)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNum(p.tokens)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {p.costUsd > 0 ? fmtUsd(p.costUsd) : "—"}
                       </TableCell>
                       <TableCell className="text-right tabular-nums text-muted-foreground">
                         {total

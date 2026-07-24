@@ -39,4 +39,10 @@ export interface Model {
   providers: ModelProviderLink[]; // ordered fallback chain
   createdAt: string;
   updatedAt: string;
+  /** Per-alias pricing rates (null when no rates configured). */
+  pricing: {
+    promptPer1m: number | null;
+    completionPer1m: number | null;
+    cachedPer1m: number | null;
+  } | null;
 }

@@ -150,6 +150,21 @@ export function parseModelInput(
             p.maxOutputTokens == null ? null : num(p.maxOutputTokens),
         }))
       : undefined,
+    pricing:
+      b.pricing === undefined
+        ? undefined
+        : b.pricing == null
+          ? null
+          : (() => {
+              const p = b.pricing as Record<string, unknown>;
+              return {
+                promptPer1m: p.promptPer1m == null ? null : num(p.promptPer1m),
+                completionPer1m:
+                  p.completionPer1m == null ? null : num(p.completionPer1m),
+                cachedPer1m:
+                  p.cachedPer1m == null ? null : num(p.cachedPer1m),
+              };
+            })(),
   };
 }
 

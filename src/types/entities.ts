@@ -60,4 +60,8 @@ export interface RequestLog {
   throttled?: boolean;
   /** Epoch ms when the soonest rate-limited key frees up (throttle rows only). */
   retryAt?: number;
+  /** Estimated USD cost of this request (null when pricing is not configured). */
+  costUsd: number | null;
+  /** Catalog brand id of the provider (used for icon lookup). */
+  catalogId: string | null;
 }

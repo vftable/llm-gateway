@@ -379,6 +379,14 @@ const tokenChartConfig = {
 // the shadcn chart primitives. Reads well for sparse and trending data alike
 // (a single non-zero bucket shows a clear peak, not a lone bar). Each point is
 // `{ label, tokens }`; `label` is the X-axis tick + tooltip title.
+//
+// Height: `minHeight` is passed as both `minHeight` and `height` (inline
+// style) instead of flex-1. `aspect-auto` cancels ChartContainer's default
+// `aspect-video` (16:9) which would inflate height as the card widens. The
+// explicit height is required because Recharts' ResponsiveContainer needs a
+// definite parent height on first render — without it, the inner Responsive
+// collapses to 0 and the chart renders blank (it doesn't measure up from a
+// flex-1 ancestor that itself only got its size from min-content).
 export function TokenChart({
   data,
   minHeight = 160,
@@ -389,14 +397,8 @@ export function TokenChart({
   return (
     <ChartContainer
       config={tokenChartConfig}
-      // `aspect-auto` cancels ChartContainer's default `aspect-video` (16:9),
-      // which otherwise inflates the chart height as the card grows wider.
-      // `flex-1` + `min-h-0` let the chart grow to fill the card content's
-      // available height (CardContent is a flex column), while the inline
-      // min-height sets a floor so it never collapses below a usable size. The
-      // chart follows the card's natural height instead of forcing its own.
-      className="aspect-auto h-full min-h-0 w-full flex-1"
-      style={{ minHeight }}
+      className="aspect-auto w-full"
+      style={{ minHeight, height: minHeight }}
     >
       <AreaChart data={data} margin={{ left: 4, right: 8, top: 4 }}>
         <defs>

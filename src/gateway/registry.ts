@@ -151,6 +151,7 @@ export class ModelRegistry {
           providers: [],
           createdAt: "",
           updatedAt: "",
+          pricing: null,
         },
       };
     }

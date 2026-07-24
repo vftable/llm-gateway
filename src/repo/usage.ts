@@ -162,6 +162,7 @@ export interface UsageBreakdownRow {
   providerName: string | null;
   tokens: number;
   requests: number;
+  costUsd: number;
 }
 
 export function addBreakdown(
@@ -170,17 +171,19 @@ export function addBreakdown(
   model: string,
   providerId: string | null,
   tokens: number,
+  costUsd: number | null = null,
 ): void {
   if (!apiKeyId || tokens <= 0) return;
   const day = utcDay();
+  const cost = costUsd ?? 0;
   // One request per call: seed requests=1 on insert, +1 on every conflict so the
   // counter tracks request volume alongside the token total for this group.
   db.prepare(
-    `INSERT INTO usage_breakdown (api_key_id, day, model, provider_id, tokens, requests)
-     VALUES (@id, @day, @model, @provider, @tokens, 1)
+    `INSERT INTO usage_breakdown (api_key_id, day, model, provider_id, tokens, requests, cost_usd)
+     VALUES (@id, @day, @model, @provider, @tokens, 1, @cost)
      ON CONFLICT(api_key_id, day, model, provider_id)
-     DO UPDATE SET tokens = tokens + @tokens, requests = requests + 1`,
-  ).run({ id: apiKeyId, day, model, provider: providerId, tokens });
+     DO UPDATE SET tokens = tokens + @tokens, requests = requests + 1, cost_usd = cost_usd + @cost`,
+  ).run({ id: apiKeyId, day, model, provider: providerId, tokens, cost });
 }
 
 // Breakdown for a single key for today (or a given day), grouped by model +
@@ -194,7 +197,8 @@ export function breakdownForKey(
     .prepare(
       `SELECT b.api_key_id AS apiKeyId, b.model AS model,
               b.provider_id AS providerId, p.name AS providerName,
-              SUM(b.tokens) AS tokens, SUM(b.requests) AS requests
+              SUM(b.tokens) AS tokens, SUM(b.requests) AS requests,
+              COALESCE(SUM(b.cost_usd), 0) AS costUsd
        FROM usage_breakdown b LEFT JOIN providers p ON p.id = b.provider_id
        WHERE b.api_key_id = @id AND b.day = @day
        GROUP BY b.model, b.provider_id
@@ -220,7 +224,8 @@ export function fullBreakdownToday(
       `SELECT b.api_key_id AS apiKeyId, k.name AS keyName, k.key_prefix AS keyPrefix,
               u.name AS userName, b.model AS model,
               b.provider_id AS providerId, p.name AS providerName,
-              SUM(b.tokens) AS tokens, SUM(b.requests) AS requests
+              SUM(b.tokens) AS tokens, SUM(b.requests) AS requests,
+              COALESCE(SUM(b.cost_usd), 0) AS costUsd
        FROM usage_breakdown b
        LEFT JOIN api_keys k ON k.id = b.api_key_id
        LEFT JOIN users u ON u.id = k.user_id
@@ -241,6 +246,7 @@ export interface ModelResolutionRow {
   providerName: string | null;
   tokens: number;
   requests: number;
+  costUsd: number;
 }
 
 export function modelResolution(
@@ -251,7 +257,8 @@ export function modelResolution(
   return db
     .prepare(
       `SELECT b.model AS model, b.provider_id AS providerId, p.name AS providerName,
-              SUM(b.tokens) AS tokens, SUM(b.requests) AS requests
+              SUM(b.tokens) AS tokens, SUM(b.requests) AS requests,
+              COALESCE(SUM(b.cost_usd), 0) AS costUsd
        FROM usage_breakdown b LEFT JOIN providers p ON p.id = b.provider_id
        WHERE b.day = @day AND b.model = @model
        GROUP BY b.provider_id
@@ -330,7 +337,8 @@ export function rebuildUsageFromLogs(db: DB, day?: string): RebuildResult {
         `SELECT api_key_id AS apiKeyId, date(ts) AS day, model,
                 provider_id AS providerId,
                 COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens,
-                COUNT(*) AS requests
+                COUNT(*) AS requests,
+                COALESCE(SUM(COALESCE(cost_usd,0)),0) AS costUsd
          FROM request_logs
          WHERE api_key_id IS NOT NULL AND model IS NOT NULL
                AND status >= 200 AND status < 300 ${dayFilter}
@@ -344,10 +352,11 @@ export function rebuildUsageFromLogs(db: DB, day?: string): RebuildResult {
       providerId: string | null;
       tokens: number;
       requests: number;
+      costUsd: number;
     }>;
     const insBd = db.prepare(
-      `INSERT OR REPLACE INTO usage_breakdown (api_key_id, day, model, provider_id, tokens, requests)
-       VALUES (@apiKeyId, @day, @model, @providerId, @tokens, @requests)`,
+      `INSERT OR REPLACE INTO usage_breakdown (api_key_id, day, model, provider_id, tokens, requests, cost_usd)
+       VALUES (@apiKeyId, @day, @model, @providerId, @tokens, @requests, @costUsd)`,
     );
     for (const r of bdRows) {
       insBd.run(r);

@@ -80,6 +80,9 @@ export default function ModelEditor() {
   const [responsesNative, setResponsesNative] = useState(false);
   const [modelType, setModelType] = useState("openai");
   const [caps, setCaps] = useState<ModelCapabilities>(DEFAULT_CAPABILITIES);
+  const [promptPer1m, setPromptPer1m] = useState("");
+  const [completionPer1m, setCompletionPer1m] = useState("");
+  const [cachedPer1m, setCachedPer1m] = useState("");
   const [chain, setChain] = useState<ChainRow[]>([]);
   const [saving, setSaving] = useState(false);
   // Extra upstream ids discovered via the per-row "fetch" button, keyed by row.
@@ -118,6 +121,9 @@ export default function ModelEditor() {
         endpoint: p.endpoint ?? null,
       })) ?? [],
     );
+    setPromptPer1m(m?.pricing?.promptPer1m?.toString() ?? "");
+    setCompletionPer1m(m?.pricing?.completionPer1m?.toString() ?? "");
+    setCachedPer1m(m?.pricing?.cachedPer1m?.toString() ?? "");
   }, []);
 
   useEffect(() => {
@@ -290,6 +296,11 @@ export default function ModelEditor() {
         enabled: r.enabled,
         endpoint: r.endpoint || null,
       })),
+      pricing: {
+        promptPer1m: promptPer1m ? Number(promptPer1m) : null,
+        completionPer1m: completionPer1m ? Number(completionPer1m) : null,
+        cachedPer1m: cachedPer1m ? Number(cachedPer1m) : null,
+      },
     };
     try {
       if (model) await api.updateModel(model.id, payload);
@@ -421,6 +432,40 @@ export default function ModelEditor() {
                 onChange={(e) => setMaxOutputTokens(e.target.value)}
               />
             </Field>
+          </div>
+          <div className="rounded-md border border-dashed p-3">
+            <p className="mb-3 text-xs font-medium text-muted-foreground">
+              Pricing — USD per 1M tokens. Leave blank to skip — unconfigured models render as `—` on dashboards.
+            </p>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <Field label="Prompt (input)">
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={promptPer1m}
+                  onChange={(e) => setPromptPer1m(e.target.value)}
+                  placeholder="—"
+                />
+              </Field>
+              <Field label="Completion (output)">
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={completionPer1m}
+                  onChange={(e) => setCompletionPer1m(e.target.value)}
+                  placeholder="—"
+                />
+              </Field>
+              <Field label="Cached">
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={cachedPer1m}
+                  onChange={(e) => setCachedPer1m(e.target.value)}
+                  placeholder="— defaults to prompt rate"
+                />
+              </Field>
+            </div>
           </div>
           {modelType === "openai" && (
             <label className="flex items-center gap-2">

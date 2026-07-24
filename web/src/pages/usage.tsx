@@ -38,7 +38,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { fmtNum } from "@/lib/utils";
+import { fmtNum, fmtUsd } from "@/lib/utils";
 import { ModelIcon, useModelTypes } from "@/components/model-icon";
 
 const BREAKDOWN_PAGE_SIZE = 15;
@@ -127,6 +127,7 @@ export default function Usage() {
     (keysPageClamped + 1) * KEYS_PAGE_SIZE,
   );
   const totalBreakdownTokens = rows.reduce((a, r) => a + r.tokens, 0);
+  const totalBreakdownCost = rows.reduce((a, r) => a + r.costUsd, 0);
   const breakdownPageCount = Math.max(
     1,
     Math.ceil(rows.length / BREAKDOWN_PAGE_SIZE),
@@ -142,8 +143,7 @@ export default function Usage() {
         title="Usage"
         desc="Per-key token consumption, quotas and provider resolution — resets at UTC midnight"
       />
-
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-5">
         <Stat label="Tokens today" value={fmtNum(data.today.total)} accent />
         <Stat label="Tracked keys" value={fmtNum(data.today.keys.length)} />
         <Stat
@@ -153,6 +153,10 @@ export default function Usage() {
           )}
         />
         <Stat label="Resolved requests" value={fmtNum(rows.length)} />
+        <Stat
+          label="Cost today (est.)"
+          value={fmtUsd(totalBreakdownCost)}
+        />
       </div>
 
       <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -190,15 +194,15 @@ export default function Usage() {
             {sorted.length === 0 ? (
               <EmptyState msg="No keys yet — create one on the API Keys page" />
             ) : (
-              <Table>
+              <Table className="table-fixed">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8" />
-                    <TableHead>Key</TableHead>
-                    <TableHead>Owner</TableHead>
+                    <TableHead className="w-48">Key</TableHead>
+                    <TableHead className="w-32">Owner</TableHead>
                     <TableHead className="w-44">Quota / Day</TableHead>
-                    <TableHead className="text-right">Used</TableHead>
-                    <TableHead className="text-right">Remaining</TableHead>
+                    <TableHead className="w-24 text-right">Used</TableHead>
+                    <TableHead className="w-28 text-right">Remaining</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -246,6 +250,7 @@ export default function Usage() {
                   <TableHead>Resolved Provider</TableHead>
                   <TableHead className="text-right">Requests</TableHead>
                   <TableHead className="text-right">Tokens</TableHead>
+                  <TableHead className="text-right">Cost</TableHead>
                   <TableHead className="text-right">Share</TableHead>
                 </TableRow>
               </TableHeader>
@@ -264,9 +269,9 @@ export default function Usage() {
                         <span className="truncate">{r.model}</span>
                       </span>
                     </TableCell>
-                    <TableCell className="max-w-[12rem]">
+                    <TableCell>
                       {r.providerName ? (
-                        <Badge variant="default" className="block truncate">
+                        <Badge variant="default" className="max-w-[8rem] truncate">
                           {r.providerName}
                         </Badge>
                       ) : (
@@ -278,6 +283,9 @@ export default function Usage() {
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {fmtNum(r.tokens)}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-muted-foreground">
+                      {r.costUsd > 0 ? fmtUsd(r.costUsd) : "—"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-muted-foreground">
                       {totalBreakdownTokens
@@ -329,6 +337,7 @@ export default function Usage() {
                       <TableHead>Provider Resolved</TableHead>
                       <TableHead className="text-right">Requests</TableHead>
                       <TableHead className="text-right">Tokens</TableHead>
+                      <TableHead className="text-right">Cost</TableHead>
                       <TableHead className="text-right">Share</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -353,6 +362,9 @@ export default function Usage() {
                           </TableCell>
                           <TableCell className="text-right tabular-nums">
                             {fmtNum(r.tokens)}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-muted-foreground">
+                            {r.costUsd > 0 ? fmtUsd(r.costUsd) : "—"}
                           </TableCell>
                           <TableCell className="text-right tabular-nums text-muted-foreground">
                             {total
@@ -435,13 +447,13 @@ const KeyUsageRow = memo(function KeyUsageRow({
             <ChevronRight className="h-3.5 w-3.5" />
           )}
         </TableCell>
-        <TableCell className="max-w-[12rem]">
+        <TableCell>
           <div className="truncate font-mono text-primary">{k.keyPrefix}</div>
           <div className="truncate text-[0.65rem] text-muted-foreground">
             {k.keyName ?? "—"}
           </div>
         </TableCell>
-        <TableCell className="max-w-[10rem] truncate text-muted-foreground">
+        <TableCell className="truncate text-muted-foreground">
           {k.userName ?? "—"}
         </TableCell>
         <TableCell onClick={(e) => e.stopPropagation()}>
@@ -547,9 +559,10 @@ const KeyUsageRow = memo(function KeyUsageRow({
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-12">Model</TableHead>
-                    <TableHead className="w-40">Provider</TableHead>
+                    <TableHead className="w-44">Provider</TableHead>
                     <TableHead className="w-24 text-right">Requests</TableHead>
                     <TableHead className="w-28 text-right">Tokens</TableHead>
+                    <TableHead className="w-20 text-right">Cost</TableHead>
                     <TableHead className="w-20 text-right pr-4">
                       Share
                     </TableHead>
@@ -571,10 +584,7 @@ const KeyUsageRow = memo(function KeyUsageRow({
                         </TableCell>
                         <TableCell className="max-w-[12rem]">
                           {d.providerName ? (
-                            <Badge
-                              variant="secondary"
-                              className="block truncate"
-                            >
+                            <Badge variant="secondary" className="truncate">
                               {d.providerName}
                             </Badge>
                           ) : (
@@ -586,6 +596,9 @@ const KeyUsageRow = memo(function KeyUsageRow({
                         </TableCell>
                         <TableCell className="text-right tabular-nums">
                           {fmtNum(d.tokens)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                          {d.costUsd > 0 ? fmtUsd(d.costUsd) : "—"}
                         </TableCell>
                         <TableCell className="text-right tabular-nums text-muted-foreground pr-4">
                           {total

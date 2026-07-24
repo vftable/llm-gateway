@@ -65,6 +65,8 @@ interface LogRow {
   error: string | null;
   debug_request: string | null;
   debug_response: string | null;
+  cost_usd: number | null;
+  catalog_id: string | null;
 }
 
 function mapLog(r: LogRow): RequestLog {
@@ -96,6 +98,8 @@ function mapLog(r: LogRow): RequestLog {
     // Flag only — the heavy request/response blobs are fetched on demand via
     // getRequestLogDetail so the list stays light.
     hasDebug: !!(r.debug_request || r.debug_response),
+    catalogId: r.catalog_id,
+    costUsd: r.cost_usd,
     // A transient "whole chain rate-limited" 503 (not a real failure): the UI
     // badges it amber and shows the retry countdown instead of a red error.
     ...(() => {
@@ -133,6 +137,8 @@ export interface InsertLogInput {
   debugRequest: string | null;
   /** Distilled model response JSON for the debug view (null when disabled). */
   debugResponse: string | null;
+  /** Estimated USD cost (null when pricing is not configured). */
+  costUsd: number | null;
 }
 
 export function insertRequestLog(db: DB, input: InsertLogInput): void {
@@ -141,11 +147,11 @@ export function insertRequestLog(db: DB, input: InsertLogInput): void {
       (ts, api_key_id, api_key_name, user_id, model, provider_id, provider_name,
        upstream_model, upstream_key_hash, upstream_key_mask, status, input_tokens,
        output_tokens, cached_tokens, latency_ms, client, path, stream, error,
-       debug_request, debug_response)
-     VALUES (@ts, @api_key_id, @api_key_name, @user_id, @model, @provider_id, @provider_name,
-       @upstream_model, @upstream_key_hash, @upstream_key_mask, @status, @input_tokens,
-       @output_tokens, @cached_tokens, @latency_ms, @client, @path, @stream, @error,
-       @debug_request, @debug_response)`,
+       debug_request, debug_response, cost_usd)
+    VALUES (@ts, @api_key_id, @api_key_name, @user_id, @model, @provider_id, @provider_name,
+      @upstream_model, @upstream_key_hash, @upstream_key_mask, @status, @input_tokens,
+      @output_tokens, @cached_tokens, @latency_ms, @client, @path, @stream, @error,
+      @debug_request, @debug_response, @cost_usd)`,
   ).run({
     ts: new Date().toISOString(),
     api_key_id: input.apiKeyId,
@@ -168,6 +174,7 @@ export function insertRequestLog(db: DB, input: InsertLogInput): void {
     error: input.error,
     debug_request: input.debugRequest,
     debug_response: input.debugResponse,
+    cost_usd: input.costUsd,
   });
 }
 
@@ -232,9 +239,11 @@ export function listRequestLogs(db: DB, opts: ListOpts = {}): RequestLog[] {
               rl.client, rl.path, rl.stream, rl.error,
               (rl.debug_request IS NOT NULL) AS debug_request,
               (rl.debug_response IS NOT NULL) AS debug_response,
-              p.name AS live_provider_name, k.key_prefix AS key_prefix
-       FROM request_logs rl
-       LEFT JOIN providers p ON p.id = rl.provider_id
+              p.name AS live_provider_name, k.key_prefix AS key_prefix,
+              rl.cost_usd AS cost_usd,
+              p.catalog_id AS catalog_id
+      FROM request_logs rl
+      LEFT JOIN providers p ON p.id = rl.provider_id
        LEFT JOIN api_keys k ON k.id = rl.api_key_id
        ${where} ORDER BY rl.id DESC LIMIT @limit OFFSET @offset`,
     )
@@ -348,17 +357,21 @@ export interface DashboardStats {
   throttledToday: number;
   tokensToday: number;
   errorRateToday: number;
+  costUsdToday: number;
   byModel: Array<{
     model: string;
     requests: number;
     tokens: number;
     cached: number;
+    costUsd: number;
   }>;
   byProvider: Array<{
     providerId: string;
+    catalogId: string | null;
     provider: string;
     requests: number;
     tokens: number;
+    costUsd: number;
   }>;
   statusBands: { success: number; clientError: number; serverError: number };
   p95LatencyMs: number | null;
@@ -376,7 +389,8 @@ export function dashboardStats(db: DB): DashboardStats {
          COUNT(*) AS requests,
          COALESCE(SUM(CASE WHEN (status IS NULL OR status >= 400) AND NOT ${throttle} THEN 1 ELSE 0 END), 0) AS errors,
          COALESCE(SUM(CASE WHEN ${throttle} THEN 1 ELSE 0 END), 0) AS throttled,
-         COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0) AS tokens,
+        COALESCE(SUM(COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)), 0) AS tokens,
+        COALESCE(SUM(COALESCE(cost_usd, 0)), 0) AS cost,
          COALESCE(SUM(CASE WHEN status >= 200 AND status < 300 THEN 1 ELSE 0 END), 0) AS success,
          COALESCE(SUM(CASE WHEN status >= 400 AND status < 500 THEN 1 ELSE 0 END), 0) AS clientErr,
          COALESCE(SUM(CASE WHEN status >= 500 AND NOT ${throttle} THEN 1 ELSE 0 END), 0) AS serverErr
@@ -387,6 +401,7 @@ export function dashboardStats(db: DB): DashboardStats {
     errors: number;
     throttled: number;
     tokens: number;
+    cost: number;
     success: number;
     clientErr: number;
     serverErr: number;
@@ -396,7 +411,8 @@ export function dashboardStats(db: DB): DashboardStats {
     .prepare(
       `SELECT model, COUNT(*) AS requests,
          COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) AS tokens,
-         COALESCE(SUM(COALESCE(cached_tokens,0)),0) AS cached
+         COALESCE(SUM(COALESCE(cached_tokens,0)),0) AS cached,
+         COALESCE(SUM(COALESCE(cost_usd,0)),0) AS costUsd
        FROM request_logs WHERE date(ts) = @today AND model IS NOT NULL
        GROUP BY model ORDER BY requests DESC LIMIT 10`,
     )
@@ -405,6 +421,7 @@ export function dashboardStats(db: DB): DashboardStats {
     requests: number;
     tokens: number;
     cached: number;
+    costUsd: number;
   }>;
 
   // Join the live providers table so a renamed provider shows its CURRENT name,
@@ -414,8 +431,10 @@ export function dashboardStats(db: DB): DashboardStats {
     .prepare(
       `SELECT rl.provider_id AS providerId,
          COALESCE(p.name, rl.provider_name) AS provider,
+         p.catalog_id AS catalogId,
          COUNT(*) AS requests,
-         COALESCE(SUM(COALESCE(rl.input_tokens,0)+COALESCE(rl.output_tokens,0)),0) AS tokens
+        COALESCE(SUM(COALESCE(rl.input_tokens,0)+COALESCE(rl.output_tokens,0)),0) AS tokens,
+        COALESCE(SUM(COALESCE(rl.cost_usd,0)),0) AS costUsd
        FROM request_logs rl
        LEFT JOIN providers p ON p.id = rl.provider_id
        WHERE date(rl.ts) = @today AND rl.provider_id IS NOT NULL
@@ -423,9 +442,11 @@ export function dashboardStats(db: DB): DashboardStats {
     )
     .all({ today }) as Array<{
     providerId: string;
+    catalogId: string | null;
     provider: string;
     requests: number;
     tokens: number;
+    costUsd: number;
   }>;
 
   const p95Row = db
@@ -453,6 +474,7 @@ export function dashboardStats(db: DB): DashboardStats {
     throttledToday: agg.throttled || 0,
     tokensToday: agg.tokens || 0,
     errorRateToday: rateDenom > 0 ? (agg.errors / rateDenom) * 100 : 0,
+    costUsdToday: agg.cost || 0,
     byModel,
     byProvider,
     statusBands: {

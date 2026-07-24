@@ -78,6 +78,7 @@ import { readResponseUsage } from "../formats/tokens";
 import { listProviders } from "../repo/providers";
 import { addUsage, subtractUsage, addBreakdown } from "../repo/usage";
 import { insertRequestLog, throttleLogError } from "../repo/request-logs";
+import { getPricingByAlias, computeCostUsd } from "../repo/pricing";
 import { upsertUnifiedUsage } from "../repo/provider-key-usage";
 import { filterUnifiedRateLimitHeaders } from "../services/anthropic/unified-usage";
 import {
@@ -1955,7 +1956,7 @@ export class ForwardingEngine {
   private settleUsage(
     ctx: ForwardContext,
     provider: Provider | null,
-    usage: { input?: number; output?: number },
+    usage: { input?: number; output?: number; cached?: number },
   ): void {
     if (!ctx.apiKey) return;
     // These are raw better-sqlite3 writes; a transient DB error must not escape
@@ -1969,6 +1970,12 @@ export class ForwardingEngine {
       //    back to estimates upstream (streaming observer / buffered read).
       const total = (usage.input ?? 0) + (usage.output ?? 0);
       if (total > 0) {
+        const costUsd = computeCostUsd(
+          getPricingByAlias(this.db, ctx.alias),
+          usage.input ?? null,
+          usage.output ?? null,
+          usage.cached ?? null,
+        );
         addUsage(this.db, ctx.apiKey.id, total);
         addBreakdown(
           this.db,
@@ -1976,6 +1983,7 @@ export class ForwardingEngine {
           ctx.alias,
           provider?.id ?? null,
           total,
+          costUsd,
         );
       }
     } catch (err) {
@@ -2561,6 +2569,12 @@ export class ForwardingEngine {
     },
   ): void {
     try {
+      const costUsd = computeCostUsd(
+        getPricingByAlias(this.db, ctx.alias),
+        inputTokens,
+        outputTokens,
+        cachedTokens,
+      );
       insertRequestLog(this.db, {
         apiKeyId: ctx.apiKey?.id ?? null,
         apiKeyName: ctx.apiKey?.name ?? null,
@@ -2582,6 +2596,7 @@ export class ForwardingEngine {
         error,
         debugRequest: ctx.debug ? (ctx.debugRequest ?? null) : null,
         debugResponse: ctx.debug ? (debugResponse ?? null) : null,
+        costUsd,
       });
     } catch (err) {
       this.logger.warn("log_insert_failed", { err: (err as Error).message });

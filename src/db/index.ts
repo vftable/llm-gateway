@@ -133,6 +133,8 @@ CREATE TABLE IF NOT EXISTS usage_breakdown (
   model       TEXT NOT NULL,
   provider_id TEXT,
   tokens      INTEGER NOT NULL DEFAULT 0,
+  requests    INTEGER NOT NULL DEFAULT 0,
+  cost_usd    REAL NOT NULL DEFAULT 0,
   PRIMARY KEY (api_key_id, day, model, provider_id)
 );
 CREATE INDEX IF NOT EXISTS idx_usage_breakdown_key   ON usage_breakdown(api_key_id);
@@ -160,7 +162,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
   stream        INTEGER NOT NULL DEFAULT 0,
   error         TEXT,
   debug_request  TEXT,
-  debug_response TEXT
+  debug_response TEXT,
+  cost_usd       REAL
 );
 CREATE INDEX IF NOT EXISTS idx_request_logs_ts        ON request_logs(ts);
 CREATE INDEX IF NOT EXISTS idx_request_logs_api_key   ON request_logs(api_key_id);
@@ -295,6 +298,14 @@ CREATE TABLE IF NOT EXISTS provider_key_sync (
   last_synced_at    TEXT,
   last_sync_error   TEXT,
   enabled           INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS model_pricing (
+  alias             TEXT PRIMARY KEY,
+  prompt_per_1m     REAL,
+  completion_per_1m REAL,
+  cached_per_1m     REAL,
+  updated_at        TEXT NOT NULL
 );
 
 `;
@@ -467,6 +478,16 @@ function migrate(db: DB): void {
     "requests",
     "INTEGER NOT NULL DEFAULT 0",
   );
+  addColumnIfMissing(db, "request_logs", "cost_usd", "REAL");
+  addColumnIfMissing(db, "usage_breakdown", "cost_usd", "REAL NOT NULL DEFAULT 0");
+  // ponytail: CREATE TABLE IF NOT EXISTS covers both fresh-DB (SCHEMA_SQL) and legacy-DB
+  db.exec(`CREATE TABLE IF NOT EXISTS model_pricing (
+    alias TEXT PRIMARY KEY,
+    prompt_per_1m REAL,
+    completion_per_1m REAL,
+    cached_per_1m REAL,
+    updated_at TEXT NOT NULL
+  );`);
   migrateProviderKeysToTable(db);
   migrateApiKeysDropFull(db);
 }

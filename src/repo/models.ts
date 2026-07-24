@@ -13,6 +13,10 @@ import {
 import { parseJsonObject } from "./json";
 import { stockAnthropicModel } from "../formats/anthropic/stock-models";
 import { slugify } from "./providers";
+import {
+  upsertPricing,
+  deletePricing,
+} from "./pricing";
 
 interface ModelRow {
   id: string;
@@ -27,6 +31,10 @@ interface ModelRow {
   sort_order: number;
   created_at: string;
   updated_at: string;
+  // LEFT JOINed from model_pricing (absent when no pricing row)
+  pricing_prompt_per_1m?: number | null;
+  pricing_completion_per_1m?: number | null;
+  pricing_cached_per_1m?: number | null;
 }
 
 interface LinkRow {
@@ -86,6 +94,14 @@ function mapModel(r: ModelRow, links: LinkJoinedRow[]): Model {
       })),
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    pricing:
+      r.pricing_prompt_per_1m !== undefined
+        ? {
+            promptPer1m: r.pricing_prompt_per_1m ?? null,
+            completionPer1m: r.pricing_completion_per_1m ?? null,
+            cachedPer1m: r.pricing_cached_per_1m ?? null,
+          }
+        : null,
   };
 }
 
@@ -94,10 +110,15 @@ const LINK_JOIN =
   "mp.context_window, mp.max_output_tokens, " +
   "p.name AS provider_name, p.enabled AS provider_enabled " +
   "FROM model_providers mp LEFT JOIN providers p ON p.id = mp.provider_id";
-
 export function listModels(db: DB, includeDisabled = true): Model[] {
   const rows = db
-    .prepare("SELECT * FROM models ORDER BY sort_order, alias")
+    .prepare(
+      `SELECT m.*, mp.prompt_per_1m AS pricing_prompt_per_1m,
+              mp.completion_per_1m AS pricing_completion_per_1m,
+              mp.cached_per_1m AS pricing_cached_per_1m
+       FROM models m LEFT JOIN model_pricing mp ON mp.alias = m.alias
+       ORDER BY m.sort_order, m.alias`,
+    )
     .all() as ModelRow[];
   const links = db.prepare(LINK_JOIN).all() as LinkJoinedRow[];
   const all = rows.map((r) => mapModel(r, links));
@@ -105,8 +126,15 @@ export function listModels(db: DB, includeDisabled = true): Model[] {
 }
 
 export function getModel(db: DB, id: string): Model | null {
-  const row = db.prepare("SELECT * FROM models WHERE id = ?").get(id) as
-    ModelRow | undefined;
+  const row = db
+    .prepare(
+      `SELECT m.*, mp.prompt_per_1m AS pricing_prompt_per_1m,
+              mp.completion_per_1m AS pricing_completion_per_1m,
+              mp.cached_per_1m AS pricing_cached_per_1m
+       FROM models m LEFT JOIN model_pricing mp ON mp.alias = m.alias
+       WHERE m.id = ?`,
+    )
+    .get(id) as ModelRow | undefined;
   if (!row) return null;
   const links = db
     .prepare(`${LINK_JOIN} WHERE mp.model_id = ?`)
@@ -139,6 +167,11 @@ export interface ModelInput {
     contextWindow?: number | null;
     maxOutputTokens?: number | null;
   }>;
+  pricing?: {
+    promptPer1m?: number | null;
+    completionPer1m?: number | null;
+    cachedPer1m?: number | null;
+  } | null;
 }
 
 export function createModel(db: DB, input: ModelInput): Model {
@@ -148,13 +181,25 @@ export function createModel(db: DB, input: ModelInput): Model {
   if (getModelByAlias(db, input.alias))
     throw new Error(`Model alias '${input.alias}' is already in use`);
 
-  writeModel(db, "insert", id, now, now, input);
+  const tx = db.transaction(() => {
+    writeModel(db, "insert", id, now, now, input);
 
-  const providers = input.providers ?? [];
-  let priority = 0;
-  for (const p of providers) {
-    upsertLink(db, id, priority++, p);
-  }
+    const providers = input.providers ?? [];
+    let priority = 0;
+    for (const p of providers) {
+      upsertLink(db, id, priority++, p);
+    }
+
+    if (input.pricing) {
+      upsertPricing(db, {
+        alias: input.alias,
+        promptPer1m: input.pricing.promptPer1m ?? null,
+        completionPer1m: input.pricing.completionPer1m ?? null,
+        cachedPer1m: input.pricing.cachedPer1m ?? null,
+      });
+    }
+  });
+  tx();
   return getModel(db, id)!;
 }
 
@@ -192,15 +237,33 @@ export function updateModel(
   if (merged.alias !== existing.alias && getModelByAlias(db, merged.alias)) {
     throw new Error(`Model alias '${merged.alias}' is already in use`);
   }
-  writeModel(db, "update", id, existing.createdAt, now, merged);
 
-  if (input.providers) {
-    db.prepare("DELETE FROM model_providers WHERE model_id = ?").run(id);
-    let priority = 0;
-    for (const p of input.providers) {
-      upsertLink(db, id, priority++, p);
+  const tx = db.transaction(() => {
+    writeModel(db, "update", id, existing.createdAt, now, merged);
+
+    if (input.providers) {
+      db.prepare("DELETE FROM model_providers WHERE model_id = ?").run(id);
+      let priority = 0;
+      for (const p of input.providers) {
+        upsertLink(db, id, priority++, p);
+      }
     }
-  }
+
+    // Handle pricing: explicit object = upsert, null = clear, undefined = leave
+    if (input.pricing !== undefined) {
+      if (input.pricing === null) {
+        deletePricing(db, merged.alias);
+      } else {
+        upsertPricing(db, {
+          alias: merged.alias,
+          promptPer1m: input.pricing.promptPer1m ?? null,
+          completionPer1m: input.pricing.completionPer1m ?? null,
+          cachedPer1m: input.pricing.cachedPer1m ?? null,
+        });
+      }
+    }
+  });
+  tx();
   return getModel(db, id);
 }
 
@@ -396,7 +459,6 @@ export function batchModelLinks(
       ordered.forEach((link, priority) =>
         setPriority.run(priority, modelId, link.providerId, link.upstreamModel),
       );
-      result.reordered = ops.reorder.length;
     } else if ((ops.add?.length ?? 0) + (ops.remove?.length ?? 0) > 0) {
       // Compact priorities after structural edits.
       current = getModel(db, modelId)!.providers;
@@ -415,6 +477,14 @@ export function batchModelLinks(
 }
 
 export function deleteModel(db: DB, id: string): boolean {
-  const r = db.prepare("DELETE FROM models WHERE id = ?").run(id);
-  return r.changes > 0;
+  const row = db.prepare("SELECT alias FROM models WHERE id = ?").get(id) as
+    | { alias: string }
+    | undefined;
+  if (!row) return false;
+  const tx = db.transaction(() => {
+    deletePricing(db, row.alias);
+    db.prepare("DELETE FROM models WHERE id = ?").run(id);
+  });
+  tx();
+  return true;
 }

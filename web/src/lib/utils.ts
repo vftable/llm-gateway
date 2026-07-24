@@ -9,6 +9,11 @@ export function fmtNum(n: number | null | undefined): string {
   if (n == null) return "—";
   return new Intl.NumberFormat("en-US").format(n);
 }
+// Format a dollar amount: < $0.01 → 4 decimals, otherwise 2.
+export function fmtUsd(n: number): string {
+  if (Math.abs(n) < 0.01) return `$${n.toFixed(4)}`;
+  return `$${n.toFixed(2)}`;
+}
 
 // Display label for a wire-format / model-type value. CSS `text-transform:
 // capitalize` mangles "openai" into "Openai"; this preserves the correct casing

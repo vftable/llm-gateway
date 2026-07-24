@@ -26,9 +26,10 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Switch } from "@/components/ui/switch";
-import { cn, fmtTime, fmtNum } from "@/lib/utils";
+import { cn, fmtTime, fmtNum, fmtUsd } from "@/lib/utils";
 import {
   ModelIcon,
+  ProviderIcon,
   useModelTypes,
   brandForProvider,
 } from "@/components/model-icon";
@@ -120,20 +121,21 @@ export default function RequestLogs() {
           ) : items.length === 0 && page === 0 ? (
             <EmptyState msg="No matching requests" />
           ) : (
-            <Table className="table-fixed min-w-[64rem]">
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-[9%]">Time</TableHead>
+                  <TableHead className="w-[11%] whitespace-nowrap">Time</TableHead>
                   <TableHead className="w-[9%]">Key</TableHead>
-                  <TableHead className="w-[9%]">Client</TableHead>
-                  <TableHead className="w-[18%]">Model</TableHead>
-                  <TableHead className="w-[20%]">Provider</TableHead>
+                  <TableHead className="w-[7%]">Client</TableHead>
+                  <TableHead className="w-[16%]">Model</TableHead>
+                  <TableHead className="w-[16%]">Provider</TableHead>
                   <TableHead className="w-[7%] text-right">Status</TableHead>
-                  <TableHead className="w-[10%] text-right">
+                  <TableHead className="w-[10%] text-right whitespace-nowrap">
                     Tok In/Out
                   </TableHead>
+                  <TableHead className="w-[7%] text-right">Cost</TableHead>
                   <TableHead className="w-[7%] text-right">Latency</TableHead>
-                  <TableHead className="w-[11%]">Note</TableHead>
+                  <TableHead className="w-[10%]">Note</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -247,8 +249,8 @@ const LogRow = memo(function LogRow({
   return (
     <>
       <TableRow className={cn(l.hasDebug && "cursor-pointer")} onClick={toggle}>
-        <TableCell className="whitespace-nowrap text-muted-foreground">
-          <span className="flex items-center gap-1.5">
+        <TableCell className="text-left whitespace-nowrap text-muted-foreground text-xs">
+          <span className="flex items-center">
             {l.hasDebug ? (
               <ChevronRight
                 className={cn(
@@ -257,7 +259,7 @@ const LogRow = memo(function LogRow({
                 )}
               />
             ) : (
-              <span className="w-3 shrink-0" />
+              <span className="shrink-0" />
             )}
             {fmtTime(l.ts)}
           </span>
@@ -290,8 +292,15 @@ const LogRow = memo(function LogRow({
         </TableCell>
         <TableCell className="min-w-0">
           <div className="min-w-0">
-            <span className="block truncate font-medium text-foreground">
-              {l.providerName ?? l.providerId ?? "—"}
+            <span className="flex min-w-0 items-center gap-2 font-medium text-foreground">
+              <ProviderIcon
+                brand={l.catalogId}
+                name={l.providerName}
+                className="size-3.5"
+              />
+              <span className="truncate">
+                {l.providerName ?? l.providerId ?? "—"}
+              </span>
             </span>
             {(l.upstreamModel || l.upstreamKeyMask) && (
               <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
@@ -345,6 +354,9 @@ const LogRow = memo(function LogRow({
           )}
         </TableCell>
         <TableCell className="text-right tabular-nums text-muted-foreground">
+          {l.costUsd != null ? fmtUsd(l.costUsd) : "—"}
+        </TableCell>
+        <TableCell className="text-right tabular-nums text-muted-foreground">
           {fmtLatency(l.latencyMs)}
         </TableCell>
         <TableCell
@@ -356,7 +368,7 @@ const LogRow = memo(function LogRow({
       </TableRow>
       {open && (
         <TableRow className="hover:bg-transparent">
-          <TableCell colSpan={9} className="bg-muted/30 p-0">
+          <TableCell colSpan={10} className="bg-muted/30 p-0">
             <div className="grid gap-3 p-3 md:grid-cols-2">
               <DebugPanel
                 title="Request"

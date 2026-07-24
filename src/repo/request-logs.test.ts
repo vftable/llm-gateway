@@ -45,6 +45,7 @@ const base = {
   error: null,
   debugRequest: null,
   debugResponse: null,
+  costUsd: null,
 };
 
 test("request logs round-trip immutable upstream key mask without exposing hash", () => {
