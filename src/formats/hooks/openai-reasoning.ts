@@ -336,7 +336,8 @@ function normalizeGlmChatReasoning(
       ? (body.thinking as Record<string, unknown>)
       : {};
   const explicitlyDisabled = existingThinking.type === "disabled" || disabled;
-  const skipThinking = effort === "minimal" || effort === "none";
+  const skipThinking =
+    effort === "minimal" || effort === "none" || effort === "low";
 
   if (skipThinking || explicitlyDisabled) {
     body.thinking = { ...existingThinking, type: "disabled" };
@@ -345,9 +346,25 @@ function normalizeGlmChatReasoning(
   }
 
   body.thinking = { ...existingThinking, type: "enabled" };
-  if (isGlm52Plus(model)) body.reasoning_effort = effort;
-  else delete body.reasoning_effort;
+  if (isGlm52Plus(model)) {
+    // GLM-5.2+ supports two effort tiers: "high" (default) and "max".
+    // Clamp everything else to the nearest supported level.
+    body.reasoning_effort = clampGlmEffort(effort);
+  } else {
+    delete body.reasoning_effort;
+  }
   return body;
+}
+
+// Clamp a validated GlmEffort to the two levels GLM-5.2+ actually supports.
+//   "medium"  → "high"
+//   "xhigh"   → "max"
+//   "high"/"max" pass through.
+function clampGlmEffort(effort: GlmEffort): "high" | "max" {
+  if (effort === "medium") return "high";
+  if (effort === "xhigh") return "max";
+  if (effort === "max") return "max";
+  return "high";
 }
 
 function normalizeResponsesReasoning(

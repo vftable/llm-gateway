@@ -94,16 +94,22 @@ test("Chat: no-op when reasoning_effort is absent", () => {
 
 const GLM_CONTEXT = { catalogId: "glm-coding" };
 
-test("GLM-5.2 preserves documented positive efforts and enables thinking", () => {
-  for (const effort of ["low", "medium", "high", "xhigh", "max"]) {
+test("GLM-5.2 clamps effort to high/max and enables thinking", () => {
+  const cases = [
+    ["medium", "high"],
+    ["high", "high"],
+    ["xhigh", "max"],
+    ["max", "max"],
+  ] as const;
+  for (const [input, expected] of cases) {
     const body: Record<string, unknown> = {
       model: "glm-5.2",
       messages: [{ role: "user", content: "hi" }],
-      reasoning_effort: effort,
+      reasoning_effort: input,
       thinking: { clear_thinking: false },
     };
     normalizeOpenAIReasoning(body, GLM_CONTEXT);
-    assert.equal(body.reasoning_effort, effort);
+    assert.equal(body.reasoning_effort, expected, `${input} → ${expected}`);
     assert.deepEqual(body.thinking, {
       clear_thinking: false,
       type: "enabled",
@@ -111,11 +117,11 @@ test("GLM-5.2 preserves documented positive efforts and enables thinking", () =>
   }
 });
 
-test("GLM-5.2 normalizes effort aliases without GPT clamping", () => {
+test("GLM-5.2 normalizes effort aliases to high/max", () => {
   const cases = [
     ["maximum", "max"],
-    ["x-high", "xhigh"],
-    ["extra_high", "xhigh"],
+    ["x-high", "max"],
+    ["extra_high", "max"],
     ["highest", "high"],
   ] as const;
   for (const [input, expected] of cases) {
@@ -125,13 +131,13 @@ test("GLM-5.2 normalizes effort aliases without GPT clamping", () => {
       reasoning_effort: input,
     };
     normalizeOpenAIReasoning(body, GLM_CONTEXT);
-    assert.equal(body.reasoning_effort, expected);
+    assert.equal(body.reasoning_effort, expected, `${input} → ${expected}`);
     assert.deepEqual(body.thinking, { type: "enabled" });
   }
 });
 
-test("GLM minimal/none aliases disable thinking and remove effort", () => {
-  for (const effort of ["minimal", "none", "min", "lowest"]) {
+test("GLM low/minimal/none aliases disable thinking and remove effort", () => {
+  for (const effort of ["low", "minimal", "none", "min", "lowest"]) {
     const body: Record<string, unknown> = {
       model: "glm-5.2",
       messages: [],
@@ -139,11 +145,12 @@ test("GLM minimal/none aliases disable thinking and remove effort", () => {
       thinking: { clear_thinking: false },
     };
     normalizeOpenAIReasoning(body, GLM_CONTEXT);
-    assert.equal(body.reasoning_effort, undefined);
-    assert.deepEqual(body.thinking, {
-      clear_thinking: false,
-      type: "disabled",
-    });
+    assert.equal(body.reasoning_effort, undefined, `effort=${effort}`);
+    assert.deepEqual(
+      body.thinking,
+      { clear_thinking: false, type: "disabled" },
+      `effort=${effort}`,
+    );
   }
 });
 
