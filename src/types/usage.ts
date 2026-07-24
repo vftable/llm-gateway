@@ -7,7 +7,8 @@
 // burned. Adapters that can't query real usage return placeholder data (dummy:
 // true) so the dashboard has content until a real poller is wired in.
 
-export type UsageUnit = "tokens" | "requests" | "credits" | "percent";
+export type UsageUnit =
+  "tokens" | "requests" | "credits" | "dollars" | "percent";
 
 export interface ProviderKeyUsageWindow {
   /** Stable id for the window ("5h", "weekly"). */

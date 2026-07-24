@@ -224,9 +224,10 @@ test("newapi.keyUsage: GET /api/usage/token with Bearer auth, capped quota", asy
   assert.equal(res.unavailable, undefined);
   assert.equal(res.windows.length, 1);
   const w = res.windows[0];
-  assert.equal(w.used, 2076);
-  assert.equal(w.limit, 1002076); // total_available + total_used
-  assert.equal(w.unit, "credits");
+  // Values are converted from credits to dollars (default rate: 1M credits/$1).
+  assert.equal(w.used, 2076 / 1_000_000);
+  assert.equal(w.limit, 1002076 / 1_000_000);
+  assert.equal(w.unit, "dollars");
   assert.ok(!w.label.includes("unlimited"));
   // A credit grant is a one-shot balance, not a refilling window — no
   // resetsAt on the window at all.
@@ -282,7 +283,7 @@ test("newapi.keyUsage: unlimited_quota -> finite JSON-safe sentinel limit, label
     ),
   );
   const w = res.windows[0];
-  assert.equal(w.used, 2076);
+  assert.equal(w.used, 2076 / 1_000_000);
   // Never Infinity — JSON.stringify(Infinity) => null, which breaks the
   // wire response and the frontend's used/limit math.
   assert.ok(Number.isFinite(w.limit));
@@ -291,7 +292,7 @@ test("newapi.keyUsage: unlimited_quota -> finite JSON-safe sentinel limit, label
   assert.equal(JSON.parse(JSON.stringify(res)).windows[0].limit, w.limit);
 });
 
-test("newapi.keyUsage: custom quotaPerDollar overrides the default label rate", async () => {
+test("newapi.keyUsage: custom quotaPerDollar converts credits to dollars correctly", async () => {
   const p = prov({
     catalogId: "newapi",
     providerConfig: { quotaPerDollar: 2_000_000 },
@@ -300,62 +301,41 @@ test("newapi.keyUsage: custom quotaPerDollar overrides the default label rate", 
     newapiCtx(p, async () =>
       jsonResponse(200, {
         code: true,
-        data: { total_available: 100, total_used: 0, unlimited_quota: false },
+        data: {
+          total_available: 100,
+          total_used: 2_000_000,
+          unlimited_quota: false,
+        },
       }),
     ),
   );
-  // 2,000,000 / 1,000,000 = 2 -> "(2M/$1)"; the default (1M/$1) must NOT appear.
-  assert.ok(res.windows[0].label.includes("(2M/$1)"));
-  assert.ok(!res.windows[0].label.includes("(1M/$1)"));
+  const w = res.windows[0];
+  assert.equal(w.unit, "dollars");
+  // 2_000_000 credits at 2M/$1 = $1.00 used
+  assert.equal(w.used, 1);
+  assert.equal(w.label, "Balance");
 });
 
-test("newapi.keyUsage: default quotaPerDollar (no providerConfig) labels 1M/$1", async () => {
+test("newapi.keyUsage: default quotaPerDollar (no providerConfig) converts at 1M/$1", async () => {
   const p = prov({ catalogId: "newapi" });
   const res = await newapi.keyUsage(
     newapiCtx(p, async () =>
       jsonResponse(200, {
         code: true,
-        data: { total_available: 100, total_used: 0, unlimited_quota: false },
+        data: {
+          total_available: 500_000,
+          total_used: 500_000,
+          unlimited_quota: false,
+        },
       }),
     ),
   );
-  assert.ok(res.windows[0].label.includes("(1M/$1)"));
-});
-
-test("newapi.keyUsage: sub-1M quotaPerDollar labels in k, not a rounded-up M", async () => {
-  const p = prov({
-    catalogId: "newapi",
-    providerConfig: { quotaPerDollar: 500_000 },
-  });
-  const res = await newapi.keyUsage(
-    newapiCtx(p, async () =>
-      jsonResponse(200, {
-        code: true,
-        data: { total_available: 100, total_used: 0, unlimited_quota: false },
-      }),
-    ),
-  );
-  // A naive toFixed(0) on (500_000/1_000_000) rounds 0.5 -> "1", misreporting
-  // a 500k/$1 rate as "1M/$1" (double the real rate). Must read 500k instead
-  // — same k/M convention as the dashboard's context-window formatter.
-  assert.ok(res.windows[0].label.includes("(500k/$1)"));
-  assert.ok(!res.windows[0].label.includes("(1M/$1)"));
-});
-
-test("newapi.keyUsage: fractional-k quotaPerDollar trims to 1 decimal (matches fmtTokens)", async () => {
-  const p = prov({
-    catalogId: "newapi",
-    providerConfig: { quotaPerDollar: 250_000 },
-  });
-  const res = await newapi.keyUsage(
-    newapiCtx(p, async () =>
-      jsonResponse(200, {
-        code: true,
-        data: { total_available: 100, total_used: 0, unlimited_quota: false },
-      }),
-    ),
-  );
-  assert.ok(res.windows[0].label.includes("(250k/$1)"));
+  const w = res.windows[0];
+  assert.equal(w.unit, "dollars");
+  // 500k credits at 1M/$1 = $0.50 used, $1.00 limit
+  assert.equal(w.used, 0.5);
+  assert.equal(w.limit, 1);
+  assert.equal(w.label, "Balance");
 });
 
 test("newapi.keyUsage: non-2xx status -> unavailable with status in message", async () => {

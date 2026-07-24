@@ -5,7 +5,6 @@ import {
 } from "../base";
 import type { UsageCtx, KeyUsageResult } from "../base/types";
 import { WireKind } from "../../types";
-import { fmtCompact } from "../../utils";
 import { OPENAI_DEFAULT_TRANSFORMS } from "./openai";
 
 // NewAPI — OpenAI-compatible provider with credit-based quota tracking.
@@ -130,25 +129,29 @@ class NewApiAdapter extends OpenAICompatibleAdapter {
 
     const d = parsed.data;
     const rate = readQuota(ctx.provider);
-    const used = d.total_used ?? 0;
+    const usedCredits = d.total_used ?? 0;
     const unlimited = d.unlimited_quota === true;
     // total_available reads 0 on an unlimited key (it isn't tracking a real
     // ceiling), not an actual 0-remaining cap. Infinity isn't JSON-safe
     // (serializes to null over the wire), so use a large finite sentinel —
     // the "(unlimited)" label carries the real meaning; the bar just needs
     // to stay visually near-empty.
-    const limit = unlimited
-      ? Math.max(used * 10, 1_000_000_000)
-      : (d.total_available ?? 0) + used;
+    const limitCredits = unlimited
+      ? Math.max(usedCredits * 10, 1_000_000_000)
+      : (d.total_available ?? 0) + usedCredits;
+
+    // Convert credits to dollars for a human-readable display.
+    const used = usedCredits / rate;
+    const limit = limitCredits / rate;
 
     return {
       windows: [
         {
           id: "token-credits",
-          label: `Credits${unlimited ? " (unlimited)" : ` (${fmtCompact(rate)}/$1)`}`,
+          label: `Balance${unlimited ? " (unlimited)" : ""}`,
           used,
           limit,
-          unit: "credits",
+          unit: "dollars" as const,
           // No `resetsAt` — a NewAPI credit grant is a one-time balance, not
           // a rolling window that refills. `expires_at` (below) is when the
           // TOKEN ITSELF stops working, not when usage resets.

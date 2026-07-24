@@ -136,7 +136,8 @@ export interface Provider {
 }
 
 // --- Provider key-usage report (upstream quota view) ---
-export type UsageUnit = "tokens" | "requests" | "credits" | "percent";
+export type UsageUnit =
+  "tokens" | "requests" | "credits" | "dollars" | "percent";
 
 export interface ProviderKeyUsageWindow {
   id: string;

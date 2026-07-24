@@ -543,8 +543,15 @@ function ExpiryBadge({ expiresAt }: { expiresAt: string }) {
   );
 }
 
-// Requests are plain counts; tokens/credits read better abbreviated (1.2M).
+function fmtDollars(n: number): string {
+  if (n >= 1000) return `$${fmtTokens(n)}`;
+  return `$${n.toFixed(2)}`;
+}
+
+// Requests are plain counts; tokens/credits read better abbreviated (1.2M);
+// dollars get a $ prefix with 2-decimal precision for small values.
 function fmtUsage(n: number, unit: UsageUnit): string {
+  if (unit === "dollars") return fmtDollars(n);
   return unit === "requests" ? fmtNum(n) : fmtTokens(n);
 }
 
@@ -580,10 +587,8 @@ function UsageBar({ window: w }: { window: ProviderKeyUsageWindow }) {
                 {fmtUsage(used, w.unit)}
               </span>
               {" / "}
-              <span className="font-mono">
-                {fmtUsage(w.limit, w.unit)}
-              </span>{" "}
-              {w.unit}
+              <span className="font-mono">{fmtUsage(w.limit, w.unit)}</span>
+              {w.unit !== "dollars" && ` ${w.unit}`}
             </>
           )}
         </span>
