@@ -139,17 +139,17 @@ export const DEFAULT_MODEL_PRICING: DefaultModelPricing[] = [
     id: "gpt-5.6-terra",
     label: "GPT-5.6 Terra",
     brand: "openai",
-    promptPer1m: 2.5,
-    completionPer1m: 15,
-    cachedPer1m: 0.25,
+    promptPer1m: 2,
+    completionPer1m: 12,
+    cachedPer1m: 0.2,
   },
   {
     id: "gpt-5.6-luna",
     label: "GPT-5.6 Luna",
     brand: "openai",
-    promptPer1m: 1,
-    completionPer1m: 6,
-    cachedPer1m: 0.1,
+    promptPer1m: 0.2,
+    completionPer1m: 1.2,
+    cachedPer1m: 0.02,
   },
 
   // --- DeepSeek -----------------------------------------------------------
