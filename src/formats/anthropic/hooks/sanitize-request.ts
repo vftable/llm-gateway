@@ -18,7 +18,10 @@
 // isn't in the documented Messages API spec.
 
 import type { AnthropicMessagesRequest, Json } from "../../pipeline";
-import { isModelSamplingStripped } from "../model-version";
+import {
+  isForcedToolChoiceUnsupported,
+  isModelSamplingStripped,
+} from "../model-version";
 
 // Canonical key order for the outbound JSON body. JSON.stringify serializes
 // in insertion order, so rebuilding the object in this sequence produces a
@@ -58,6 +61,7 @@ export function sanitizeAnthropicRequest(
   if (!body || typeof body !== "object") return body;
 
   rescueEffort(body);
+  downgradeForcedToolChoice(body, model);
 
   if (typeof body.system === "string")
     body.system = [{ type: "text", text: body.system }];
@@ -80,7 +84,25 @@ export function sanitizeAnthropicRequest(
   return ordered as AnthropicMessagesRequest;
 }
 
-const ANTHROPIC_EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
+// Newer models 400 on tool_choice any/tool ("type "tool" and "any" are not
+// supported for this model"). Degrade to auto, keeping disable_parallel_tool_use.
+function downgradeForcedToolChoice(
+  body: AnthropicMessagesRequest,
+  model: string,
+): void {
+  const tc = body.tool_choice as
+    | { type?: string; disable_parallel_tool_use?: boolean }
+    | undefined;
+  if (!tc || typeof tc !== "object") return;
+  if (tc.type !== "any" && tc.type !== "tool") return;
+  if (!isForcedToolChoiceUnsupported(model)) return;
+  const next: Record<string, unknown> = { type: "auto" };
+  if (tc.disable_parallel_tool_use !== undefined)
+    next.disable_parallel_tool_use = tc.disable_parallel_tool_use;
+  body.tool_choice = next as typeof body.tool_choice;
+}
+
+const ANTHROPIC_EFFORTS =["low", "medium", "high", "xhigh", "max"] as const;
 type AnthropicEffort = (typeof ANTHROPIC_EFFORTS)[number];
 
 export function toAnthropicEffort(value: unknown): AnthropicEffort | undefined {

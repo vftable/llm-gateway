@@ -9,6 +9,8 @@
 //   Mythos Preview         default    accepted        NO       omitted
 //   Opus 5 / 4.8 / 4.7    opt-in     → adaptive      OK       omitted
 //   Sonnet 5               default    → adaptive      OK       omitted
+//   Sonnet 5.5+            default    → adaptive      →between_tools (effort<=high)
+//   Opus 5.5+             always on   → adaptive      NO       omitted
 //   Opus 4.6 / Sonnet 4.6  opt-in     accepted(dep)   OK       summarized
 //   Haiku                   NO        required         OK       summarized
 //   ≤4.5 (Sonnet/Opus)     NO        required         OK       summarized
@@ -28,6 +30,8 @@ import {
   OPUS_47_PLUS_RE as OPUS_47_PLUS,
   OPUS_46_RE as OPUS_46,
   SONNET_5_PLUS_RE as SONNET_5_PLUS,
+  SONNET_55_PLUS_RE as SONNET_55_PLUS,
+  OPUS_55_PLUS_RE as OPUS_55_PLUS,
   SONNET_46_RE as SONNET_46,
   HAIKU_RE as HAIKU,
 } from "../model-version";
@@ -48,6 +52,26 @@ export function normalizeThinkingMode(
   if (!body || typeof body !== "object") return body;
 
   ensureThinkingWhenEffort(body);
+
+  // Sonnet 5.5+ - `disabled` is a 400; the off switch is `between_tools`,
+  // which allows effort <= high and no other thinking fields.
+  if (SONNET_55_PLUS.test(model)) {
+    disabledToBetweenTools(body);
+    enabledToAdaptive(body);
+    defaultDisplay(body);
+    return body;
+  }
+
+  // `between_tools` exists only on Sonnet 5.5+. Elsewhere map it back to the
+  // closest accepted form: always-on models -> adaptive, the rest -> disabled.
+  betweenToolsFallback(body, model);
+
+  // Opus 5.5+ - adaptive always on; `disabled` and `enabled` are both 400s.
+  if (OPUS_55_PLUS.test(model)) {
+    forceAdaptive(body);
+    defaultDisplay(body);
+    return body;
+  }
 
   // Fable 5 / Mythos 5 - adaptive always on, disabled not supported.
   // Display defaults to "omitted" upstream.
@@ -147,6 +171,33 @@ function disabledToAdaptive(
   return body;
 }
 
+// Sonnet 5.5+: disabled -> between_tools. That form takes no other thinking
+// field and rejects xhigh/max effort, so clamp effort down to high.
+function disabledToBetweenTools(body: AnthropicMessagesRequest): void {
+  const t = body.thinking as ThinkingConfig | undefined;
+  if (!t || typeof t !== "object") return;
+  if (t.type === "disabled") body.thinking = { type: "between_tools" };
+  if ((body.thinking as ThinkingConfig).type !== "between_tools") return;
+  // between_tools accepts no other fields (display, budget_tokens, ...).
+  body.thinking = { type: "between_tools" };
+  const oc = body.output_config;
+  if (oc && typeof oc === "object" && (oc.effort === "xhigh" || oc.effort === "max"))
+    oc.effort = "high";
+}
+
+function betweenToolsFallback(
+  body: AnthropicMessagesRequest,
+  model: string,
+): void {
+  const t = body.thinking as ThinkingConfig | undefined;
+  if (!t || typeof t !== "object" || t.type !== "between_tools") return;
+  if (OPUS_55_PLUS.test(model) || FABLE.test(model) || MYTHOS.test(model)) {
+    body.thinking = { type: "adaptive" };
+  } else {
+    body.thinking = { type: "disabled" };
+  }
+}
+
 // Convert enabled to adaptive - for models that reject enabled but accept
 // adaptive. Preserves disabled (turning thinking off is valid on these models).
 function enabledToAdaptive(
@@ -184,7 +235,7 @@ function adaptiveToEnabled(
 function defaultDisplay(body: AnthropicMessagesRequest): void {
   const t = body.thinking as ThinkingConfig | undefined;
   if (!t || typeof t !== "object") return;
-  if (t.type === "disabled") return;
+  if (t.type === "disabled" || t.type === "between_tools") return;
   if (t.display !== undefined) return;
   t.display = "summarized";
 }

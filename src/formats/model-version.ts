@@ -60,6 +60,20 @@ export const OPUS_46_RE = /claude-opus-4-6/i;
 export const SONNET_5_PLUS_RE = /claude-sonnet-([5-9]|\d{2,})(?:-|$)/i;
 export const SONNET_46_RE = /claude-sonnet-4-6/i;
 export const HAIKU_RE = /claude-haiku/i;
+/** Sonnet 5.5+: `thinking.type:"disabled"` is a 400 - the "off" switch is
+ *  `between_tools` (effort <= high, no other thinking fields). */
+export const SONNET_55_PLUS_RE =
+  /claude-sonnet-(?:5-(?:[5-9]|\d{2,})|(?:[6-9]|\d{2,}))(?:-|$)/i;
+/** Opus 5.5+: adaptive thinking is always on; `disabled` is a 400. */
+export const OPUS_55_PLUS_RE =
+  /claude-opus-(?:5-(?:[5-9]|\d{2,})|(?:[6-9]|\d{2,}))(?:-|$)/i;
+const FORCED_TOOL_CHOICE_UNSUPPORTED_RE =
+  /claude-(?:fable|mythos)-(?:5-(?:[1-9]|\d{2,})|[6-9])(?:-|$)|claude-opus-(?:5-(?:[5-9]|\d{2,})|(?:[6-9]|\d{2,}))(?:-|$)|claude-sonnet-(?:5-(?:[5-9]|\d{2,})|(?:[6-9]|\d{2,}))(?:-|$)/i;
+
+/** Fable/Mythos 5.1+, Opus 5.5+, Sonnet 5.5+ reject tool_choice any/tool (400). */
+export function isForcedToolChoiceUnsupported(model: unknown): boolean {
+  return typeof model === "string" && FORCED_TOOL_CHOICE_UNSUPPORTED_RE.test(model);
+}
 export const ADAPTIVE_UNSUPPORTED_RE = /haiku/i;
 
 // ---- OpenAI / GPT ---------------------------------------------------------
