@@ -36,7 +36,7 @@ export const BILLING_SALT = "59cf53e54c78";
  * Bump when Anthropic ships a new release; otherwise requests route to
  * "extra usage".
  */
-export const CC_VERSION = "2.1.284";
+export const CC_VERSION = "2.1.295";
 
 /**
  * Anthropic requires the first content block of any OAuth-authenticated
