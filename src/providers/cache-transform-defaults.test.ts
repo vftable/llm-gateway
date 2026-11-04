@@ -41,7 +41,7 @@ function bodyAfterFamilyDefaults(provider: Provider): Json {
   ) as Json;
 }
 
-for (const id of ["google-gemini", "nvidia-nim"]) {
+for (const id of ["google-gemini", "nvidia-nim", "mistral"]) {
   test(`${id} does not send prompt_cache_* (the upstream rejects them)`, () => {
     assert.deepEqual(familyDefaultTransforms(providerRow(id)), []);
     const body = bodyAfterFamilyDefaults(providerRow(id));

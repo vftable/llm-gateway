@@ -62,6 +62,7 @@ import { minimax } from "./catalog/minimax";
 import { xai } from "./catalog/xai";
 import { commandcode } from "./catalog/commandcode";
 import { hypercharm } from "./catalog/hypercharm";
+import { mistral } from "./catalog/mistral";
 
 // Order here is the order shown in the catalog grid: branded stock providers
 // first, generic escape-hatch templates last.
@@ -79,6 +80,7 @@ const ADAPTERS: ProviderAdapter[] = [
   xiaomiMimo,
   deepseek,
   glm,
+  mistral,
   dashscope,
   qwencloud,
   qwencloudCn,

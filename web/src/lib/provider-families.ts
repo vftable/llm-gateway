@@ -42,6 +42,7 @@ export const PROVIDER_FAMILIES: readonly ProviderFamily[] = [
   { label: "Cline", brand: "cline", ids: ["clinepass", "clinefree"] },
   { label: "MiniMax", brand: "minimax", ids: ["minimax"] },
   { label: "xAI", brand: "xai", ids: ["xai"] },
+  { label: "Mistral", brand: "mistral", ids: ["mistral"] },
 ];
 
 export interface FamilyGroup<T> {
