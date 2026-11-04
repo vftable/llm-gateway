@@ -3,9 +3,18 @@ import {
   type UsageCtx,
   type KeyUsageResult,
 } from "../base";
-import { WireKind, type Provider, type ProviderKeyUsageWindow } from "../../types";
-import type { AnyRequestTransform } from "../../formats/pipeline";
-import { onRequest } from "../../formats/pipeline";
+import {
+  WireKind,
+  type Provider,
+  type ProviderKeyUsageWindow,
+} from "../../types";
+import type {
+  AnyRequestTransform,
+  AnyResponseTransform,
+  AnyStreamTransform,
+} from "../../formats/pipeline";
+import { onRequest, onResponse, onStreamEvent } from "../../formats/pipeline";
+import type { ChatCompletionChunk } from "../../formats/wire/openai-chat";
 
 // Mistral - OpenAI-compatible chat API at https://api.mistral.ai/v1, with a
 // STRICT body schema: `additionalProperties: false` on ChatCompletionRequest
@@ -104,6 +113,107 @@ function scrubForMistral(body: Record<string, unknown>): unknown {
   return body;
 }
 
+// --- response-side thinking lift -------------------------------------------
+
+// Mistral ships a model's reasoning INSIDE `content` as typed chunks -
+// content: [{ type: "thinking", thinking: [{ type: "text", text: … }] }]
+// (verified live on deepseek-v4-1-flash-1017) - where OpenAI-style clients
+// expect a `reasoning_content` sibling the gateway's chat<->messages/
+// responses bridges already translate into Anthropic thinking blocks. The two
+// stages below lift the thinking text back into those fields.
+//
+// ThinkChunk.signature (Mistral replay data) is dropped: downstream bridges
+// synthesize their own signature anyway, and no client can consume Mistral's.
+
+interface ThinkingSplit {
+  /** Concatenated text of every `type:"thinking"` part ("" if none). */
+  thinkingText: string;
+  /** The non-thinking parts (empty array when content was all thinking). */
+  rest: unknown[];
+}
+
+function splitThinkingParts(parts: unknown[]): ThinkingSplit {
+  const chunks: string[] = [];
+  const rest: unknown[] = [];
+  for (const part of parts) {
+    const thinking = partThinkingText(part);
+    if (thinking) chunks.push(thinking);
+    else rest.push(part);
+  }
+  return { thinkingText: chunks.join(""), rest };
+}
+
+// The text of one ContentChunk, or null when the part isn't a thinking chunk.
+function partThinkingText(part: unknown): string | null {
+  if (!part || typeof part !== "object") return null;
+  const p = part as Record<string, unknown>;
+  if (p.type !== "thinking") return null;
+  const inner = p.thinking;
+  if (!Array.isArray(inner)) return null;
+  return inner
+    .map(
+      (t) =>
+        (t &&
+          typeof t === "object" &&
+          typeof (t as Record<string, unknown>).text === "string" &&
+          ((t as Record<string, unknown>).text as string)) ||
+        "",
+    )
+    .join("");
+}
+
+// Lift thinking text out of one message/delta whose `content` may be a string,
+// null, or a ContentChunk[]. Mutates `target` in place: sets
+// `reasoning_content` (+ `reasoning_details` for buffered responses -
+// the chat->responses converter reads only that shape) and rewrites `content`
+// to the remaining parts, or "" when everything was thinking. A no-op for
+// string/null content and when no thinking chunk is present.
+function liftThinking(
+  target: Record<string, unknown>,
+  opts: { details?: boolean } = {},
+): void {
+  if (!Array.isArray(target.content)) return;
+  const { thinkingText, rest } = splitThinkingParts(target.content);
+  if (!thinkingText) return;
+  target.reasoning_content =
+    typeof target.reasoning_content === "string"
+      ? target.reasoning_content + thinkingText
+      : thinkingText;
+  if (opts.details) {
+    target.reasoning_details = [
+      { type: "reasoning.text", text: thinkingText },
+    ];
+  }
+  target.content = rest.length ? rest : "";
+}
+
+// Streaming-chunk view of what liftThinking touches.
+type StreamChunk = ChatCompletionChunk;
+
+// Rewrite one chat completion chunk's deltas in place. Never drops the chunk.
+function liftThinkingInStreamChunk(chunk: StreamChunk): StreamChunk {
+  for (const choice of chunk?.choices ?? []) {
+    const delta = (choice as { delta?: Record<string, unknown> }).delta;
+    if (delta) liftThinking(delta);
+  }
+  return chunk;
+}
+
+// Rewrite a buffered chat completion response in place (`details` on - the
+// buffered chat->responses converter reads reasoning_details, not
+// reasoning_content, so both fields get set).
+function liftThinkingInResponse(body: unknown): unknown {
+  if (!body || typeof body !== "object") return body;
+  const choices = (body as Record<string, unknown>).choices;
+  if (!Array.isArray(choices)) return body;
+  for (const choice of choices) {
+    const msg = (choice as { message?: Record<string, unknown> }).message;
+    if (msg) liftThinking(msg, { details: true });
+  }
+  return body;
+}
+
+
 class MistralAdapter extends OpenAICompatibleAdapter {
   override requestTransforms(_p: Provider): AnyRequestTransform[] {
     return [
@@ -119,6 +229,25 @@ class MistralAdapter extends OpenAICompatibleAdapter {
     ];
   }
 
+  // Lift Mistral's thinking content chunks into the OpenAI-style
+  // reasoning_content / reasoning_details fields the wire bridges consume.
+  override responseTransforms(_p: Provider): AnyResponseTransform[] {
+    return [
+      onResponse("chat", "mistral:thinking", (body) => {
+        liftThinkingInResponse(body);
+        return body as never;
+      }),
+    ];
+  }
+
+  override streamTransforms(_p: Provider): AnyStreamTransform[] {
+    return [
+      onStreamEvent("chat", "mistral:thinking-stream", (chunk) =>
+        liftThinkingInStreamChunk(chunk),
+      ),
+    ];
+  }
+ 
   // --- usage -----------------------------------------------------------------
   override supportsKeyUsage(_ctx: UsageCtx): boolean {
     return true;
