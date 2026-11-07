@@ -38,7 +38,7 @@ export const CODEX_ORIGINATOR = "codex_cli_rs";
 // the user-agent version segment, and the models client_version query. The
 // reqwest suffix is a SECOND, independent pin derived from codex-rs' Cargo.lock;
 // recheck it separately whenever the upstream release changes.
-export const CODEX_CLIENT_VERSION = "0.162.0";
+export const CODEX_CLIENT_VERSION = "0.167.0";
 // reqwest version pinned by codex-rs' Cargo.lock; the trailing segment of the
 // CLI's User-Agent string.
 export const CODEX_REQWEST_VERSION = "0.12.28";
