@@ -127,6 +127,16 @@ export function CapabilitiesEditor({
   const caps: ModelCapabilities = {
     ...DEFAULT_CAPABILITIES,
     ...extras,
+    // The six feature flags must come from the prop, not the defaults - a
+    // blanket `...importedCaps` would also carry the half-built thinking /
+    // effort sections that the merges below exist to complete, so rebuild
+    // just the flag keys and fall back per-key for partial objects.
+    ...Object.fromEntries(
+      FLAGS.map((f) => [
+        f.key,
+        { supported: importedCaps[f.key]?.supported ?? false },
+      ]),
+    ),
     thinking: {
       ...DEFAULT_CAPABILITIES.thinking,
       ...importedCaps.thinking,
