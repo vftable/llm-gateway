@@ -110,6 +110,7 @@ const PROVIDER_BRANDS: Record<string, { svg: string; label: string }> = {
   minimax: { svg: minimaxSvg, label: "MiniMax" },
   xai: { svg: grokSvg, label: "xAI" },
   kimi: { svg: kimiSvg, label: "Kimi" },
+  mistral: { svg: mistralSvg, label: "Mistral" },
   commandcode: { svg: commandcodeSvg, label: "Command Code" },
   hypercharm: { svg: hypercharmSvg, label: "HyperCharm" },
   // Catalog-ID aliases - pages that call ProviderIcon with brand={provider.catalogId}

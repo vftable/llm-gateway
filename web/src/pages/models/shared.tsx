@@ -5,6 +5,7 @@
 import type { ReactNode } from "react";
 import { Sparkles } from "lucide-react";
 import type { ModelCapabilities, Provider } from "@/lib/types";
+import { DEFAULT_CAPABILITIES } from "@/lib/types";
 import { Switch } from "@/components/ui/switch";
 import { cn, conversionLabel, conversionHelp } from "@/lib/utils";
 
@@ -89,7 +90,7 @@ export function HopConversionBadge({
 // for callers that already render their own heading around this (e.g. the
 // Imported Models row-expander), so the two don't stack as duplicate labels.
 export function CapabilitiesEditor({
-  caps,
+  caps: importedCaps,
   onChange,
   locked = false,
   bare = false,
@@ -109,8 +110,49 @@ export function CapabilitiesEditor({
   ];
   const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 
+  // Imported models can carry PARTIAL capability objects: an upstream's
+  // listing flows through parseCapabilities's bare cast (admin/routes/
+  // parsers.ts) and stores verbatim, so e.g. { thinking: { supported: true }
+  // } arrives with effort/flags missing and crashes every read below.
+  // Merge over DEFAULT_CAPABILITIES section-by-section; keep unknown extras
+  // (context_management, …) and never mutate the prop itself. Any extra the
+  // code below never touches is untyped-blind by design — `as` is the
+  // escape only for the known-good known-key list.
+  const KNOWN = FLAGS.map((f) => f.key) as string[];
+  const extras = Object.fromEntries(
+    Object.entries(importedCaps).filter(
+      ([k, v]) => !KNOWN.includes(k) && k !== "thinking" && k !== "effort" && v != null,
+    ),
+  );
+  const caps: ModelCapabilities = {
+    ...DEFAULT_CAPABILITIES,
+    ...extras,
+    // The six feature flags must come from the prop, not the defaults - a
+    // blanket `...importedCaps` would also carry the half-built thinking /
+    // effort sections that the merges below exist to complete, so rebuild
+    // just the flag keys and fall back per-key for partial objects.
+    ...Object.fromEntries(
+      FLAGS.map((f) => [
+        f.key,
+        { supported: importedCaps[f.key]?.supported ?? false },
+      ]),
+    ),
+    thinking: {
+      ...DEFAULT_CAPABILITIES.thinking,
+      ...importedCaps.thinking,
+      types: { ...DEFAULT_CAPABILITIES.thinking.types, ...importedCaps.thinking?.types },
+    },
+    effort: {
+      ...DEFAULT_CAPABILITIES.effort,
+      ...importedCaps.effort,
+      ...Object.fromEntries(
+        EFFORTS.map((k) => [k, importedCaps.effort?.[k] ?? DEFAULT_CAPABILITIES.effort[k]]),
+      ),
+    },
+  };
+
   const flagOn = (k: keyof ModelCapabilities) =>
-    (caps[k] as { supported: boolean }).supported;
+    caps[k]?.supported ?? false;
   const setFlag = (k: keyof ModelCapabilities, v: boolean) =>
     onChange({ ...caps, [k]: { supported: v } });
 
