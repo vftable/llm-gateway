@@ -15,6 +15,8 @@ import type {
 } from "../../formats/pipeline";
 import { onRequest, onResponse, onStreamEvent } from "../../formats/pipeline";
 import type { ChatCompletionChunk } from "../../formats/wire/openai-chat";
+import { createHash } from "node:crypto";
+import { parseAnthropicUserId } from "../../formats/session-id";
 
 // Mistral - OpenAI-compatible chat API at https://api.mistral.ai/v1, with a
 // STRICT body schema: `additionalProperties: false` on ChatCompletionRequest
@@ -214,9 +216,92 @@ function liftThinkingInResponse(body: unknown): unknown {
 }
 
 
+// --- cache affinity ---------------------------------------------------------
+
+// Mistral's prompt cache is prefix-based and instance-local: identical prefixes
+// only hit on the instance already holding them. mistral-vibe's runtime config
+// pins a session by sending `prompt_cache_key` AND stamping `x-affinity` with
+// the root session id on EVERY request (replacing any client value). Both carry
+// the same key here. Header only goes to first-party Mistral hosts - proxies
+// and self-hosted Mistral-compatible servers keep byte-identical requests.
+const AFFINITY_HOSTS: Record<string, true> = {
+  "api.mistral.ai": true,
+  "api.eu.mistral.ai": true,
+};
+const AFFINITY_HEADER = "x-affinity";
+
+// Per-conversation key: client prompt_cache_key, else OpenAI `user`, else
+// Anthropic metadata.user_id session_id, else a hash of the stable prefix
+// (first two messages - system + first user turn, which history never rewrites
+// and only appends to). Anonymous conversations thus spread across shards
+// instead of sharing one gateway-wide constant, and each stays pinned across
+// turns. Null when there is no prefix at all - nothing stable to pin.
+function sessionCacheKey(body: Record<string, unknown>): string | null {
+  if (typeof body.prompt_cache_key === "string" && body.prompt_cache_key)
+    return body.prompt_cache_key;
+  if (typeof body.user === "string" && body.user)
+    return createHash("sha256").update(body.user).digest("hex").slice(0, 16);
+  const metadata = body.metadata as Record<string, unknown> | undefined;
+  const identity = parseAnthropicUserId(metadata?.user_id);
+  if (identity)
+    return createHash("sha256")
+      .update(identity.session_id)
+      .digest("hex")
+      .slice(0, 16);
+  if (!Array.isArray(body.messages) || body.messages.length === 0) return null;
+  const prefix = JSON.stringify([body.messages[0], body.messages[1] ?? null]);
+  return createHash("sha256").update(prefix).digest("hex").slice(0, 16);
+}
+
+// Hostname of the upstream this provider row points at (null if malformed).
+function upstreamHost(provider: Provider): string | null {
+  const base = provider.baseUrl.trim();
+  const url = URL.canParse(base)
+    ? new URL(base)
+    : URL.canParse(`https://${base}`)
+      ? new URL(`https://${base}`)
+      : null;
+  return url ? url.hostname.toLowerCase() : null;
+}
+
+// Delete every casing a client may have used, then set ours - one canonical
+// `x-affinity`.
+function stampAffinityHeader(
+  headers: Record<string, string>,
+  key: string,
+): void {
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === AFFINITY_HEADER) delete headers[name];
+  }
+  headers[AFFINITY_HEADER] = key;
+}
+
+// Runs before mistral:compat so `user` / `metadata.user_id` are still present.
+function mistralCacheAffinity(provider: Provider): AnyRequestTransform {
+  const mistralHosted =
+    AFFINITY_HOSTS[upstreamHost(provider) ?? ""] === true;
+  return onRequest(
+    "chat",
+    "mistral:cache",
+    (body, ctx) => {
+      const b = body as unknown as Record<string, unknown>;
+      const key = sessionCacheKey(b);
+      // No identity and no message prefix (e.g. tool-selection probes) - there
+      // is nothing stable to pin, so don't invent one.
+      if (key === null) return body;
+      if (b.prompt_cache_key === undefined) b.prompt_cache_key = key;
+      // Headers only for first-party Mistral - see AFFINITY_HOSTS above.
+      if (mistralHosted && ctx.headers) stampAffinityHeader(ctx.headers, key);
+      return body;
+    },
+    { label: "Mistral cache affinity", group: "Mistral" },
+  );
+}
+
 class MistralAdapter extends OpenAICompatibleAdapter {
   override requestTransforms(_p: Provider): AnyRequestTransform[] {
     return [
+      mistralCacheAffinity(_p),
       onRequest(
         "chat",
         "mistral:compat",

@@ -175,3 +175,105 @@ test("a well-formed Mistral body passes through bread-winner fields untouched", 
   };
   assert.deepEqual(scrub(body as Json), body);
 });
+
+// --- mistral:cache ----------------------------------------------------------
+
+// Run the plan with a mutable header table, like the engine does.
+function scrubWithHeaders(
+  body: Json,
+  baseUrl = "https://api.mistral.ai",
+  headers: Record<string, string> = {},
+): { body: Json; headers: Record<string, string> } {
+  const p = { ...provider, baseUrl } as Provider;
+  const plan = buildTransformPlan(
+    WireKind.Chat,
+    { forwardPath: "/v1/chat/completions", providerFmt: WireKind.Chat },
+    { request: mistral.requestTransforms(p) },
+  );
+  const out = applyBodyTransforms(plan.request, body, {
+    provider: p,
+    clientFmt: WireKind.Chat,
+    providerFmt: WireKind.Chat,
+    upstreamModel: "m",
+    headers,
+  } as never) as Json;
+  return { body: out, headers };
+}
+
+test("stamps prompt_cache_key and x-affinity with one stable per-session key", () => {
+  const body = {
+    model: "m",
+    user: "u1",
+    messages: [{ role: "user", content: "hi" }],
+  } as Json;
+  const { body: out, headers } = scrubWithHeaders({ ...body });
+  const key = out.prompt_cache_key;
+  assert.equal(typeof key, "string");
+  assert.equal(headers["x-affinity"], key);
+  // Same conversation, one turn later - history only appends.
+  const next = scrubWithHeaders({
+    ...body,
+    messages: [
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "more" },
+    ],
+  } as Json);
+  assert.equal(next.body.prompt_cache_key, key);
+  // Different session -> different shard.
+  const other = scrubWithHeaders({ ...body, user: "u2" } as Json);
+  assert.notEqual(other.body.prompt_cache_key, key);
+});
+
+test("derives the key from the stable prefix when no client identity is present", () => {
+  const first = scrubWithHeaders({
+    model: "m",
+    messages: [
+      { role: "system", content: "you are terse" },
+      { role: "user", content: "hi" },
+    ],
+  } as Json);
+  const second = scrubWithHeaders({
+    model: "m",
+    messages: [
+      { role: "system", content: "you are terse" },
+      { role: "user", content: "hi" },
+      { role: "assistant", content: "hello" },
+    ],
+  } as Json);
+  assert.equal(first.body.prompt_cache_key, second.body.prompt_cache_key);
+  assert.notEqual(first.body.prompt_cache_key, undefined);
+});
+
+test("honours a client-supplied prompt_cache_key", () => {
+  const { body: out, headers } = scrubWithHeaders({
+    model: "m",
+    prompt_cache_key: "client-key",
+    messages: [{ role: "user", content: "hi" }],
+  } as Json);
+  assert.equal(out.prompt_cache_key, "client-key");
+  assert.equal(headers["x-affinity"], "client-key");
+});
+
+test("replaces a client x-affinity (any casing) with the canonical header", () => {
+  const { headers } = scrubWithHeaders(
+    { model: "m", user: "u1", messages: [{ role: "user", content: "hi" }] } as Json,
+    "https://api.mistral.ai",
+    { "X-Affinity": "stale", "x-affinity": "stale2" },
+  );
+  const names = Object.keys(headers).filter((n) =>
+    n.toLowerCase() === "x-affinity",
+  );
+  assert.deepEqual(names, ["x-affinity"]);
+  assert.notEqual(headers["x-affinity"], "stale");
+  assert.notEqual(headers["x-affinity"], "stale2");
+});
+
+test("no affinity stamping for third-party base URLs", () => {
+  const { body: out, headers } = scrubWithHeaders(
+    { model: "m", user: "u1", messages: [{ role: "user", content: "hi" }] } as Json,
+    "https://my-mistral-proxy.example.com",
+  );
+  assert.equal(headers["x-affinity"], undefined);
+  assert.equal(out.prompt_cache_key, "bb82030dbc2bcaba");
+});
